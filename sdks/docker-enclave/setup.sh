@@ -62,6 +62,8 @@ iptables -vL
 /app/keygen-ed25519 --secret /app/id.sec --public /app/id.pub
 
 # your custom setup goes here
+# Generate ecdsa key
+/app/keygen-secp256k1 --secret /app/ecdsa.sec --public /app/ecdsa.pub
 
 # starting supervisord
 cat /etc/supervisord.conf

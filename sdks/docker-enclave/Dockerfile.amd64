@@ -1,0 +1,21 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -y
+RUN apt-get install apt-utils -y 
+RUN apt-get install net-tools iptables iproute2 wget -y 
+RUN apt-get autoclean && apt-get autoremove
+RUN rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Kalypso symbiotic data bridge inside the enclave 
+COPY kalypso-symbiotic-data-bridge ./
+RUN chmod +x kalypso-symbiotic-data-bridge
+
+# Kalypso symbiotic data bridge config file
+COPY ./kalypso_symbiotic_data_bridge_config.json ./
+
+# Expose the port used by the service
+EXPOSE 6005
