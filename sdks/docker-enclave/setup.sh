@@ -61,6 +61,9 @@ iptables -vL
 # generate identity key
 /app/keygen-ed25519 --secret /app/id.sec --public /app/id.pub
 
+# Load Docker image from tar file
+docker load -i /app/docker-image.tar
+
 # your custom setup goes here
 
 # starting supervisord

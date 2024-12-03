@@ -10,6 +10,7 @@
   vet,
   kernels,
   compose ? ./. + "/docker-compose.yml",
+  dockerImageTar ? ./. + "/nginx-hello-x86_64.tar",
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -47,6 +48,7 @@
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml
+		cp ${dockerImageTar} $out/app/docker-image.tar
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
