@@ -10,7 +10,7 @@
   vet,
   kernels,
   compose ? ./. + "/docker-compose.yml",
-  dockerImageTar ? ./. + "/nginx-hello-x86_64.tar",
+  dockerImageTar ? ./. + "/docker-image.tar",
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
