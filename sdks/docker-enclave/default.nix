@@ -11,6 +11,7 @@
   kernels,
   compose ? ./. + "/docker-compose.yml",
   dockerImageTar ? ./. + "/docker-image.tar",
+  dockerComposeStartSh ? ./. + "/docker-compose-start.sh",
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -45,6 +46,7 @@
 		cp ${vet'} $out/app/vet
 		cp ${keygenSecp256k1} $out/app/keygen-secp256k1
 		cp ${setup} $out/app/setup.sh
+		cp ${dockerComposeStartSh} $out/app/docker-compose-start.sh
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml
