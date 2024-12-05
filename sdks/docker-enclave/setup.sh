@@ -61,8 +61,8 @@ iptables -vL
 # generate identity key
 /app/keygen-ed25519 --secret /app/id.sec --public /app/id.pub
 
-# Your custom setup goes here
+# your custom setup goes here
 
-# Starting supervisord
+# starting supervisord
 cat /etc/supervisord.conf
 /app/supervisord
