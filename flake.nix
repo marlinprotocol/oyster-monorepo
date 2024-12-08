@@ -38,6 +38,9 @@
       attestation.server-custom = import ./attestation/server-custom {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      attestation.server-custom-mock = import ./attestation/server-custom-mock {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       attestation.verifier = import ./attestation/verifier {
         inherit nixpkgs systemConfig fenix naersk;
       };
