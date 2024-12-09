@@ -1,6 +1,6 @@
 services:
-  nginx-hello:
-    image: nginx-hello:latest
+  memcached:
+    image: custom-memcached:latest
     ports:
-      - "8001:8001"
+      - "11211:11211"
     restart: unless-stopped
