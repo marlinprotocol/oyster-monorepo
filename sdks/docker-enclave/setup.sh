@@ -3,7 +3,6 @@
 set -e
 
 # Start the Docker daemon in the background
-# Start Docker daemon in background
 /bin/dockerd --iptables=false &
 
 # Wait for Docker daemon to be ready
@@ -28,6 +27,12 @@ for image_tar in /app/docker-images/*.tar; do
     fi
     echo "[setup.sh] Docker image loaded successfully from $image_tar."
 done
+
+# Stop the Docker daemon
+dockerd --stop
+
+rm -f /var/run/docker.pid
+rm -f /var/run/docker.sock
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
