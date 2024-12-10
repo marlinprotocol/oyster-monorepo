@@ -6,16 +6,8 @@ set -e
 /bin/dockerd --iptables=false &
 
 # Wait for Docker daemon to be ready
-MAX_RETRIES=30
-RETRY_COUNT=0
-
-while ! docker info >/dev/null 2>&1; do
-    RETRY_COUNT=$((RETRY_COUNT + 1))
-    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "[setup.sh] ERROR: Docker daemon failed to start after ${MAX_RETRIES} attempts"
-        exit 1
-    fi
-    echo "[setup.sh] Waiting for Docker daemon (attempt ${RETRY_COUNT}/${MAX_RETRIES})..."
+until docker info >/dev/null 2>&1; do
+    echo "[setup.sh] Waiting for Docker daemon..."
     sleep 1
 done
 
@@ -29,7 +21,13 @@ for image_tar in /app/docker-images/*.tar; do
 done
 
 # Stop the Docker daemon
-dockerd --stop
+if [ -f /var/run/docker.pid ]; then
+    kill $(cat /var/run/docker.pid)
+    # Wait for Docker to stop
+    while [ -f /var/run/docker.pid ]; do
+        sleep 1
+    done
+fi
 
 rm -f /var/run/docker.pid
 rm -f /var/run/docker.sock
