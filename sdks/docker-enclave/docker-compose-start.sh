@@ -17,12 +17,14 @@ done
 
 echo "[docker-compose-start.sh] Docker daemon is running."
 
-# Load Docker image with error handling
-if ! docker load -i /app/docker-image.tar; then
-    echo "[docker-compose-start.sh] ERROR: Failed to load Docker image"
-    exit 1
-fi
-echo "[docker-compose-start.sh] Docker image loaded successfully."
+# Load multiple Docker images with error handling
+for image_tar in /app/docker-images/*.tar; do
+    if ! docker load -i "$image_tar"; then
+        echo "[docker-compose-start.sh] ERROR: Failed to load Docker image from $image_tar"
+        exit 1
+    fi
+    echo "[docker-compose-start.sh] Docker image loaded successfully from $image_tar."
+done
 
 # Verify docker-compose exists
 if ! command -v docker compose >/dev/null 2>&1; then

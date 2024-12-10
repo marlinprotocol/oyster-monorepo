@@ -12,6 +12,7 @@
   compose ? ./. + "/docker-compose.yml",
   dockerImageTar ? ./. + "/docker-image.tar",
   dockerComposeStartSh ? ./. + "/docker-compose-start.sh",
+  dockerImagesDir ? ./. + "/docker-images",
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -50,7 +51,7 @@
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml
-		cp ${dockerImageTar} $out/app/docker-image.tar
+		cp -r ${dockerImagesDir} $out/app/docker-images
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
