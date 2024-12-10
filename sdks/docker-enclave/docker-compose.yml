@@ -1,6 +1,0 @@
-services:
-  memcached:
-    image: custom-memcached:latest
-    ports:
-      - "11211:11211"
-    restart: unless-stopped
