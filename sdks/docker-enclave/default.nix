@@ -10,7 +10,6 @@
   vet,
   kernels,
   compose ? ./. + "/docker-compose.yml",
-  dockerComposeStartSh ? ./. + "/docker-compose-start.sh",
   dockerImagesDir ? ./. + "/docker-images",
 }: let
   system = systemConfig.system;
@@ -46,7 +45,6 @@
 		cp ${vet'} $out/app/vet
 		cp ${keygenSecp256k1} $out/app/keygen-secp256k1
 		cp ${setup} $out/app/setup.sh
-		cp ${dockerComposeStartSh} $out/app/docker-compose-start.sh
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml
