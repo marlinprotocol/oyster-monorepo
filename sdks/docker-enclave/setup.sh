@@ -2,6 +2,33 @@
 
 set -e
 
+# Start the Docker daemon in the background
+# Start Docker daemon in background
+/bin/dockerd --iptables=false &
+
+# Wait for Docker daemon to be ready
+MAX_RETRIES=30
+RETRY_COUNT=0
+
+while ! docker info >/dev/null 2>&1; do
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "[setup.sh] ERROR: Docker daemon failed to start after ${MAX_RETRIES} attempts"
+        exit 1
+    fi
+    echo "[setup.sh] Waiting for Docker daemon (attempt ${RETRY_COUNT}/${MAX_RETRIES})..."
+    sleep 1
+done
+
+# Load Docker images with error handling
+for image_tar in /app/docker-images/*.tar; do
+    if ! docker load -i "$image_tar"; then
+        echo "[setup.sh] ERROR: Failed to load Docker image from $image_tar"
+        exit 1
+    fi
+    echo "[setup.sh] Docker image loaded successfully from $image_tar."
+done
+
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt

@@ -10,7 +10,6 @@
   vet,
   kernels,
   compose ? ./. + "/docker-compose.yml",
-  dockerImageTar ? ./. + "/docker-image.tar",
   dockerComposeStartSh ? ./. + "/docker-compose-start.sh",
   dockerImagesDir ? ./. + "/docker-images",
 }: let
