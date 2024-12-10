@@ -10,7 +10,7 @@
   vet,
   kernels,
   compose ? ./. + "/docker-compose.yml",
-  dockerImagesDir ? ./. + "/docker-images",
+  dockerImages ? [],
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -30,6 +30,15 @@
   init = kernels.init;
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
+  
+  # Create docker-images directory with the provided image tars
+  dockerImagesDir = pkgs.runCommand "docker-images" {} ''
+    mkdir -p $out
+    ${if builtins.length dockerImages == 0 
+      then "# No docker images provided"
+      else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/") dockerImages)}
+  '';
+  
   app = pkgs.runCommand "app" {} ''
 		echo Preparing the app folder
 		pwd
@@ -48,7 +57,8 @@
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml
-		cp -r ${dockerImagesDir} $out/app/docker-images
+		mkdir -p $out/app/docker-images
+		cp -r ${dockerImagesDir}/* $out/app/docker-images/
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
