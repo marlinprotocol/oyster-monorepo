@@ -852,7 +852,6 @@ EOF
         &self,
         job: &JobId,
         instance_type: InstanceType,
-        image_url: &str,
         family: &str,
         architecture: &str,
         region: &str,
@@ -1343,7 +1342,6 @@ EOF
 
     pub async fn spin_up_instance(
         &self,
-        image_url: &str,
         job: &JobId,
         instance_type: &str,
         family: &str,
@@ -1397,7 +1395,7 @@ EOF
             return Err(anyhow!("Required memory or vcpus are more than available"));
         }
         let instance = self
-            .launch_instance(job, instance_type, image_url, family, &architecture, region)
+            .launch_instance(job, instance_type, family, &architecture, region)
             .await
             .context("could not launch instance")?;
         sleep(Duration::from_secs(100)).await;
@@ -1538,7 +1536,6 @@ EOF
 impl InfraProvider for Aws {
     async fn spin_up(
         &mut self,
-        eif_url: &str,
         job: &JobId,
         instance_type: &str,
         family: &str,
@@ -1548,15 +1545,7 @@ impl InfraProvider for Aws {
         _bandwidth: u64,
     ) -> Result<String> {
         let instance = self
-            .spin_up_instance(
-                eif_url,
-                job,
-                instance_type,
-                family,
-                region,
-                req_mem,
-                req_vcpu,
-            )
+            .spin_up_instance(job, instance_type, family, region, req_mem, req_vcpu)
             .await
             .context("could not spin up instance")?;
         Ok(instance)

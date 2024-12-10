@@ -119,3 +119,9 @@ Options:
 ## Credits
 
 All of them are based on proxies from [tokio](https://tokio.rs/), with the transparent proxies also borrowing from [linkerd](https://linkerd.io/) for `SO_ORIGINAL_DST` related functionality.
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](./LICENSE.txt).
+
+In addition, it includes code derived from the [tokio](https://tokio.rs/) project, licensed under the MIT License as well as the [linkerd](https://linkerd.io/) project, licensed under the Apache License, Version 2.0.

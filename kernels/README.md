@@ -92,3 +92,7 @@ Supported outputs (path only):
 - `kernelConfig`
 - `init`
 - `nsmKo`
+
+## License
+
+This project is licensed under the GNU GPLv2 or any later version. See [LICENSE.txt](./LICENSE.txt).

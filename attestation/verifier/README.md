@@ -265,3 +265,7 @@ Before pushing any changes, try to make sure that no existing functionalities ar
 ```
 cargo test
 ```
+
+## License
+
+This project is licensed under the GNU AGPLv3 or any later version. See [LICENSE.txt](./LICENSE.txt).

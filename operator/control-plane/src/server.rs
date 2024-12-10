@@ -172,7 +172,7 @@ mod tests {
 
         for id in 1..4 {
             let temp_job_id = U256::from(id).to_be_bytes::<32>().encode_hex_with_prefix();
-            let instance_metadata = InstanceMetadata::new(None, None).await;
+            let instance_metadata = InstanceMetadata::new(0).await;
 
             aws.instances
                 .insert(temp_job_id.clone(), instance_metadata.clone());
@@ -228,7 +228,7 @@ mod tests {
 
         for id in 1..4 {
             let temp_job_id = U256::from(id).to_be_bytes::<32>().encode_hex_with_prefix();
-            let instance_metadata = InstanceMetadata::new(None, None).await;
+            let instance_metadata = InstanceMetadata::new(0).await;
 
             aws.instances
                 .insert(temp_job_id.clone(), instance_metadata.clone());

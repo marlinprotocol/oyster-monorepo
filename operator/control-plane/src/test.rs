@@ -1,9 +1,8 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hasher};
 use std::str::FromStr;
 
-use alloy::hex::ToHexExt;
-use alloy::primitives::B128;
-use alloy::primitives::{keccak256, Address, Bytes, LogData, B256, B64, U256};
+use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, LogData, B256, U256};
 use alloy::providers::Provider;
 use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::eth::Log;
@@ -14,7 +13,7 @@ use tokio_stream::StreamExt;
 use crate::market::{GBRateCard, InfraProvider, JobId, LogsProvider, RateCard, RegionalRates};
 
 #[cfg(test)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SpinUpOutcome {
     pub time: Instant,
     pub job: String,
@@ -24,14 +23,13 @@ pub struct SpinUpOutcome {
     pub req_mem: i64,
     pub req_vcpu: i32,
     pub bandwidth: u64,
-    pub eif_url: String,
     pub contract_address: String,
     pub chain_id: String,
     pub instance_id: String,
 }
 
 #[cfg(test)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SpinDownOutcome {
     pub time: Instant,
     pub job: String,
@@ -40,7 +38,7 @@ pub struct SpinDownOutcome {
 }
 
 #[cfg(test)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RunEnclaveOutcome {
     pub time: Instant,
     pub job: String,
@@ -55,11 +53,57 @@ pub struct RunEnclaveOutcome {
 }
 
 #[cfg(test)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdateEnclaveImageOutcome {
+    pub time: Instant,
+    pub instance_id: String,
+    pub region: String,
+    pub eif_url: String,
+    pub req_mem: i64,
+    pub req_vcpu: i32,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TestAwsOutcome {
     SpinUp(SpinUpOutcome),
     SpinDown(SpinDownOutcome),
     RunEnclave(RunEnclaveOutcome),
+    UpdateEnclaveImage(UpdateEnclaveImageOutcome),
+}
+
+pub fn compute_instance_id(counter: u64) -> String {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_u8(0);
+    hasher.write_u64(counter);
+
+    let hash = hasher.finish();
+
+    format!("{:x}", hash)
+}
+
+pub fn compute_instance_ip(counter: u64) -> String {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_u8(1);
+    hasher.write_u64(counter);
+
+    let hash = hasher.finish();
+
+    hash.to_le_bytes()
+        .iter()
+        .map(|x| x.to_string())
+        .reduce(|a, b| a + "." + &b)
+        .unwrap()
+}
+
+pub fn compute_address_word(salt: &str) -> FixedBytes<32> {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_u8(2);
+    hasher.write(salt.as_bytes());
+
+    let hash = hasher.finish();
+
+    FixedBytes::<32>::from_slice(hash.to_le_bytes().repeat(4).as_slice())
 }
 
 #[cfg(test)]
@@ -71,17 +115,10 @@ pub struct InstanceMetadata {
 
 #[cfg(test)]
 impl InstanceMetadata {
-    pub async fn new(instance_id: Option<String>, ip_address: Option<String>) -> Self {
-        let instance_id = "i-".to_string() + &instance_id.unwrap_or(B128::random().encode_hex());
+    pub async fn new(counter: u64) -> Self {
+        let instance_id = compute_instance_id(counter);
+        let ip_address = compute_instance_ip(counter);
 
-        let ip_address = ip_address.unwrap_or(
-            B64::random()
-                .as_slice()
-                .iter()
-                .map(|x| x.to_string())
-                .reduce(|a, b| a + "." + &b)
-                .unwrap(),
-        );
         Self {
             instance_id,
             ip_address,
@@ -96,13 +133,14 @@ pub struct TestAws {
 
     // HashMap format - (Job, InstanceMetadata)
     pub instances: HashMap<String, InstanceMetadata>,
+
+    counter: u64,
 }
 
 #[cfg(test)]
 impl InfraProvider for TestAws {
     async fn spin_up(
         &mut self,
-        eif_url: &str,
         job: &JobId,
         instance_type: &str,
         family: &str,
@@ -122,7 +160,6 @@ impl InfraProvider for TestAws {
                 req_mem,
                 req_vcpu,
                 bandwidth,
-                eif_url: eif_url.to_owned(),
                 contract_address: job.contract.clone(),
                 chain_id: job.chain.clone(),
                 instance_id: x.1.instance_id.clone(),
@@ -131,7 +168,9 @@ impl InfraProvider for TestAws {
             return Ok(x.1.instance_id.clone());
         }
 
-        let instance_metadata: InstanceMetadata = InstanceMetadata::new(None, None).await;
+        let instance_metadata: InstanceMetadata = InstanceMetadata::new(self.counter).await;
+        self.counter += 1;
+
         self.instances
             .insert(job.id.clone(), instance_metadata.clone());
 
@@ -144,7 +183,6 @@ impl InfraProvider for TestAws {
             req_mem,
             req_vcpu,
             bandwidth,
-            eif_url: eif_url.to_owned(),
             contract_address: job.contract.clone(),
             chain_id: job.chain.clone(),
             instance_id: instance_metadata.instance_id.clone(),
@@ -229,51 +267,16 @@ impl InfraProvider for TestAws {
         req_vcpu: i32,
         req_mem: i64,
     ) -> Result<()> {
-        let job_id = self.instances.iter().find_map(|(key, val)| {
-            if val.instance_id == instance_id {
-                Some(key)
-            } else {
-                None
-            }
-        });
-        if job_id.is_none() {
-            return Err(anyhow!(
-                "Instance not found for instance_id - {instance_id}"
-            ));
-        }
-        let job_id = job_id.unwrap();
-
-        let spin_up_outcome_index =
-            self.outcomes
-                .iter()
-                .enumerate()
-                .find_map(|(i, outcome)| match outcome {
-                    TestAwsOutcome::SpinUp(spin_up) if spin_up.job == instance_id => Some(i),
-                    _ => None,
-                });
-
-        if spin_up_outcome_index.is_none() {
-            return Err(anyhow!("Spin up outcome not found for job - {}", job_id));
-        }
-
-        let spin_up_outcome_index = spin_up_outcome_index.unwrap();
-
-        if let TestAwsOutcome::SpinUp(spin_up_outcome) = &mut self.outcomes[spin_up_outcome_index] {
-            if spin_up_outcome.region != region
-                || spin_up_outcome.req_vcpu != req_vcpu
-                || spin_up_outcome.req_mem != req_mem
-            {
-                return Err(anyhow!("Can only change EIF URL"));
-            }
-
-            if spin_up_outcome.eif_url == eif_url {
-                return Err(anyhow!("Must input a different EIF URL"));
-            }
-
-            eif_url.clone_into(&mut spin_up_outcome.eif_url);
-        } else {
-            panic!("Spin up outcome not found at proper index for the job.")
-        }
+        self.outcomes.push(TestAwsOutcome::UpdateEnclaveImage(
+            UpdateEnclaveImageOutcome {
+                time: Instant::now(),
+                instance_id: instance_id.to_owned(),
+                region: region.to_owned(),
+                eif_url: eif_url.to_owned(),
+                req_mem,
+                req_vcpu,
+            },
+        ));
 
         Ok(())
     }
@@ -354,7 +357,7 @@ pub fn get_gb_rates() -> Vec<GBRateCard> {
 pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
     let mut log = Log {
         inner: alloy::primitives::Log {
-            address: Address::from_str("0x0F5F91BA30a00bD43Bd19466f020B3E5fc7a49ec").unwrap(),
+            address: Address::from_str("0x000000000000000000000000000000000000dead").unwrap(),
             data: LogData::new_unchecked(vec![], Bytes::new()),
         },
         ..Default::default()
@@ -365,8 +368,8 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
                 vec![
                     keccak256("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)"),
                     idx,
-                    log.address().into_word(),
-                    log.address().into_word(),
+                    compute_address_word("owner"),
+                    compute_address_word("provider"),
                 ],
                 data,
             );
@@ -386,7 +389,7 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
                 vec![
                     keccak256("JobDeposited(bytes32,address,uint256)"),
                     idx,
-                    log.address().into_word(),
+                    compute_address_word("depositor"),
                 ],
                 data,
             );
@@ -396,7 +399,7 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
                 vec![
                     keccak256("JobWithdrew(bytes32,address,uint256)"),
                     idx,
-                    log.address().into_word(),
+                    compute_address_word("withdrawer"),
                 ],
                 data,
             );

@@ -39,3 +39,7 @@ Options:
   -h, --help                       Print help
   -V, --version                    Print version
 ```
+
+## License
+
+This project is licensed under the GNU AGPLv3 or any later version. See [LICENSE.txt](./LICENSE.txt).

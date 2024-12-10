@@ -97,3 +97,7 @@ Options:
   -h, --help                     Print help
   -V, --version                  Print version
 ```
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](./LICENSE.txt).

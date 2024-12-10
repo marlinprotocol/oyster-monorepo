@@ -3,7 +3,7 @@ name = "oyster-sdk"
 version = "0.8.4"
 edition = "2021"
 description = "Oyster SDK"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 aws-nitro-enclaves-cose = "0.5.2"

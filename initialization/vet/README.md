@@ -45,3 +45,7 @@ Options:
 $ vet --url 3:1500/oyster/job
 0x1234567812345678123456781234567812345678123456781234567812345678
 ```
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](./LICENSE.txt).

@@ -71,3 +71,7 @@ $ vet --url 3:1500/oyster/job
 $ vet --url 3:1500/instance/ip
 192.168.0.1
 ```
+
+## License
+
+This project is licensed under the GNU AGPLv3 or any later version. See [LICENSE.txt](./LICENSE.txt).

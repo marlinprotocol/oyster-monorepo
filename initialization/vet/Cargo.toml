@@ -2,6 +2,7 @@
 name = "vet"
 version = "1.0.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [dependencies]
 clap = { version = "4.4.6", features = ["derive"] }

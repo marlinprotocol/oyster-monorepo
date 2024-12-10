@@ -94,3 +94,7 @@ $ xxd secp256k1.pub
 00000020: bef9 f73a 8239 5593 3618 6d6d bf01 2cb4  ...:.9U.6.mm..,.
 00000030: 7161 50c5 801a 24fe 9bd3 83a4 ca79 655d  qaP...$......ye]
 ```
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](./LICENSE.txt).
