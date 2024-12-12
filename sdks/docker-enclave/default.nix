@@ -30,6 +30,7 @@
   init = kernels.init;
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
+  policyJson = ./. + "/policy.json";
   app = pkgs.runCommand "app" {} ''
 		echo Preparing the app folder
 		pwd
@@ -46,6 +47,7 @@
 		cp ${vet'} $out/app/vet
 		cp ${keygenSecp256k1} $out/app/keygen-secp256k1
 		cp ${setup} $out/app/setup.sh
+		cp ${policyJson} $out/etc/containers/policy.json
 		chmod +x $out/app/*
 		cp ${supervisorConf} $out/etc/supervisord.conf
 		cp ${compose} $out/app/docker-compose.yml

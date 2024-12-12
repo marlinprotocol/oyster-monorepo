@@ -16,6 +16,20 @@ export XDG_RUNTIME_DIR=/tmp/containers
 # Configure Podman to use vfs storage driver
 export STORAGE_DRIVER=vfs
 
+# Ensure /etc/containers directory exists
+mkdir -p /etc/containers
+
+# Create the default policy.json
+cat > /etc/containers/policy.json << EOF
+{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ]
+}
+EOF
+
 # Load Podman images if any exist
 if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
     for image_tar in /app/docker-images/*.tar; do
