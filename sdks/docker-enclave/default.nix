@@ -61,7 +61,7 @@
   # Podman-specific packages and dependencies
   podmanPackages = with pkgs; [
     podman
-    podman-compose
+    python3Packages.podman-compose
     runc            
     conmon          
     slirp4netns    

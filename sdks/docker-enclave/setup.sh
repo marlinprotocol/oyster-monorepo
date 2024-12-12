@@ -101,6 +101,9 @@ iptables -vL
 cat /etc/supervisord.conf
 /app/supervisord
 
+# Ensure Python environment is properly set up
+export PYTHONPATH="${PYTHONPATH}:/usr/lib/python3/site-packages"
+
 # Essential Podman setup for enclave environment
 mkdir -p /run/podman
 mkdir -p /var/lib/containers
