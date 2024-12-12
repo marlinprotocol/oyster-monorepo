@@ -82,7 +82,7 @@ in {
         pkgs.ipset
         pkgs.cacert
         pkgs.podman
-        pkgs.python3Packages.podman-compose
+        pkgs.podman-compose
       ];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
