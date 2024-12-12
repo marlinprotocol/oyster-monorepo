@@ -86,6 +86,7 @@ in {
         pkgs.cacert
         pkgs.podman
         pkgs.podman-compose
+        pkgs.coreutils
       ];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
