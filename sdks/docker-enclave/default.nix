@@ -58,6 +58,19 @@
     cp ${init} $out
     chmod +x $out
   '';
+  # Podman-specific packages and dependencies
+  podmanPackages = with pkgs; [
+    podman
+    podman-compose
+    runc            
+    conmon          
+    slirp4netns    
+    fuse-overlayfs  
+    iptables-nft    
+    cni-plugins     # Required for container networking
+    shadow         # For user/group management
+    catatonit      # Init system for containers
+  ];
 in {
   default = nitro.buildEif {
     name = "enclave";

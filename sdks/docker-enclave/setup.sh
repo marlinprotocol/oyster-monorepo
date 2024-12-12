@@ -100,3 +100,48 @@ iptables -vL
 # starting supervisord
 cat /etc/supervisord.conf
 /app/supervisord
+
+# Essential Podman setup for enclave environment
+mkdir -p /run/podman
+mkdir -p /var/lib/containers
+mkdir -p /etc/containers
+mkdir -p /run/containers/storage
+
+# Basic container configuration
+cat > /etc/containers/containers.conf <<EOF
+[containers]
+netns="private"
+userns="host"
+cgroups="disabled"
+
+[engine]
+cgroup_manager="cgroupfs"
+events_logger="file"
+runtime="runc"
+
+[network]
+network_backend="cni"
+EOF
+
+# Storage configuration
+cat > /etc/containers/storage.conf <<EOF
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options]
+mount_program = "/usr/bin/fuse-overlayfs"
+mountopt = "nodev,metacopy=on"
+EOF
+
+# Policy configuration
+cat > /etc/containers/policy.json <<EOF
+{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ]
+}
+EOF
