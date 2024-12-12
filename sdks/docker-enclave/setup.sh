@@ -2,14 +2,19 @@
 
 set -e
 
-# Remove Docker daemon startup
-# /bin/dockerd --iptables=false &
+# Ensure /etc/passwd exists with root user
+echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
 
-# Remove Docker daemon wait loop
-# until docker info >/dev/null 2>&1; do
-#     echo "[setup.sh] Waiting for Docker daemon..."
-#     sleep 1
-# done
+# Set HOME environment variable
+export HOME=/root
+
+# Set Podman storage options
+export TMPDIR=/tmp
+mkdir -p /tmp/containers
+export XDG_RUNTIME_DIR=/tmp/containers
+
+# Configure Podman to use vfs storage driver
+export STORAGE_DRIVER=vfs
 
 # Load Podman images if any exist
 if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
@@ -23,6 +28,15 @@ if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
 else
     echo "[setup.sh] No images to load"
 fi
+
+# Remove Docker daemon startup
+# /bin/dockerd --iptables=false &
+
+# Remove Docker daemon wait loop
+# until docker info >/dev/null 2>&1; do
+#     echo "[setup.sh] Waiting for Docker daemon..."
+#     sleep 1
+# done
 
 # Remove Docker daemon shutdown
 # if [ -f /var/run/docker.pid ]; then
