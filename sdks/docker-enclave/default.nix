@@ -37,6 +37,7 @@
 		mkdir -p $out
 		mkdir -p $out/app
 		mkdir -p $out/etc
+    mkdir -p $out/etc/containers
     mkdir -p $out/app/docker-images
 		cp ${supervisord'} $out/app/supervisord
 		cp ${keygenEd25519} $out/app/keygen-ed25519
