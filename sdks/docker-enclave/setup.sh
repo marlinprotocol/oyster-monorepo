@@ -2,39 +2,40 @@
 
 set -e
 
-# Start the Docker daemon in the background
-/bin/dockerd --iptables=false &
+# Remove Docker daemon startup
+# /bin/dockerd --iptables=false &
 
-# Wait for Docker daemon to be ready
-until docker info >/dev/null 2>&1; do
-    echo "[setup.sh] Waiting for Docker daemon..."
-    sleep 1
-done
+# Remove Docker daemon wait loop
+# until docker info >/dev/null 2>&1; do
+#     echo "[setup.sh] Waiting for Docker daemon..."
+#     sleep 1
+# done
 
-# Load Docker images if any exist
+# Load Podman images if any exist
 if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
     for image_tar in /app/docker-images/*.tar; do
-        if ! docker load -i "$image_tar"; then
-            echo "[setup.sh] ERROR: Failed to load Docker image from $image_tar"
+        if ! podman load -i "$image_tar"; then
+            echo "[setup.sh] ERROR: Failed to load image from $image_tar"
             exit 1
         fi
-        echo "[setup.sh] Docker image loaded successfully from $image_tar."
+        echo "[setup.sh] Image loaded successfully from $image_tar."
     done
 else
-    echo "[setup.sh] No Docker images to load"
+    echo "[setup.sh] No images to load"
 fi
 
-# Stop the Docker daemon
-if [ -f /var/run/docker.pid ]; then
-    kill $(cat /var/run/docker.pid)
-    # Wait for Docker to stop
-    while [ -f /var/run/docker.pid ]; do
-        sleep 1
-    done
-fi
+# Remove Docker daemon shutdown
+# if [ -f /var/run/docker.pid ]; then
+#     kill $(cat /var/run/docker.pid)
+#     # Wait for Docker to stop
+#     while [ -f /var/run/docker.pid ]; do
+#         sleep 1
+#     done
+# fi
 
-rm -f /var/run/docker.pid
-rm -f /var/run/docker.sock
+# Remove Docker socket cleanup
+# rm -f /var/run/docker.pid
+# rm -f /var/run/docker.sock
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
@@ -100,3 +101,6 @@ iptables -vL
 # starting supervisord
 cat /etc/supervisord.conf
 /app/supervisord
+
+# Start your containers using Podman
+podman-compose -f /app/docker-compose.yml up -d
