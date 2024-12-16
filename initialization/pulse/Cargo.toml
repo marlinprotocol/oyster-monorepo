@@ -9,6 +9,7 @@ path = "./src/server.rs"
 
 [dependencies]
 anyhow = "1.0.94"
+http-body-util = "0.1.2"
 hyper = "1.5.1"
 hyper-util = { version = "0.1.10", features = ["tokio"] }
 oyster-sdk = "0.8.5"
