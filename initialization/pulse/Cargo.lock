@@ -1351,7 +1351,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pulse-server"
+name = "pulse"
 version = "0.1.0"
 dependencies = [
  "anyhow",

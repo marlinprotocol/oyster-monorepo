@@ -1,7 +1,11 @@
 [package]
-name = "pulse-server"
+name = "pulse"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "pulse-server"
+path = "./src/server.rs"
 
 [dependencies]
 anyhow = "1.0.94"
