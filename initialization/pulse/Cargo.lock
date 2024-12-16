@@ -1359,6 +1359,7 @@ dependencies = [
  "hyper-util",
  "oyster-sdk",
  "tokio",
+ "url",
 ]
 
 [[package]]
