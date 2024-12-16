@@ -1244,9 +1244,9 @@ dependencies = [
 
 [[package]]
 name = "oyster-sdk"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83ff99e87a02038eb4cdfc9179fdbeea1aea52a8b7f1898ce818b9ed648d5bbe"
+checksum = "32080a44ca20d6fe86edebe32842ad87538d8cf2524866a4f350e22743e695b6"
 dependencies = [
  "aws-nitro-enclaves-cose",
  "chrono",
