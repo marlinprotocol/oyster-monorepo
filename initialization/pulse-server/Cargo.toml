@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.94"
 axum = "0.7.9"
 oyster-sdk = "0.8.4"
 tokio = { version = "1.42.0", features = ["full"] }
