@@ -1356,6 +1356,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hyper",
+ "hyper-util",
  "oyster-sdk",
  "tokio",
 ]

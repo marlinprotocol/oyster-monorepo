@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.94"
 hyper = "1.5.1"
+hyper-util = { version = "0.1.10", features = ["tokio"] }
 oyster-sdk = "0.8.4"
 tokio = { version = "1.42.0", features = ["full"] }
