@@ -753,6 +753,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
+
+[[package]]
 name = "http"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1339,12 +1345,13 @@ dependencies = [
 name = "oyster-sdk"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "779ed2081c0763f9c3a2070c4decc55fd6300ca365b68fe88e77b6a87daaa2c8"
+checksum = "0702d1436dacf1cc62c7de432f888eb5532df5467e47145ddb1918895fac7f3e"
 dependencies = [
  "aws-nitro-enclaves-cose",
  "chrono",
  "clap",
  "hex",
+ "hex-literal",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1449,6 +1456,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
