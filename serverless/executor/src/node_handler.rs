@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::web::{Data, Json};
 use actix_web::{get, post, HttpResponse, Responder};
+use ecies::decrypt;
 use ethers::abi::{encode, encode_packed, Token};
 use ethers::prelude::*;
 use ethers::utils::keccak256;
@@ -11,7 +12,7 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::event_handler::events_listener;
-use crate::utils::{AppState, ImmutableConfig, MutableConfig, EXECUTION_ENV_ID};
+use crate::utils::{AppState, ImmutableConfig, SignedMutableConfig, EXECUTION_ENV_ID};
 
 #[get("/")]
 async fn index() -> impl Responder {
@@ -56,20 +57,88 @@ async fn inject_immutable_config(
 #[post("/mutable-config")]
 // Endpoint exposed to inject mutable executor config parameters
 async fn inject_mutable_config(
-    Json(mutable_config): Json<MutableConfig>,
+    Json(signed_mutable_config): Json<SignedMutableConfig>,
     app_state: Data<AppState>,
 ) -> impl Responder {
-    let bytes32_gas_key = hex::decode(
-        &mutable_config
-            .gas_key_hex
+    // decode encrypted gas key
+    let encrypted_bytes32_gas_key = hex::decode(
+        &signed_mutable_config
+            .config
+            .encrypted_gas_key_hex
             .strip_prefix("0x")
-            .unwrap_or(&mutable_config.gas_key_hex),
+            .unwrap_or(&signed_mutable_config.config.encrypted_gas_key_hex),
     );
-    let Ok(bytes32_gas_key) = bytes32_gas_key else {
+    let Ok(encrypted_bytes32_gas_key) = encrypted_bytes32_gas_key else {
         return HttpResponse::BadRequest().body(format!(
             "Invalid gas private key hex string: {:?}\n",
-            bytes32_gas_key.unwrap_err()
+            encrypted_bytes32_gas_key.unwrap_err()
         ));
+    };
+
+    // validate that message is signed recently
+    let current_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if current_ts > signed_mutable_config.timestamp + 600 {
+        return HttpResponse::BadRequest().body("Signature timestamp is too old");
+    }
+
+    // decode signature
+    let signature_bytes = match hex::decode(
+        &signed_mutable_config
+            .signature
+            .strip_prefix("0x")
+            .unwrap_or(&signed_mutable_config.signature),
+    ) {
+        Ok(data) => data,
+        Err(err) => {
+            return HttpResponse::BadRequest().body(format!(
+                "Invalid signature hex string: {:?}\n",
+                err
+            ));
+        }
+    };
+
+    // prepare digest
+    let data = encode(&[
+        Token::Tuple(vec![
+            Token::Bytes(encrypted_bytes32_gas_key.clone()),
+            Token::Uint(signed_mutable_config.timestamp.into())
+        ])
+    ]);
+    let data_hash = keccak256(data);
+
+    // Construct the signature from the bytes data
+    let signature = match Signature::try_from(signature_bytes.as_slice()) {
+        Ok(signautre) => signautre,
+        Err(err) => {
+            return HttpResponse::BadRequest().body(format!(
+                "Invalid signature bytes: {:?}\n",
+                err
+            ))
+        }
+    };
+    let verify_result = signature.verify(data_hash, *app_state.enclave_owner.lock().unwrap());
+    if verify_result.is_err() {
+        return HttpResponse::BadRequest().body(format!(
+            "Signature verification failed. Signer doesn't match with owner: {} \n",
+            verify_result.err().unwrap()
+        ));
+    };
+
+    // decrypt the private key
+    let bytes32_gas_key = match decrypt(
+        &app_state.enclave_signer.to_bytes(),
+        &encrypted_bytes32_gas_key
+    ) {
+        Ok(data_bytes) => data_bytes,
+        Err(err) => {
+            return HttpResponse::BadRequest().body(format!(
+                "Invalid invalid encrypted gas private key: {:?}\n",
+                err
+            ));
+        }
     };
 
     if bytes32_gas_key.len() != 32 {
