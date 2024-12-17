@@ -3,6 +3,8 @@ use std::ops::Deref;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use clap::command;
+use clap::Parser;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
@@ -66,20 +68,43 @@ async fn handler(
         .context("failed to serve conn")
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Auther URL
+    #[arg(short, long, default_value = "http://127.0.0.1:1300/attestation/raw")]
+    auther_url: String,
+
+    /// Path to file where contents are to be saved
+    #[arg(short, long, default_value = "/app/.env")]
+    filepath: String,
+
+    /// Path to secret file
+    #[arg(short, long, default_value = "/app/id.sec")]
+    secret: String,
+
+    /// Address on which server listens for connections
+    #[arg(short, long, default_value = "127.0.0.1:1600")]
+    listen_addr: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let auther_url = "http://127.0.0.1:1300".to_owned();
-    let mut auther = Auther { url: auther_url };
-    let filepath = "/app/.env";
+    let args = Args::parse();
 
-    let secret = read("/app/id.sec")
+    let mut auther = Auther {
+        url: args.auther_url,
+    };
+    let filepath = args.filepath;
+
+    let secret = read(args.secret)
         .await
         .context("failed to read secret")?
         .try_into()
         .map_err(|v: Vec<u8>| anyhow!("invalid size, expected 32, got {}", v.len()))
         .context("invalid secret")?;
 
-    let listener = TcpListener::bind("0.0.0.0:3000")
+    let listener = TcpListener::bind(args.listen_addr)
         .await
         .context("failed to bind listener")?;
 
@@ -88,7 +113,7 @@ async fn main() -> Result<()> {
             .accept()
             .await
             .context("failed to accept connections")?;
-        let res = handler(stream, secret, filepath, &mut auther).await;
+        let res = handler(stream, secret, &filepath, &mut auther).await;
 
         // exit after first successful transfer
         if res.is_ok() {
