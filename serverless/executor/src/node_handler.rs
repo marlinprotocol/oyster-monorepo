@@ -122,7 +122,7 @@ async fn inject_mutable_config(
     let verify_result = signature.verify(data_hash, *app_state.enclave_owner.lock().unwrap());
     if verify_result.is_err() {
         return HttpResponse::BadRequest().body(format!(
-            "Signature verification failed. Signer doesn't match with owner: {} \n",
+            "Signature verification failed: {} \n",
             verify_result.err().unwrap()
         ));
     };

@@ -13,16 +13,19 @@ pub mod serverless_executor_test {
     use std::pin::pin;
     use std::str::FromStr;
     use std::sync::atomic::Ordering;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use actix_web::body::MessageBody;
     use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
     use actix_web::web::{Bytes, Data};
     use actix_web::{http, test, App, Error};
+    use ecies::encrypt;
     use ethers::abi::{encode, encode_packed, Token};
     use ethers::types::{Address, BigEndianHash, Log, H160, H256, U256, U64};
     use ethers::utils::{keccak256, public_key_to_address};
     use k256::ecdsa::SigningKey;
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use k256::elliptic_curve::generic_array::sequence::Lengthen;
     use rand::rngs::OsRng;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
@@ -195,27 +198,30 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state().await;
         let app = test::init_service(new_app(app_state.clone())).await;
 
-        // Inject invalid gas private key hex string (less than 32 bytes)
+        // add owner
+
+        let owner_signer = SigningKey::random(&mut OsRng);
+        let owner_address = public_key_to_address(&owner_signer.verifying_key());
         let req = test::TestRequest::post()
-            .uri("/mutable-config")
+            .uri("/immutable-config")
             .set_json(&json!({
-                "gas_key_hex": "322557",
+                "owner_address_hex": hex::encode(owner_address),
             }))
             .to_request();
 
         let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
 
-        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.into_body().try_into_bytes().unwrap(),
-            "Gas private key must be 32 bytes long!\n"
-        );
 
-        // Inject invalid gas private key hex string (invalid hex character)
+        // Inject invalid encrypted gas private key hex string (invalid hex character)
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff",
+                "config": {
+                    "encrypted_gas_key_hex": "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff",
+                },
+                "timestamp": 1734417055,
+                "signature": "75fffe0e3bd7363e441728832180ea66922af290fddf00403cc7cee2d30d71c35d19de668f8df0fa3dec5562f823c1befced588f63758ed1d72f3009882428451b"
             }))
             .to_request();
 
@@ -227,11 +233,237 @@ pub mod serverless_executor_test {
             "Invalid gas private key hex string: InvalidHexCharacter { c: 'z', index: 17 }\n"
         );
 
-        // Inject invalid gas private key hex string (not ecdsa valid key)
+        // Signature time stamp is too old
+        let old_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() - 601;
+
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "config": {
+                    "encrypted_gas_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                },
+                "timestamp": old_ts,
+                "signature": "75fffe0e3bd7363e441728832180ea66922af290fddf00403cc7cee2d30d71c35d19de668f8df0fa3dec5562f823c1befced588f63758ed1d72f3009882428451b"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.into_body().try_into_bytes().unwrap(),
+            "Signature timestamp is too old"
+        );
+
+        // Send invalid signature hex string (invalid hex character)
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let req = test::TestRequest::post()
+            .uri("/mutable-config")
+            .set_json(&json!({
+                "config": {
+                    "encrypted_gas_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                },
+                "timestamp": current_ts,
+                "signature": "gfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.into_body().try_into_bytes().unwrap(),
+            "Invalid signature hex string: InvalidHexCharacter { c: 'g', index: 0 }\n"
+        );
+
+        // Send invalid length of signature bytes, i.e. not equal to 65
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let req = test::TestRequest::post()
+            .uri("/mutable-config")
+            .set_json(&json!({
+                "config": {
+                    "encrypted_gas_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                },
+                "timestamp": current_ts,
+                "signature": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.into_body().try_into_bytes().unwrap(),
+            "Invalid signature bytes: InvalidLength(64)\n"
+        );
+
+        // test signature verification failure
+
+        // Create signature
+        let diff_owner_signer = SigningKey::random(&mut OsRng);
+        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let enclave_public_key = app_state.enclave_signer.verifying_key().to_sec1_bytes();
+        let encrypted_gas_key = encrypt(&enclave_public_key, &gas_wallet_key.to_bytes().as_slice()).unwrap();
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = diff_owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
+        let req = test::TestRequest::post()
+        .uri("/mutable-config")
+        .set_json(&json!({
+            "config": {
+                "encrypted_gas_key_hex": hex::encode(encrypted_gas_key.clone()),
+            },
+            "timestamp": current_ts,
+            "signature": signature
+        }))
+        .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        let expected_msg_prefix = "Signature verification failed:";
+        assert!(
+            resp.into_body().try_into_bytes().unwrap().starts_with(expected_msg_prefix.as_bytes())
+        );
+
+
+        // test decryption of gas wallet private key, size of encrypted gas key is less than 33 (i.e. key size)
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key[..32].to_vec()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
+        let req = test::TestRequest::post()
+        .uri("/mutable-config")
+        .set_json(&json!({
+            "config": {
+                "encrypted_gas_key_hex": hex::encode(encrypted_gas_key[..32].to_vec()),
+            },
+            "timestamp": current_ts,
+            "signature": signature
+        }))
+        .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+
+        let expected_msg_prefix = "Invalid invalid encrypted gas private key:";
+        assert!(
+            resp.into_body().try_into_bytes().unwrap().starts_with(expected_msg_prefix.as_bytes())
+        );
+
+
+        // Inject invalid gas private key hex string (less than 32 bytes)
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let encrypted_invalid_gas_key = encrypt(&enclave_public_key, &gas_wallet_key.to_bytes().as_slice()[..6]).unwrap();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_invalid_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
+        let req = test::TestRequest::post()
+            .uri("/mutable-config")
+            .set_json(&json!({
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_invalid_gas_key),
+                },
+                "timestamp": current_ts,
+                "signature": signature
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.into_body().try_into_bytes().unwrap(),
+            "Gas private key must be 32 bytes long!\n"
+        );
+
+        // Inject invalid gas private key hex string (not ecdsa valid key)
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let invalid_gas_wallet_key = hex::decode(
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff").unwrap();
+        let encrypted_invalid_gas_key = encrypt(&enclave_public_key, &invalid_gas_wallet_key).unwrap();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_invalid_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
+        let req = test::TestRequest::post()
+            .uri("/mutable-config")
+            .set_json(&json!({
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_invalid_gas_key),
+                },
+                "timestamp": current_ts,
+                "signature": signature
             }))
             .to_request();
 
@@ -244,11 +476,32 @@ pub mod serverless_executor_test {
         );
 
         // Inject valid mutable config params
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_gas_key.clone()),
+                },
+                "timestamp": current_ts,
+                "signature": signature
             }))
             .to_request();
 
@@ -271,11 +524,35 @@ pub mod serverless_executor_test {
         );
 
         // Inject valid mutable config params again to test mutability
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let gas_wallet_key_2 = SigningKey::random(&mut OsRng);
+        let encrypted_gas_key_2 = encrypt(&enclave_public_key, &gas_wallet_key_2.to_bytes().as_slice()).unwrap();
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key_2.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
+
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_gas_key_2.clone()),
+                },
+                "timestamp": current_ts,
+                "signature": signature
             }))
             .to_request();
 
@@ -294,7 +571,7 @@ pub mod serverless_executor_test {
                 .clone()
                 .unwrap()
                 .address(),
-            public_key_to_address(gas_wallet_key.verifying_key())
+            public_key_to_address(gas_wallet_key_2.verifying_key())
         );
     }
 
@@ -344,7 +621,9 @@ pub mod serverless_executor_test {
         assert_eq!(response.gas_address, H160::zero());
 
         // Inject valid immutable config params
-        let valid_owner = H160::random();
+        let owner_signer = SigningKey::random(&mut OsRng);
+        let valid_owner = public_key_to_address(&owner_signer.verifying_key());
+
         let req = test::TestRequest::post()
             .uri("/immutable-config")
             .set_json(&json!({
@@ -394,10 +673,35 @@ pub mod serverless_executor_test {
 
         // Inject valid mutable config params
         let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let enclave_public_key = app_state.enclave_signer.verifying_key().to_sec1_bytes();
+        let encrypted_gas_key = encrypt(&enclave_public_key, &gas_wallet_key.to_bytes().as_slice()).unwrap();
+
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_gas_key.clone()),
+                },
+                "timestamp": current_ts,
+                "signature": signature
             }))
             .to_request();
 
@@ -486,7 +790,9 @@ pub mod serverless_executor_test {
         );
 
         // Inject valid immutable config params
-        let valid_owner = H160::random();
+        let owner_signer = SigningKey::random(&mut OsRng);
+        let valid_owner = public_key_to_address(&owner_signer.verifying_key());
+
         let req = test::TestRequest::post()
             .uri("/immutable-config")
             .set_json(&json!({
@@ -518,10 +824,36 @@ pub mod serverless_executor_test {
 
         // Inject valid mutable config params
         let gas_wallet_key = SigningKey::random(&mut OsRng);
+
+        let enclave_public_key = app_state.enclave_signer.verifying_key().to_sec1_bytes();
+        let encrypted_gas_key = encrypt(&enclave_public_key, &gas_wallet_key.to_bytes().as_slice()).unwrap();
+
+        let current_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // prepare digest
+        let data = encode(&[
+            Token::Tuple(vec![
+                Token::Bytes(encrypted_gas_key.clone()),
+                Token::Uint(current_ts.into())
+            ])
+        ]);
+        let data_hash = keccak256(data);
+
+        let sig = owner_signer.sign_prehash_recoverable(&data_hash);
+        let (rs, v) = sig.unwrap();
+        let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+
         let req = test::TestRequest::post()
             .uri("/mutable-config")
             .set_json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "config": {
+                    "encrypted_gas_key_hex": hex::encode(encrypted_gas_key.clone()),
+                },
+                "timestamp": current_ts,
+                "signature": signature
             }))
             .to_request();
 
@@ -570,7 +902,7 @@ pub mod serverless_executor_test {
             verifying_key
         );
         assert_eq!(*app_state.events_listener_active.lock().unwrap(), true);
-        let active_tasks = metrics.active_tasks_count();
+        let active_tasks = metrics.num_alive_tasks();
 
         // Export the enclave registration details again
         let req = test::TestRequest::get()
@@ -598,7 +930,7 @@ pub mod serverless_executor_test {
             ),
             verifying_key
         );
-        assert_eq!(active_tasks, metrics.active_tasks_count());
+        assert_eq!(active_tasks, metrics.num_alive_tasks());
     }
 
     #[actix_web::test]
