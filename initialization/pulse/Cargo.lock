@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "oyster-sdk"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "779ed2081c0763f9c3a2070c4decc55fd6300ca365b68fe88e77b6a87daaa2c8"
 dependencies = [
