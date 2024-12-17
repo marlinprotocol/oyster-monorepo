@@ -7,6 +7,10 @@ edition = "2021"
 name = "pulse-server"
 path = "./src/server.rs"
 
+[[bin]]
+name = "pulse-client"
+path = "./src/client.rs"
+
 [dependencies]
 anyhow = "1.0.94"
 clap = { version = "4.5.23", features = ["derive"] }
