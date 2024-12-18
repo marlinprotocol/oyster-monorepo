@@ -14,33 +14,31 @@ use hyper_util::rt::TokioIo;
 use oyster::attestation::verify;
 use oyster::attestation::AttestationExpectations;
 use oyster::scallop::new_client_async_Noise_IX_25519_ChaChaPoly_BLAKE2b;
+use oyster::scallop::Key;
+use oyster::scallop::Pcrs;
 use oyster::scallop::ScallopAuthStore;
 use tokio::fs::read;
 use tokio::net::TcpStream;
 
 struct AuthStore {
-    pcrs: [[u8; 48]; 3],
+    pcrs: Pcrs,
     // in ms
     max_age: usize,
     root_public_key: Vec<u8>,
 }
 
 impl ScallopAuthStore for AuthStore {
-    fn contains(&self, _key: &[u8; 32]) -> bool {
+    fn contains(&self, _key: &Key) -> bool {
         false
     }
 
-    fn get(&self, _key: &[u8; 32]) -> Option<&([u8; 48], [u8; 48], [u8; 48])> {
+    fn get(&self, _key: &Key) -> Option<&Pcrs> {
         None
     }
 
-    fn set(&mut self, _key: [u8; 32], _pcrs: ([u8; 48], [u8; 48], [u8; 48])) {}
+    fn set(&mut self, _key: Key, _pcrs: Pcrs) {}
 
-    fn verify(
-        &mut self,
-        attestation: &[u8],
-        key: &[u8; 32],
-    ) -> Option<([u8; 48], [u8; 48], [u8; 48])> {
+    fn verify(&mut self, attestation: &[u8], key: &Key) -> Option<Pcrs> {
         let Some(now) = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -61,7 +59,7 @@ impl ScallopAuthStore for AuthStore {
         if key != decoded.public_key.as_slice() {
             return None;
         }
-        Some(self.pcrs.into())
+        Some(self.pcrs)
     }
 }
 
