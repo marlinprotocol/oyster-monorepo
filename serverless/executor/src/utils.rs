@@ -83,7 +83,14 @@ pub struct ImmutableConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MutableConfig {
-    pub gas_key_hex: String,
+    pub encrypted_gas_key_hex: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignedMutableConfig {
+    pub config: MutableConfig,
+    pub timestamp: u64,
+    pub signature: String
 }
 
 #[derive(Debug, Clone, PartialEq)]

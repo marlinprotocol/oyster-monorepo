@@ -1,0 +1,10 @@
+[package]
+name = "inject_gas_key"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+alloy = { version = "0.6.2", features = ["full"] }
+anyhow = "1.0.75"
+clap = { version = "4.4.7", features = ["derive"] }
+ecies = "0.2.7"

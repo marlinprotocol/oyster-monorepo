@@ -21,6 +21,7 @@ anyhow = "1.0.75"
 clap = { version = "4.4.7", features = ["derive"] }
 config = "0.14.0"
 data-encoding = "2.5.0"
+ecies = "0.2.7"
 ethers = { version = "2.0.14", features = ["ws", "rustls"] }
 hex = "0.4.3"
 k256 = { version = "0.13.2", features = ["ecdsa", "ecdsa-core"] }
