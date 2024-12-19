@@ -59,3 +59,16 @@ impl Dependency {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum StorageProvider {
+    Pinata,
+}
+
+impl StorageProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StorageProvider::Pinata => "pinata"
+        }
+    }
+}
