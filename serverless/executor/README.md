@@ -1,12 +1,14 @@
-# Oyster-serverless-executor
+![Marlin Oyster Logo](./logo.svg)
+
+# Serverless Executor
 
 Oyster Serverless Executor is a cutting-edge, high-performance serverless computing platform designed to securely execute JavaScript (JS) code in a highly controlled environment. It is an integral part of the Oyster-Serverless web3 ecosystem used to run dApps via interaction with smart contracts. Executor node is meant to run inside on-chain verified (Oyster-verification protocol) enclave ensuring that any message signed by it will be treated as truth and smart contracts can execute based on that signed message. The owners provide computation services and manage the lifecycle of multiple executor enclaves, like registration, deregistration, stakes etc. Built using the Rust, Actix Web framework and ethers library - Oyster serverless executor leverages the power and security of AWS Nitro Enclaves, Cloudflare workerd runtime, cgroups to provide unparalleled isolation and protection for the executed code and RPCs to interact with the smart contracts.
 
-## Tools and setup required for building executor locally 
+## Build
 
 <b>Install the following packages : </b>
 
-* build-essential 
+* build-essential
 * libc++1
 * cgroup-tools
 * libssl-dev
@@ -16,12 +18,42 @@ Oyster Serverless Executor is a cutting-edge, high-performance serverless comput
 
 `Note : Oyster serverless executor only works on Ubuntu 22.04 and newer versions due to limitations in the workerd dependency.`
 
+<b> Build the executor binary </b>
+
+Build the binary executable:
+```
+cargo build --release
+```
+OR (for custom targets)
+```
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+### Reproducible builds
+
+Reproducible builds can be done using Nix. The monorepo provides a Nix flake which includes this project and can be used to trigger builds:
+
+```bash
+nix build -v .#<flavor>.serverless.executor.<output>
+```
+
+Supported flavors:
+- `gnu`
+- `musl`
+
+Supported outputs:
+- `default`, same as `compressed`
+- `uncompressed`
+- `compressed`, using `upx`
+
+## Usage
+
 <b>cgroups v2 setup</b>
 ```
 sudo ./cgroupv2_setup.sh
 ```
 To check whether the cgroups were successfully created or not on your system, verify that the output of `ls /sys/fs/cgroup` contains folders `workerd_*`(specifically 20 according to current setup).
-
 
 <b>Signer file setup</b>
 
@@ -31,23 +63,6 @@ The <a href="https://github.com/marlinprotocol/keygen">Keygen repo</a> can be us
 <b> RPC and smart contracts configuration</b>
 
 To run the serverless executor, details related to RPC like the HTTP and WebSocket URLs will be needed through which the executor will communicate with the common chain. Also the addresses of the relevant smart contracts deployed there like **Executors**, **Jobs** and **UserCode** will be needed.
-
-<b> Build the executor binary </b>
-
-Default build target is `x86_64-unknown-linux-musl`. Can be changed in the `.cargo/config.toml` file or in the build command itself. Add the required build target first like: 
-```
-rustup target add x86_64-unknown-linux-musl
-```
-Build the binary executable: 
-```
-cargo build --release
-```
-OR (for custom targets)
-```
-cargo build --release --target x86_64-unknown-linux-musl
-```
-
-## Running serverless executor application
 
 <b>Run the serverless executor application :</b>
 
@@ -77,7 +92,7 @@ Configuration file parameters required for running an executor node:
     "execution_buffer_time": // Execution buffer time as configured on common chain (in seconds),
     "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain
 }
-``` 
+```
 Example command to run the executor locally:
 ```
 sudo ./target/x86_64-unknown-linux-musl/release/oyster-serverless-executor --port 6001 --config-file ./oyster_serverless_executor_config.json
@@ -87,7 +102,7 @@ sudo ./target/x86_64-unknown-linux-musl/release/oyster-serverless-executor --por
 
 Currently there is only one such parameter and it is the address of the executor enclave owner.
 ```
-$ curl -X POST -H "Content-Type: application/json" -d '{"owner_address_hex": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"}' <executor_node_ip:executor_node_port>/immutable-config 
+$ curl -X POST -H "Content-Type: application/json" -d '{"owner_address_hex": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"}' <executor_node_ip:executor_node_port>/immutable-config
 Immutable params configured!
 ```
 
@@ -95,10 +110,10 @@ Immutable params configured!
 
 Currently there is only one such parameter and it is the gas private key used by the executor enclave to send transactions to the common chain.
 ```
-$ curl -X POST -H "Content-Type: application/json" -d '{"gas_key_hex": "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"}' <executor_node_ip:executor_node_port>/mutable-config 
+$ curl -X POST -H "Content-Type: application/json" -d '{"gas_key_hex": "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"}' <executor_node_ip:executor_node_port>/mutable-config
 Mutable params configured!
 ```
-**The owner can use the below endpoint to get details about the state of the executor node**:-
+<b> The owner can use the below endpoint to get details about the state of the executor node: </b>
 ```
 $ curl <executor_node_ip:executor_node_port>/executor-details
 {"enclave_address":"0x2e5e17c117efeb0727765988b230c4d95f8e8c9c","enclave_public_key":"0x2772e3e5d5dfb8e583feb6f4d251f4bda32ef692aad0831055a663d9be3edb4591cc0109d9e8d0672f8576160cf81ed4909b0a0a163951341f74aec44018ea49","gas_address":"0x90f79bf6eb2c4f870365e785982e1f101e93b906","owner_address":"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"}
@@ -114,9 +129,9 @@ $ curl <executor_node_ip:executor_node_port>/signed-registration-message
 
 **Note:** After the owner will register the executor enclave on the common chain, the node will listen to that event and start the listening of job requests created by the **Jobs** contract on the common chain and execute them acordingly.
 
-## Running the tests
+## Tests
 
-Before running the tests, generate the cgroups (if not already) and enable the below flag: 
+Before running the tests, generate the cgroups (if not already) and enable the below flag:
 ```
 sudo ./cgroupv2_setup.sh
 export RUSTFLAGS="--cfg tokio_unstable"
@@ -129,3 +144,7 @@ To run a particular test *test_name* :
 ```
 sudo echo && cargo test 'test name' -- --nocapture &
 ```
+
+## License
+
+This project is licensed under the GNU AGPLv3 or any later version. See [LICENSE.txt](./LICENSE.txt).

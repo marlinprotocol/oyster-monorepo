@@ -107,6 +107,9 @@
         vet = initialization.vet.compressed;
         kernels = kernels.tuna;
       };
+      serverless.executor = import ./serverless/executor {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
     };
   in {
     formatter = {
