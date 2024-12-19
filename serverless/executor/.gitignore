@@ -17,3 +17,6 @@ Cargo.lock
 # Added by cargo
 
 /target
+
+/runtime/*.js
+/runtime/*.capnp

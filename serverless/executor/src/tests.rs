@@ -35,7 +35,7 @@ pub mod serverless_executor_test {
     use crate::event_handler::handle_event_logs;
     use crate::node_handler::*;
     use crate::utils::{
-        load_abi_from_file, AppState, JobsTxnMetadata, JobsTxnType, EXECUTION_ENV_ID,
+        load_abi_from_file, AppState, JobsTxnMetadata, JobsTxnType, EXECUTION_ENV_ID, MAX_OUTPUT_BYTES_LENGTH
     };
 
     // Testnet or Local blockchain (Hardhat) configurations
@@ -570,7 +570,7 @@ pub mod serverless_executor_test {
             verifying_key
         );
         assert_eq!(*app_state.events_listener_active.lock().unwrap(), true);
-        let active_tasks = metrics.active_tasks_count();
+        let active_tasks = metrics.num_alive_tasks();
 
         // Export the enclave registration details again
         let req = test::TestRequest::get()
@@ -598,7 +598,7 @@ pub mod serverless_executor_test {
             ),
             verifying_key
         );
-        assert_eq!(active_tasks, metrics.active_tasks_count());
+        assert_eq!(active_tasks, metrics.num_alive_tasks());
     }
 
     #[actix_web::test]
@@ -700,9 +700,9 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 3);
 
-        assert_response(responses[0].clone(), 0.into(), 0, "2,5");
-        assert_response(responses[1].clone(), 1.into(), 0, "2,2,5");
-        assert_response(responses[2].clone(), 2.into(), 0, "2,2,2,3,5,5");
+        assert_response(responses[0].clone(), 0.into(), 0, "2,5".into());
+        assert_response(responses[1].clone(), 1.into(), 0, "2,2,5".into());
+        assert_response(responses[2].clone(), 2.into(), 0, "2,2,2,3,5,5".into());
     }
 
     #[actix_web::test]
@@ -759,7 +759,7 @@ pub mod serverless_executor_test {
             responses[0].clone(),
             0.into(),
             0,
-            "Please provide a valid integer as input in the format{'num':10}",
+            "Please provide a valid integer as input in the format{'num':10}".into(),
         );
     }
 
@@ -838,8 +838,8 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 2);
 
-        assert_response(responses[0].clone(), 0.into(), 1, "");
-        assert_response(responses[1].clone(), 1.into(), 1, "");
+        assert_response(responses[0].clone(), 0.into(), 1, "".into());
+        assert_response(responses[1].clone(), 1.into(), 1, "".into());
     }
 
     #[actix_web::test]
@@ -894,7 +894,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 2, "");
+        assert_response(responses[0].clone(), 0.into(), 2, "".into());
     }
 
     #[actix_web::test]
@@ -949,7 +949,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 3, "");
+        assert_response(responses[0].clone(), 0.into(), 3, "".into());
     }
 
     #[actix_web::test]
@@ -1004,7 +1004,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 4, "");
+        assert_response(responses[0].clone(), 0.into(), 4, "".into());
     }
 
     #[actix_web::test]
@@ -1172,6 +1172,129 @@ pub mod serverless_executor_test {
         }
     }
 
+    #[actix_web::test]
+    // Test '5' error code, serverless output size exceeds the limit
+    async fn output_size_too_large() {
+        let app_state = generate_app_state().await;
+
+        // This serverless code return bytes array of given length filled with zeros
+        let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";
+        let user_deadline = 5000;
+
+        // Case 1: Output size is exceeds the limit
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({
+            "len": MAX_OUTPUT_BYTES_LENGTH + 1
+        }))
+        .unwrap()
+        .into();
+
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes,
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![
+            get_job_responded_log(1.into(), 0.into()),
+        ];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                app_state,
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(responses[0].clone(), 0.into(), 5, "".into());
+        
+    }
+
+    #[actix_web::test]
+    //Test Output size is equals to the limit
+    async fn output_size_limit_test() {
+        let app_state = generate_app_state().await;
+
+        // This serverless code return bytes array of given length filled with zeros
+        let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({
+            "len": MAX_OUTPUT_BYTES_LENGTH
+        }))
+        .unwrap()
+        .into();
+
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes,
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![
+            get_job_responded_log(1.into(), 0.into()),
+        ];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                app_state,
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+        assert_eq!(responses.len(), 1);
+        let expected_resp: Bytes = Bytes::from_static(&[0u8; MAX_OUTPUT_BYTES_LENGTH]);
+        assert_response(responses[0].clone(), 0.into(), 0, expected_resp);
+    }
+
     fn get_job_created_log(
         block_number: U64,
         job_id: U256,
@@ -1261,7 +1384,7 @@ pub mod serverless_executor_test {
         return recovered_key;
     }
 
-    fn assert_response(job_response: JobsTxnMetadata, id: U256, error: u8, output: &str) {
+    fn assert_response(job_response: JobsTxnMetadata, id: U256, error: u8, output: Bytes) {
         assert_eq!(job_response.txn_type, JobsTxnType::OUTPUT);
         assert_eq!(job_response.job_id, id);
         assert!(job_response.job_output.is_some());

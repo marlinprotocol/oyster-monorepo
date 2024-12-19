@@ -13,7 +13,7 @@ use scopeguard::defer;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 
-use crate::utils::{AppState, JobOutput, JobsTxnMetadata, JobsTxnType};
+use crate::utils::{AppState, JobOutput, JobsTxnMetadata, JobsTxnType, MAX_OUTPUT_BYTES_LENGTH};
 use crate::workerd;
 use crate::workerd::ServerlessError::*;
 
@@ -21,7 +21,9 @@ use crate::workerd::ServerlessError::*;
 1 => Provided txn hash doesn't belong to the expected rpc chain or code contract
 2 => Calldata corresponding to the txn hash is invalid
 3 => Syntax error in the code extracted from the calldata
-4 => User timeout exceeded */
+4 => User timeout exceeded
+5 => Output size exceeds the limit
+*/
 
 // Execute the job request using workerd runtime and 'cgroup' environment
 pub async fn handle_job(
@@ -223,6 +225,15 @@ async fn execute_job(
     let Ok(response) = workerd::get_workerd_response(port, code_inputs).await else {
         return None;
     };
+
+    if response.len() > MAX_OUTPUT_BYTES_LENGTH {
+        return Some(JobOutput{
+            output: Bytes::new(),
+            error_code: 5,
+            total_time: execution_timer_start.elapsed().as_millis().into(),
+            ..Default::default()
+        });
+    }
 
     Some(JobOutput {
         output: response,
