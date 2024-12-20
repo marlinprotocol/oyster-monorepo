@@ -53,7 +53,7 @@ Options:
 ##### Example
 
 ```
-$ vet --url 3:1500/oyster/job
+$ vet --url vsock://3:1500/oyster/job
 0x1234567812345678123456781234567812345678123456781234567812345678
 ```
 
@@ -68,7 +68,7 @@ $ vet --url 3:1500/oyster/job
 ##### Example
 
 ```
-$ vet --url 3:1500/instance/ip
+$ vet --url vsock://3:1500/instance/ip
 192.168.0.1
 ```
 

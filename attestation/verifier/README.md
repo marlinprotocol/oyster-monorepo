@@ -2,7 +2,7 @@
 
 # Attestation Verifier
 
-The attestation verifier verifies attestations provided by the [attestation server](https://github.com/marlinprotocol/oyster-attestation-server) containing a secp256k1 public key and signs the response using its own secp256k1 key. Intended to be run inside an enclave to provide cheap attestation verification services.
+The attestation verifier verifies attestations provided by the [attestation server](https://github.com/marlinprotocol/oyster-monorepo/tree/master/attestation/server) containing a secp256k1 public key and signs the response using its own secp256k1 key. Intended to be run inside an enclave to provide cheap attestation verification services.
 
 Once the attestation of the verifier is verified on-chain (very expensive), it enables other enclaves, including other verifiers, to get verified by submitting a simple ECDSA signature from the verifier instead (very cheap). The process essentially extends the chain of trust of the attestation verifier enclave instead of trying to verify the full attestation of the other enclave again.
 

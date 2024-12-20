@@ -42,7 +42,7 @@ Options:
 ## Example
 
 ```
-$ vet --url 3:1500/oyster/job
+$ vet --url vsock://3:1500/oyster/job
 0x1234567812345678123456781234567812345678123456781234567812345678
 ```
 
