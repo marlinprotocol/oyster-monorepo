@@ -1,7 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use actix_web::web::{Data, Json};
-use actix_web::{get, post, HttpResponse, Responder};
+use axum::{extract::State, http::StatusCode, Json, response::{IntoResponse, Response}};
 use ethers::abi::{encode, encode_packed, Token};
 use ethers::prelude::*;
 use ethers::utils::keccak256;
@@ -11,22 +10,18 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::event_handler::events_listener;
-use crate::utils::{AppState, ImmutableConfig, MutableConfig, EXECUTION_ENV_ID};
+use crate::utils::{AppState, ExecutorConfig, ImmutableConfig, MutableConfig, EXECUTION_ENV_ID, RegistrationMessage};
 
-#[get("/")]
-async fn index() -> impl Responder {
-    HttpResponse::Ok()
-}
+pub async fn index() {}
 
-#[post("/immutable-config")]
 // Endpoint exposed to inject immutable executor config parameters
-async fn inject_immutable_config(
+pub async fn inject_immutable_config(
+    app_state: State<AppState>,
     Json(immutable_config): Json<ImmutableConfig>,
-    app_state: Data<AppState>,
-) -> impl Responder {
+) -> Response {
     let mut immutable_params_injected_guard = app_state.immutable_params_injected.lock().unwrap();
     if *immutable_params_injected_guard == true {
-        return HttpResponse::BadRequest().body("Immutable params already configured!\n");
+        return (StatusCode::BAD_REQUEST, String::from("Immutable params already configured!\n")).into_response();
     }
 
     let owner_address = hex::decode(
@@ -36,29 +31,34 @@ async fn inject_immutable_config(
             .unwrap_or(&immutable_config.owner_address_hex),
     );
     let Ok(owner_address) = owner_address else {
-        return HttpResponse::BadRequest().body(format!(
-            "Invalid owner address hex string: {:?}\n",
-            owner_address.unwrap_err()
-        ));
+        return (
+            StatusCode::BAD_REQUEST,
+            String::from(format!(
+                "Invalid owner address hex string: {:?}\n",
+                owner_address.unwrap_err()
+            ))
+        ).into_response();
     };
 
     if owner_address.len() != 20 {
-        return HttpResponse::BadRequest().body("Owner address must be 20 bytes long!\n");
+        return (
+            StatusCode::BAD_REQUEST,
+            String::from("Owner address must be 20 bytes long!\n")
+        ).into_response();
     }
 
     // Initialize owner address for the enclave
     *app_state.enclave_owner.lock().unwrap() = H160::from_slice(&owner_address);
     *immutable_params_injected_guard = true;
 
-    HttpResponse::Ok().body("Immutable params configured!\n")
+    (StatusCode::OK, String::from("Immutable params configured!\n")).into_response()
 }
 
-#[post("/mutable-config")]
 // Endpoint exposed to inject mutable executor config parameters
-async fn inject_mutable_config(
+pub async fn inject_mutable_config(
+    app_state: State<AppState>,
     Json(mutable_config): Json<MutableConfig>,
-    app_state: Data<AppState>,
-) -> impl Responder {
+) -> Response {
     let bytes32_gas_key = hex::decode(
         &mutable_config
             .gas_key_hex
@@ -66,34 +66,34 @@ async fn inject_mutable_config(
             .unwrap_or(&mutable_config.gas_key_hex),
     );
     let Ok(bytes32_gas_key) = bytes32_gas_key else {
-        return HttpResponse::BadRequest().body(format!(
+        return (StatusCode::BAD_REQUEST, format!(
             "Invalid gas private key hex string: {:?}\n",
             bytes32_gas_key.unwrap_err()
-        ));
+        )).into_response();
     };
 
     if bytes32_gas_key.len() != 32 {
-        return HttpResponse::BadRequest().body("Gas private key must be 32 bytes long!\n");
+        return (StatusCode::BAD_REQUEST, "Gas private key must be 32 bytes long!\n").into_response();
     }
 
     // Initialize local wallet with operator's gas key to send signed transactions to the common chain
     let gas_wallet = LocalWallet::from_bytes(&bytes32_gas_key);
     let Ok(gas_wallet) = gas_wallet else {
-        return HttpResponse::BadRequest().body(format!(
+        return (StatusCode::BAD_REQUEST, format!(
             "Invalid gas private key provided: {:?}\n",
             gas_wallet.unwrap_err()
-        ));
+        )).into_response();
     };
     let gas_wallet = gas_wallet.with_chain_id(app_state.common_chain_id);
 
     // Connect the rpc http provider with the operator's gas wallet
     let http_rpc_client = Provider::<Http>::try_from(&app_state.http_rpc_url);
     let Ok(http_rpc_client) = http_rpc_client else {
-        return HttpResponse::InternalServerError().body(format!(
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(
             "Failed to initialize the http rpc server {}: {:?}\n",
             app_state.http_rpc_url,
             http_rpc_client.unwrap_err()
-        ));
+        )).into_response();
     };
     let http_rpc_client = http_rpc_client.with_signer(gas_wallet);
 
@@ -108,10 +108,10 @@ async fn inject_mutable_config(
     )
     .await;
     let Ok(nonce_to_send) = nonce_to_send else {
-        return HttpResponse::InternalServerError().body(format!(
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(
             "Failed to fetch current nonce for the gas address: {:?}\n",
             nonce_to_send.unwrap_err()
-        ));
+        )).into_response();
     };
 
     // Initialize HTTP RPC client and nonce for sending the signed transactions while holding lock
@@ -120,12 +120,11 @@ async fn inject_mutable_config(
     *app_state.http_rpc_client.lock().unwrap() = Some(http_rpc_client);
     *mutable_params_injected_guard = true;
 
-    HttpResponse::Ok().body("Mutable params configured!\n")
+    (StatusCode::OK, "Mutable params configured!\n").into_response()
 }
 
-#[get("/executor-details")]
 // Endpoint exposed to retrieve executor enclave details
-async fn get_executor_details(app_state: Data<AppState>) -> impl Responder {
+pub async fn get_executor_details(app_state: State<AppState>) -> Response {
     let mut gas_address = H160::zero();
     if *app_state.mutable_params_injected.lock().unwrap() == true {
         gas_address = app_state
@@ -137,23 +136,23 @@ async fn get_executor_details(app_state: Data<AppState>) -> impl Responder {
             .address();
     }
 
-    HttpResponse::Ok().json(json!({
-        "enclave_address": app_state.enclave_address,
-        "enclave_public_key": format!("0x{}", hex::encode(&(app_state.enclave_signer.verifying_key().to_encoded_point(false).as_bytes())[1..])),
-        "owner_address": *app_state.enclave_owner.lock().unwrap(),
-        "gas_address": gas_address,
-    }))
+    let details = ExecutorConfig {
+        enclave_address: app_state.enclave_address,
+        enclave_public_key: format!("0x{}", hex::encode(&(app_state.enclave_signer.verifying_key().to_encoded_point(false).as_bytes())[1..])),
+        owner_address: *app_state.enclave_owner.lock().unwrap(),
+        gas_address: gas_address,
+    };
+    (StatusCode::OK, Json(details)).into_response()
 }
 
-#[get("/signed-registration-message")]
 // Endpoint exposed to retrieve the metadata required to register the enclave on the common chain
-async fn export_signed_registration_message(app_state: Data<AppState>) -> impl Responder {
+pub async fn export_signed_registration_message(app_state: State<AppState>) -> Response {
     if *app_state.immutable_params_injected.lock().unwrap() == false {
-        return HttpResponse::BadRequest().body("Immutable params not configured yet!\n");
+        return (StatusCode::BAD_REQUEST, "Immutable params not configured yet!\n").into_response();
     }
 
     if *app_state.mutable_params_injected.lock().unwrap() == false {
-        return HttpResponse::BadRequest().body("Mutable params not configured yet!\n");
+        return (StatusCode::BAD_REQUEST, "Mutable params not configured yet!\n").into_response();
     }
 
     let job_capacity = app_state.job_capacity;
@@ -187,20 +186,20 @@ async fn export_signed_registration_message(app_state: Data<AppState>) -> impl R
         Token::FixedBytes(hash_struct.to_vec()),
     ]);
     let Ok(digest) = digest else {
-        return HttpResponse::InternalServerError().body(format!(
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(
             "Failed to encode the registration message for signing: {:?}\n",
             digest.unwrap_err()
-        ));
+        )).into_response();
     };
     let digest = keccak256(digest);
 
     // Sign the digest using enclave key
     let sig = app_state.enclave_signer.sign_prehash_recoverable(&digest);
     let Ok((rs, v)) = sig else {
-        return HttpResponse::InternalServerError().body(format!(
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(
             "Failed to sign the registration message using enclave key: {:?}\n",
             sig.unwrap_err()
-        ));
+        )).into_response();
     };
     let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
 
@@ -210,7 +209,10 @@ async fn export_signed_registration_message(app_state: Data<AppState>) -> impl R
     let mut events_listener_active_guard = app_state.events_listener_active.lock().unwrap();
     if *events_listener_active_guard == false {
         let Ok(current_block_number) = current_block_number else {
-            return HttpResponse::InternalServerError().body(format!("Failed to fetch the latest block number of the common chain for initiating event listening: {:?}\n", current_block_number.unwrap_err()));
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!(
+                "Failed to fetch the latest block number of the common chain for initiating event listening: {:?}\n",
+                current_block_number.unwrap_err()
+            )).into_response();
         };
 
         *events_listener_active_guard = true;
@@ -221,11 +223,13 @@ async fn export_signed_registration_message(app_state: Data<AppState>) -> impl R
         });
     }
 
-    HttpResponse::Ok().json(json!({
-        "job_capacity": job_capacity,
-        "sign_timestamp": sign_timestamp,
-        "env": EXECUTION_ENV_ID,
-        "owner": owner,
-        "signature": format!("0x{}", signature),
-    }))
+    let response_body = RegistrationMessage {
+        job_capacity,
+        sign_timestamp,
+        env: EXECUTION_ENV_ID,
+        owner,
+        signature: format!("0x{}", signature),
+    };
+
+    (StatusCode::OK, Json(response_body)).into_response()
 }

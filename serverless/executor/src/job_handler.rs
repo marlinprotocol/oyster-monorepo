@@ -2,8 +2,9 @@ use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use actix_web::web::{Bytes, Data};
 use anyhow::Context;
+use axum::extract::State;
+use bytes::Bytes;
 use ethers::abi::{encode, encode_packed, Token};
 use ethers::types::U256;
 use ethers::utils::keccak256;
@@ -29,7 +30,7 @@ pub async fn handle_job(
     code_hash: String,
     code_inputs: Bytes,
     user_deadline: u64, // time in millis
-    app_state: Data<AppState>,
+    app_state: State<AppState>,
     tx: Sender<JobsTxnMetadata>,
 ) {
     let slug = &hex::encode(rand::random::<u32>().to_ne_bytes());
@@ -112,7 +113,7 @@ async fn execute_job(
     code_hash: &String,
     code_inputs: Bytes,
     slug: &String,
-    app_state: Data<AppState>,
+    app_state: State<AppState>,
 ) -> Option<JobOutput> {
     let execution_timer_start = Instant::now();
 

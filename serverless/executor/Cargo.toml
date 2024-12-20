@@ -16,13 +16,16 @@ name = "cgroups-retriever"
 path = "src/cgroups_retriever.rs"
 
 [dependencies]
-actix-web = "4"
 anyhow = "1.0.75"
+axum = "0.6.20"
+bytes = "1.9.0"
 clap = { version = "4.4.7", features = ["derive"] }
 config = "0.14.0"
 data-encoding = "2.5.0"
 ethers = { version = "2.0.14", features = ["ws", "rustls"] }
 hex = "0.4.3"
+http-on-vsock-server = {path = "../http-on-vsock-server"}
+hyper = { version = "0.14.28", features = ["full"] }
 k256 = { version = "0.13.2", features = ["ecdsa", "ecdsa-core"] }
 openssl = { version = "0.10", features = ["vendored"] }
 rand = "0.8.5"
@@ -35,6 +38,7 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-retry = "0.3"
 tokio-stream = "0.1"
+tokio-vsock = "0.4.0"
 
 [profile.release]
 strip = true

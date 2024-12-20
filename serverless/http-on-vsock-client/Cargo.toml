@@ -1,0 +1,12 @@
+[package]
+name = "http-on-vsock-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.4.6", features = ["derive"] }
+hyper = { version = "0.14.27", features = ["full"] }
+serde_json = "1.0.133"
+tokio = { version = "1.32.0", features = ["full"] }
+tokio-vsock = "0.4.0"
+tower = { version = "0.4.13", features = ["full", "tokio"] }

@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use actix_web::web::Data;
+use axum::extract::State;
 use ethers::abi::{decode, ParamType};
 use ethers::providers::{Middleware, Provider, StreamExt, Ws};
 use ethers::types::{BigEndianHash, Filter, Log, TransactionRequest, H256, U256, U64};
@@ -23,7 +23,7 @@ use crate::timeout_handler::handle_timeout;
 use crate::utils::*;
 
 // Start listening to Job requests emitted by the Jobs contract if enclave is registered else listen for Executor registered events first
-pub async fn events_listener(app_state: Data<AppState>, starting_block: U64) {
+pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
     defer! {
         *app_state.events_listener_active.lock().unwrap() = false;
     }
@@ -188,7 +188,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: U64) {
 
 // Receive job execution responses and send the resulting transactions to the common chain
 async fn send_execution_output(
-    app_state: Data<AppState>,
+    app_state: State<AppState>,
     mut rx: Receiver<JobsTxnMetadata>,
     pending_txns: Arc<Mutex<VecDeque<PendingTxnData>>>,
 ) {
@@ -314,7 +314,7 @@ pub async fn handle_event_logs(
     mut jobs_created_stream: impl Stream<Item = Log> + Unpin,
     mut jobs_responded_stream: impl Stream<Item = Log> + Unpin,
     mut executor_deregistered_stream: impl Stream<Item = Log> + Unpin,
-    app_state: Data<AppState>,
+    app_state: State<AppState>,
     tx: Sender<JobsTxnMetadata>,
 ) {
     println!("Started listening to job events!");
@@ -512,7 +512,7 @@ pub async fn handle_event_logs(
 
 // Function to regularly check the pending transactions for block confirmation and resend them if not included within an interval
 async fn resend_pending_transaction(
-    app_state: Data<AppState>,
+    app_state: State<AppState>,
     pending_txns: Arc<Mutex<VecDeque<PendingTxnData>>>,
     tx_sender: Sender<JobsTxnMetadata>,
 ) {

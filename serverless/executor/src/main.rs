@@ -1,25 +1,37 @@
 use std::collections::HashSet;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc,
+    Mutex
+};
 
-use actix_web::web::Data;
-use actix_web::{App, HttpServer};
+use axum::{routing::{get, post}, Router};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use ethers::types::{H160, U256};
 use ethers::utils::public_key_to_address;
+use http_on_vsock_server::{VsockAddrParser, VsockServer};
 use k256::ecdsa::SigningKey;
 use tokio::fs;
 
 use serverless::cgroups::Cgroups;
-use serverless::node_handler::*;
+use serverless::node_handler::{
+    export_signed_registration_message,
+    get_executor_details,
+    index,
+    inject_immutable_config,
+    inject_mutable_config
+};
 use serverless::utils::{load_abi_from_file, AppState, ConfigManager};
+use tokio_vsock::VsockListener;
 
 // EXECUTOR CONFIGURATION PARAMETERS
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    // Server port
-    #[clap(long, value_parser, default_value = "6001")]
-    port: u16,
+    /// vsock address to listen on <cid:port>
+    #[clap(short, long, value_parser = VsockAddrParser{})]
+    vsock_addr: (u32, u32),
 
     // Path to the configuration file
     #[clap(
@@ -55,9 +67,9 @@ async fn main() -> Result<()> {
     let enclave_address = public_key_to_address(&enclave_signer_key.verifying_key());
 
     // Initialize App data that will be shared across multiple threads and tasks
-    let app_data = Data::new(AppState {
+    let app_data = AppState {
         job_capacity: cgroups.free.len(),
-        cgroups: cgroups.into(),
+        cgroups: Arc::new(Mutex::new(cgroups)),
         workerd_runtime_path: config.workerd_runtime_path,
         execution_buffer_time: config.execution_buffer_time,
         common_chain_id: config.common_chain_id,
@@ -69,35 +81,36 @@ async fn main() -> Result<()> {
         num_selected_executors: config.num_selected_executors,
         enclave_address: enclave_address,
         enclave_signer: enclave_signer_key,
-        immutable_params_injected: false.into(),
-        mutable_params_injected: false.into(),
-        enclave_registered: false.into(),
-        events_listener_active: false.into(),
-        enclave_owner: H160::zero().into(),
-        http_rpc_client: None.into(),
-        job_requests_running: HashSet::new().into(),
-        last_block_seen: 0.into(),
-        nonce_to_send: U256::from(0).into(),
+        immutable_params_injected: Arc::new(Mutex::new(false)),
+        mutable_params_injected: Arc::new(Mutex::new(false)),
+        enclave_registered: Arc::new(AtomicBool::new(false)),
+        events_listener_active: Arc::new(Mutex::new(false)),
+        enclave_owner: Arc::new(Mutex::new(H160::zero())),
+        http_rpc_client: Arc::new(Mutex::new(None)),
+        job_requests_running: Arc::new(Mutex::new(HashSet::new())),
+        last_block_seen: Arc::new(AtomicU64::new(0)),
+        nonce_to_send: Arc::new(Mutex::new(U256::from(0))),
         jobs_contract_abi: load_abi_from_file()?,
-    });
+    };
 
-    // Start actix server to expose the executor outside the enclave
-    let server = HttpServer::new(move || {
-        App::new()
-            .app_data(app_data.clone())
-            .service(index)
-            .service(inject_immutable_config)
-            .service(inject_mutable_config)
-            .service(get_executor_details)
-            .service(export_signed_registration_message)
+    // Create App using Router
+    let app = Router::new()
+        .route("/", get(index))
+        .route("/immutable-config", post(inject_immutable_config))
+        .route("/mutable-config", post(inject_mutable_config))
+        .route("/executor-details", get(get_executor_details))
+        .route("/signed-registration-message", get(export_signed_registration_message))
+        .with_state(app_data);
+
+    println!("Node server started on port {:?}", args.vsock_addr);
+
+    let server = axum::Server::builder(VsockServer {
+        listener: VsockListener::bind(args.vsock_addr.0, args.vsock_addr.1)
+            .context("failed to create vsock listener")?,
     })
-    .bind(("0.0.0.0", args.port))
-    .context(format!("could not bind to port {}", args.port))?
-    .run();
+    .serve(app.into_make_service());
 
-    println!("Node server started on port {}", args.port);
-
-    server.await?;
+    server.await.context("server exited with error")?;
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use actix_web::web::Bytes;
+use bytes::Bytes;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde_json::{json, Value};
