@@ -41,9 +41,16 @@ enum Commands {
         #[arg(short, long, default_value = "result")]
         output: String,
     },
+    /// Upload Enclave Image to IPFS
+    Upload {
+        /// Path to enclave image file
+        #[arg(short, long)]
+        file: String,
+    },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     setup_logging();
 
     let cli = Cli::parse();
@@ -58,6 +65,10 @@ fn main() -> Result<()> {
         } => {
             let platform = types::Platform::from_str(platform).map_err(|e| anyhow::anyhow!(e))?;
             commands::build::build_oyster_image(platform, docker_compose, docker_images, output)?
+        }
+        Commands::Upload { file } => {
+            let default_provider = types::StorageProvider::Pinata;
+            commands::upload::upload_enclave_image(file, &default_provider).await?;
         }
     }
 

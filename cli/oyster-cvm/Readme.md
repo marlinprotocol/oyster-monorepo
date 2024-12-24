@@ -31,6 +31,7 @@ oyster-cvm --help
 ### Commands
 
 #### `doctor`
+
 Checks if Docker and Nix are installed.
 
 #### `build-image`
@@ -42,15 +43,22 @@ Options:
 - `--docker-images` (list of Docker .tar files to be loaded)
 - `--output` (output directory, default: result)
 
+#### `upload`
+
+Uploads an enclave image to IPFS via Pinata.
+--file (path to the enclave image file)
+
+Add env vars for Pinata:
+["PINATA_API_KEY", "PINATA_SECRET_KEY"]
+
 ### Example
 
 ```bash
 # Check system requirements
 ./oyster-cvm doctor
-
 # Sample output:
-[INFO ] Docker is installed ✓
-[INFO ] Nix is installed ✓
+[INFO] Docker is installed ✓
+[INFO] Nix is installed ✓
 
 # Build an oyster cvm image
 ./oyster-cvm build-image \
@@ -58,11 +66,13 @@ Options:
   --docker-compose ./docker-compose.yml \
   --docker-images ./image1.tar ./image2.tar \
   --output ./result
+# Generates a folder "result" with files
+# image.eif  log.txt  pcr.json
 
-# Generated files in "result" directory:
-# - image.eif  
-# - log.txt  
-# - pcr.json
+# Upload image to IPFS using Pinata
+./oyster-cvm upload --file ./result/image.eif
+# Sample output:
+[INFO] Successfully uploaded to Pinata: https://gateway.pinata.cloud/ipfs/Qm...
 ```
 
 ## License
