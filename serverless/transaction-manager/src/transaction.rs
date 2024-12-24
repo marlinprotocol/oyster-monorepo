@@ -326,14 +326,7 @@ impl TxnManager {
                     match err {
                         TxnManagerSendError::GasTooHigh(_)
                         | TxnManagerSendError::ContractExecution(_) => {
-                            if is_internal_call {
-                                transaction.status = TxnStatus::Failed;
-                                transaction.last_monitored = Instant::now();
-                                self.transactions
-                                    .write()
-                                    .unwrap()
-                                    .insert(transaction.id.clone(), transaction.clone());
-                            }
+                            self._send_dummy_transaction(transaction.to_owned()).await;
                             return Err(err);
                         }
                         TxnManagerSendError::Timeout(err) => {
@@ -384,14 +377,7 @@ impl TxnManager {
                         // Or the gas required is way high compared to block gas limit
                         TxnManagerSendError::GasTooHigh(_)
                         | TxnManagerSendError::ContractExecution(_) => {
-                            if is_internal_call {
-                                transaction.status = TxnStatus::Failed;
-                                transaction.last_monitored = Instant::now();
-                                self.transactions
-                                    .write()
-                                    .unwrap()
-                                    .insert(transaction.id.clone(), transaction.clone());
-                            }
+                            self._send_dummy_transaction(transaction.to_owned()).await;
                             return Err(txn_manager_err);
                         }
                         _ => {
@@ -420,14 +406,7 @@ impl TxnManager {
             return Ok(transaction.id.clone());
         }
 
-        if is_internal_call {
-            transaction.status = TxnStatus::Failed;
-            transaction.last_monitored = Instant::now();
-            self.transactions
-                .write()
-                .unwrap()
-                .insert(transaction.id.clone(), transaction.clone());
-        }
+        self._send_dummy_transaction(transaction.to_owned()).await;
         Err(TxnManagerSendError::Timeout(failure_reason))
     }
 
