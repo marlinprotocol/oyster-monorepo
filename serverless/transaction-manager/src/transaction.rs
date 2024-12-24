@@ -46,7 +46,9 @@ type HttpProvider = FillProvider<
 /// use alloy::signers::local::PrivateKeySigner;
 /// use crate::TxnManager;
 ///
-/// let private_key_signer = String::from("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+/// let private_key_signer = String::from(
+///         "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+///     );
 /// let txn_manager = TxnManager::new(
 ///     "https://ethereum.rpc.url".to_string(),
 ///     421614, // chain_id
@@ -93,7 +95,8 @@ impl TxnManager {
     /// * `garbage_removal_duration_sec` - Optional duration for garbage removal in seconds
     ///
     /// # Returns
-    /// * `Result<Arc<Self>, TxnManagerSendError>` - The transaction manager instance or an error
+    /// * `Result<Arc<Self>, TxnManagerSendError>` - The transaction manager instance or an
+    ///                                              error
     ///
     /// # Errors
     /// * `TxnManagerSendError::InvalidRpcUrl` - If the RPC URL is invalid.
@@ -124,9 +127,9 @@ impl TxnManager {
         Ok(Arc::new(Self {
             rpc_url,
             chain_id,
-            private_signer: private_signer,
+            private_signer,
             nonce_to_send: Arc::new(RwLock::new(0)),
-            nonce_to_send_private_signer: nonce_to_send_private_signer,
+            nonce_to_send_private_signer,
             transactions: Arc::new(RwLock::new(HashMap::new())),
             gas_price_increment_percent: gas_price_increment_percent
                 .unwrap_or(RESEND_GAS_PRICE_INCREMENT_PERCENT),
@@ -158,7 +161,8 @@ impl TxnManager {
 
     /// Calls a contract function by creating a Transaction object and calling it.
     ///
-    /// Nonce is fixed for a specific transaction unless the private signer is changed within the timeout.
+    /// Nonce is fixed for a specific transaction unless the private signer is changed within the
+    /// timeout.
     ///
     /// # Arguments
     /// * `contract_address` - The address of the contract to call
@@ -320,6 +324,18 @@ impl TxnManager {
                 if res.is_err() {
                     let err = res.err().unwrap();
                     match err {
+                        TxnManagerSendError::GasTooHigh(_)
+                        | TxnManagerSendError::ContractExecution(_) => {
+                            if is_internal_call {
+                                transaction.status = TxnStatus::Failed;
+                                transaction.last_monitored = Instant::now();
+                                self.transactions
+                                    .write()
+                                    .unwrap()
+                                    .insert(transaction.id.clone(), transaction.clone());
+                            }
+                            return Err(err);
+                        }
                         TxnManagerSendError::Timeout(err) => {
                             if !err.is_empty() {
                                 failure_reason = err;
@@ -752,6 +768,11 @@ impl TxnManager {
     /// # Returns:
     /// * `Result<HttpProvider, TxnManagerSendError>` - The provider instance or an error
     ///
+    /// # Errors
+    /// * `TxnManagerSendError::GasWalletChanged` - If the private signer of the transaction
+    ///                                             does not match the private signer of the
+    ///                                             TxnManager
+    ///
     /// This method is used to create a provider for a transaction.
     /// If ignore_private_signer_check is false, the private signer of the transaction
     /// must match the private signer of the TxnManager.
@@ -821,15 +842,16 @@ impl TxnManager {
             let mut nonce_to_send_private_signer_guard =
                 self.nonce_to_send_private_signer.write().unwrap();
 
-            // If the private signer of the nonce to send is different from the provider's private signer,
-            // update the nonce to send.
+            // If the private signer of the nonce to send is different from the provider's private
+            // signer, update the nonce to send.
             if nonce_to_send_private_signer_guard.address() != transaction.private_signer.address()
             {
                 *nonce_to_send_private_signer_guard = transaction.private_signer.clone();
                 *nonce_to_send_guard = current_nonce;
             }
-            // If the private signer of the nonce to send is the same as the transaction private signer,
-            // update the nonce to send if the current nonce is greater than the nonce to send.
+            // If the private signer of the nonce to send is the same as the transaction private
+            // signer, update the nonce to send if the current nonce is greater than the nonce to
+            // send.
             else if current_nonce > *nonce_to_send_guard {
                 *nonce_to_send_guard = current_nonce;
             }
@@ -852,6 +874,12 @@ impl TxnManager {
     ///
     /// # Returns:
     /// * `Result<(), TxnManagerSendError>` - The result of the gas limit and price estimation
+    ///
+    /// # Errors
+    /// * `TxnManagerSendError::Timeout` - If the gas limit and price is not estimated within the
+    ///                                    timeout along with the failure reason
+    /// * `TxnManagerSendError::GasTooHigh` - If the gas limit is too high
+    /// * `TxnManagerSendError::ContractExecution` - If the contract execution fails
     ///
     /// This method is used to estimate the gas limit and price for a transaction.
     async fn _estimate_gas_limit_and_price(
