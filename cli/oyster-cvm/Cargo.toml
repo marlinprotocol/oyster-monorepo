@@ -14,5 +14,7 @@ anyhow = "1.0.72"
 log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"]}
+alloy = {version = "0.9.1", features = ["full"]}
+lazy_static = "1.4"
 oyster-sdk = "0.12.0"
 hex = "0.4.3"

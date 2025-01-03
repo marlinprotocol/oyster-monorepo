@@ -6,13 +6,13 @@ use tracing::info;
 use oyster::attestation::{get, verify, AttestationExpectations, AWS_ROOT_KEY};
 
 pub async fn verify_enclave(
-    pcr0: &String,
-    pcr1: &String,
-    pcr2: &String,
-    enclave_ip: &String,
+    pcr0: &str,
+    pcr1: &str,
+    pcr2: &str,
+    enclave_ip: &str,
     attestation_port: &u16,
     max_age: &usize,
-    root_public_key: &String,
+    root_public_key: &str,
     timestamp: &usize,
 ) -> Result<()> {
     let attestation_endpoint =

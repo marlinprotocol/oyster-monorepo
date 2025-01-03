@@ -47,7 +47,7 @@ Options:
 Uploads an enclave image to IPFS via Pinata.
 
 Options:
---file (path to the enclave image file)
+- `--file` (path to the enclave image file)
 
 Add env vars for Pinata:
 ["PINATA_API_KEY", "PINATA_API_SECRET"]
@@ -64,6 +64,24 @@ Options:
 - `--max-age` (-a): Maximum age of attestation in milliseconds (default: 300000)
 - `--timestamp` (-t): Attestation timestamp in milliseconds (default: 0)
 - `--root-public-key` (-r): Root public key (optional, defaults to AWS root key)
+
+#### `deploy`
+Deploys an Oyster CVM instance.
+
+Required Options:
+- `--cpu`: Number of vCPUs required
+- `--memory`: Memory in GB required
+- `--image-url`: URL of the enclave image
+- `--region`: Region for deployment
+- `--wallet-private-key`: Wallet private key for transaction signing
+- `--operator`: Operator address
+- `--instance-type`: Instance type (e.g. "m5a.2xlarge")
+- `--duration-in-minutes`: Duration in minutes
+- `--platform`: Platform (amd64 or arm64)
+
+Optional Options:
+- `--bandwidth`: Optional bandwidth in Kbps (default: 100)
+- `--job-name`: Job name (default: "oyster-job")
 
 ### Example
 
@@ -87,6 +105,38 @@ Options:
 ./oyster-cvm upload --file ./result/image.eif
 # Sample output:
 [INFO] Successfully uploaded to Pinata: https://gateway.pinata.cloud/ipfs/Qm...
+
+
+# Deploy an encalve
+./oyster-cvm deploy \
+--cpu 2 \
+--memory 4 \
+--image-url "ipfs://Qm..." \
+--region "us-east-1" \
+--wallet-private-key "your-private-key" \
+--operator "0x..." \
+--instance-type "m5a.2xlarge" \
+--duration-in-minutes 60 \
+--platform amd64 \
+--bandwidth 200 \
+--job-name "my-oyster-job"
+
+# Sample output:
+[INFO] Starting deployment...
+[INFO] Total cost: 0.15 USDC
+[INFO] Total rate: 0.000045 ETH/hour
+[INFO] Approving USDC spend...
+[INFO] USDC approval transaction: 0x3cc...e70
+[INFO] Job creation transaction: 0x38b...008
+[INFO] Transaction successful! Waiting 3 minutes for job initialization...
+[INFO] Transaction events processed...
+[INFO] Job created with ID: 0x000...37a
+[INFO] Waiting for enclave to start...
+[INFO] Checking for IP address...
+[INFO] Found IP address: 192.168.1.100
+[INFO] TCP connection established successfully
+[INFO] Attestation check successful
+[INFO] Enclave is ready! IP address: 192.168.1.100
 
 # Verify an enclave
 ./oyster-cvm verify-enclave \

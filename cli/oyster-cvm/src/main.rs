@@ -1,8 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+
 mod commands;
 mod types;
+mod utils;
 
+use crate::commands::deploy::DeploymentConfig;
 use tracing_subscriber::EnvFilter;
 
 fn setup_logging() {
@@ -91,6 +94,52 @@ enum Commands {
         #[arg(short = 'r', long, default_value = "")]
         root_public_key: String,
     },
+    /// Deploy an Oyster CVM instance
+    Deploy {
+        /// Number of vCPUs required
+        #[arg(long, required = true)]
+        cpu: u32,
+
+        /// Memory in GB required
+        #[arg(long, required = true)]
+        memory: u32,
+
+        /// URL of the enclave image
+        #[arg(long, required = true)]
+        image_url: String,
+
+        /// Region for deployment
+        #[arg(long, required = true)]
+        region: String,
+
+        /// Wallet private key for transaction signing
+        #[arg(long, required = true)]
+        wallet_private_key: String,
+
+        /// Optional operator address
+        #[arg(long, required = true)]
+        operator: String,
+
+        /// Instance type (e.g. "m5a.2xlarge")
+        #[arg(long, required = true)]
+        instance_type: String,
+
+        /// Optional bandwidth in Kbps (default: 100)
+        #[arg(long, default_value = "100")]
+        bandwidth: u32,
+
+        /// Duration in minutes
+        #[arg(long, required = true)]
+        duration_in_minutes: u32,
+
+        /// Platform (amd64 or arm64)
+        #[arg(long, value_parser = [types::Platform::AMD64.as_str(), types::Platform::ARM64.as_str()])]
+        platform: String,
+
+        /// Job name (default: "oyster-job")
+        #[arg(long, default_value = "oyster-job")]
+        job_name: String,
+    },
 }
 
 #[tokio::main]
@@ -142,6 +191,32 @@ async fn main() -> Result<()> {
                 timestamp,
             )
             .await
+        }
+        Commands::Deploy {
+            cpu,
+            memory,
+            image_url,
+            region,
+            wallet_private_key,
+            operator,
+            instance_type,
+            bandwidth,
+            duration_in_minutes,
+            platform,
+            job_name,
+        } => {
+            let config = DeploymentConfig {
+                cpu: *cpu,
+                memory: *memory,
+                image_url: image_url.clone(),
+                region: region.clone(),
+                instance_type: instance_type.clone(),
+                bandwidth: *bandwidth,
+                duration: *duration_in_minutes,
+                platform: platform.clone(),
+                job_name: job_name.clone(),
+            };
+            commands::deploy::deploy_oyster_instance(config, wallet_private_key, operator).await
         }
     };
 
