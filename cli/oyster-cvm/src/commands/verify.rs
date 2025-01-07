@@ -17,30 +17,26 @@ struct PcrValues {
 }
 
 pub async fn verify_enclave(
-    pcr_file: &Option<String>,
-    pcr0: &Option<String>,
-    pcr1: &Option<String>,
-    pcr2: &Option<String>,
+    pcr_file: &String,
+    pcr0: &String,
+    pcr1: &String,
+    pcr2: &String,
     enclave_ip: &str,
     attestation_port: &u16,
     max_age: &usize,
     root_public_key: &str,
     timestamp: &usize,
 ) -> Result<()> {
-    let pcrs = if let Some(file_path) = pcr_file {
+    let pcrs = if !pcr_file.is_empty() {
         // Read PCRs from JSON file
-        let content = fs::read_to_string(file_path)
+        let content = fs::read_to_string(pcr_file)
             .context("Failed to read PCRs file")?;
         let pcr_values: PcrValues = serde_json::from_str(&content)
             .context("Failed to parse PCRs JSON")?;
         get_pcrs(&pcr_values.pcr0, &pcr_values.pcr1, &pcr_values.pcr2)?
     } else {
         // Use command line PCR values
-        get_pcrs(
-            pcr0.as_ref().context("PCR0 is required")?,
-            pcr1.as_ref().context("PCR1 is required")?,
-            pcr2.as_ref().context("PCR2 is required")?,
-        )?
+        get_pcrs(pcr0, pcr1, pcr2)?
     };
 
     let attestation_endpoint =

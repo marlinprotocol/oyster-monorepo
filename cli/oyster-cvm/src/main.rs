@@ -73,20 +73,20 @@ enum Commands {
         enclave_ip: String,
 
         /// Path to PCRs JSON file
-        #[arg(long, conflicts_with_all(["pcr0", "pcr1", "pcr2"]))]
-        pcr_file: Option<String>,
+        #[arg(long, default_value = "", conflicts_with_all(["pcr0", "pcr1", "pcr2"]))]
+        pcr_file: String,
 
         /// PCR 0
-        #[arg(short = '0', long, requires_all(["pcr1", "pcr2"]))]
-        pcr0: Option<String>,
+        #[arg(short = '0', default_value = "", long, requires_all(["pcr1", "pcr2"]))]
+        pcr0: String,
 
         /// PCR 1
-        #[arg(short = '1', long, requires_all(["pcr0", "pcr2"]))]
-        pcr1: Option<String>,
+        #[arg(short = '1', default_value = "", long, requires_all(["pcr0", "pcr2"]))]
+        pcr1: String,
 
         /// PCR 2
-        #[arg(short = '2', long, requires_all(["pcr0", "pcr1"]))]
-        pcr2: Option<String>,
+        #[arg(short = '2', default_value = "", long, requires_all(["pcr0", "pcr1"]))]
+        pcr2: String,
 
         /// Attestation Port (default: 1300)
         #[arg(short = 'p', long, default_value = "1300")]
