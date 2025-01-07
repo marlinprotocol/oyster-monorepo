@@ -1,20 +1,48 @@
 use anyhow::{Context, Result};
 use hex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use serde::Deserialize;
+use std::{fs, time::{SystemTime, UNIX_EPOCH}};
 use tracing::info;
 
 use oyster::attestation::{get, verify, AttestationExpectations, AWS_ROOT_KEY};
 
+#[derive(Deserialize)]
+struct PcrValues {
+    #[serde(rename = "PCR0")]
+    pcr0: String,
+    #[serde(rename = "PCR1")]
+    pcr1: String,
+    #[serde(rename = "PCR2")]
+    pcr2: String,
+}
+
 pub async fn verify_enclave(
-    pcr0: &str,
-    pcr1: &str,
-    pcr2: &str,
+    pcr_file: &Option<String>,
+    pcr0: &Option<String>,
+    pcr1: &Option<String>,
+    pcr2: &Option<String>,
     enclave_ip: &str,
     attestation_port: &u16,
     max_age: &usize,
     root_public_key: &str,
     timestamp: &usize,
 ) -> Result<()> {
+    let pcrs = if let Some(file_path) = pcr_file {
+        // Read PCRs from JSON file
+        let content = fs::read_to_string(file_path)
+            .context("Failed to read PCRs file")?;
+        let pcr_values: PcrValues = serde_json::from_str(&content)
+            .context("Failed to parse PCRs JSON")?;
+        get_pcrs(&pcr_values.pcr0, &pcr_values.pcr1, &pcr_values.pcr2)?
+    } else {
+        // Use command line PCR values
+        get_pcrs(
+            pcr0.as_ref().context("PCR0 is required")?,
+            pcr1.as_ref().context("PCR1 is required")?,
+            pcr2.as_ref().context("PCR2 is required")?,
+        )?
+    };
+
     let attestation_endpoint =
         format!("http://{}:{}/attestation/raw", enclave_ip, attestation_port);
     info!(
@@ -28,7 +56,7 @@ pub async fn verify_enclave(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as usize;
     let attestation_expectations = AttestationExpectations {
         age: Some((*max_age, now)),
-        pcrs: get_pcrs(pcr0, pcr1, pcr2)?,
+        pcrs,
         root_public_key: Some(if root_public_key.is_empty() {
             AWS_ROOT_KEY.to_vec()
         } else {
