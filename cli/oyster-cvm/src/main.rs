@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ArgGroup};
 
 mod commands;
 mod types;
@@ -61,22 +61,32 @@ enum Commands {
         file: String,
     },
     /// Verify Oyster Enclave Attestation
+    #[command(
+        about = "Verify Oyster Enclave Attestation",
+        group = ArgGroup::new("pcr_source")
+            .args(["pcr_file", "pcr0"])
+            .required(true), // One of these groups is required
+    )]
     VerifyEnclave {
         /// Enclave IP
         #[arg(short = 'e', long, required = true)]
         enclave_ip: String,
 
+        /// Path to PCRs JSON file
+        #[arg(long, conflicts_with_all(["pcr0", "pcr1", "pcr2"]))]
+        pcr_file: Option<String>,
+
         /// PCR 0
-        #[arg(short = '0', long, default_value = "")]
-        pcr0: String,
+        #[arg(short = '0', long, requires_all(["pcr1", "pcr2"]))]
+        pcr0: Option<String>,
 
         /// PCR 1
-        #[arg(short = '1', long, default_value = "")]
-        pcr1: String,
+        #[arg(short = '1', long, requires_all(["pcr0", "pcr2"]))]
+        pcr1: Option<String>,
 
         /// PCR 2
-        #[arg(short = '2', long, default_value = "")]
-        pcr2: String,
+        #[arg(short = '2', long, requires_all(["pcr0", "pcr1"]))]
+        pcr2: Option<String>,
 
         /// Attestation Port (default: 1300)
         #[arg(short = 'p', long, default_value = "1300")]
@@ -171,8 +181,10 @@ async fn main() -> Result<()> {
             max_age,
             root_public_key,
             timestamp,
+            pcr_file,
         } => {
             commands::verify::verify_enclave(
+                pcr_file,
                 pcr0,
                 pcr1,
                 pcr2,
