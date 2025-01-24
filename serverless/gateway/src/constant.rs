@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use once_cell::sync::Lazy;
 
-pub const REQUEST_RELAY_TIMEOUT: u64 = 40;
+pub const REQUEST_RELAY_TIMEOUT: u64 = 75;
 
 // pub const RESPONSE_RELAY_TIMEOUT: u64 = 40;
 pub const MAX_GATEWAY_RETRIES: u8 = 2;
@@ -12,7 +12,7 @@ pub const GATEWAY_BLOCK_STATES_TO_MAINTAIN: u64 = 5;
 pub const WAIT_BEFORE_HTTP_RPC_CALL: u64 = 100;
 
 pub const MIN_GATEWAY_STAKE: Lazy<U256> =
-    Lazy::new(|| U256::from(111_111_111_111_111_110_000 as u128));
+    Lazy::new(|| U256::from(1e18 as u128));
 pub const GATEWAY_STAKE_ADJUSTMENT_FACTOR: Lazy<U256> = Lazy::new(|| U256::from(1e18 as u128));
 
 // Event signatures

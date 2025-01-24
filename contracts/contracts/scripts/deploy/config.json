@@ -18,5 +18,20 @@
       }]
     },
     "admin": "0xd7E109d2219b5b5b90656FB8B33F2ba679b22062"
+  },
+  "42161": {
+    "enclaves": {
+      "whitelistedImages": [
+        {
+          "PCR": {
+            "PCR0": "189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6",
+            "PCR1": "5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16",
+            "PCR2": "6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"
+          },
+          "enclaveKey": "0xe646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"
+        }
+      ]
+    },
+    "admin": "0xf292A799f074B4272FAA91C2783E843cAEEfd11C"
   }
 }

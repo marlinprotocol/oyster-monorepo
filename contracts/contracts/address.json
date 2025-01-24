@@ -1,4 +1,10 @@
 {
+  "31337": {
+    "AttestationVerifier": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+  },
+  "42161": {
+    "AttestationVerifier": "0x778c1AdeaB57DD4B5b930bbdB8c892F8d2606228"
+  },
   "421614": {
     "AttestationVerifier": "0x63EEf1576b477Aa60Bfd7300B2C85b887639Ac1b"
   }

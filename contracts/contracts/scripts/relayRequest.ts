@@ -10,6 +10,8 @@ type EnvConfig = {
     }
 }
 
+
+// TODO: Get the execution fee
 const envConfig: EnvConfig = {
     1: {
         executorFeePerMs: 1,
@@ -18,30 +20,39 @@ const envConfig: EnvConfig = {
 };
 
 async function main() {
-    //Create Enclave Image object
-    const img = {
-        PCR0 : getBytes("0xcfa7554f87ba13620037695d62a381a2d876b74c2e1b435584fe5c02c53393ac1c5cd5a8b6f92e866f9a65af751e0462"),
-        PCR1 : getBytes("0xbcdf05fefccaa8e55bf2c8d6dee9e79bbff31e34bf28a99aa19e6b29c37ee80b214a414b7607236edf26fcb78654e63f"),
-        PCR2 : getBytes("0x20caae8a6a69d9b1aecdf01a0b9c5f3eafd1f06cb51892bf47cef476935bfe77b5b75714b68a69146d650683a217c5b3"),
+    // Create Enclave Image object
+
+    const verifier_img = {
+        PCR0 : getBytes("0x189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"),
+        PCR1 : getBytes("0x5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"),
+        PCR2 : getBytes("0x6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"),
     };
 
-    let wallet = walletForIndex(0);
-    console.log("Attestation Verifer Enclave Private Key: ", wallet.signingKey.privateKey);
-    let enclavePubKey = normalize(wallet.signingKey.publicKey);
+    // Update the PCR values with the actual values
+    const gw_img = {
+        PCR0 : getBytes("0x6d40212c0e1360c4739386ce36e2e07bfd826b72eefbeccc8f524caa17df19f2084ef02c2b7caddf3acdf5bb4183164b"),
+        PCR1 : getBytes("0x3c9d303f89856ec3410913381c328350c32d14d2f86a2b4a7787998bd6d76d8f60fc88fea094bf5a02b2c2df1b7ad832"),
+        PCR2 : getBytes("0x58fe54ea1929ca6f80d54d01fd68c818676761c96c3c0153ec6c92dca471adfdac75cc33c524808231ae6d85dd285f62"),
+    };
+    const exec_img = {
+        PCR0 : getBytes("0x3d94326f8a889e12b8a603174334ffc77b81a4515418aef341827015a4002f844e8c7b6a02f5609ccbc47f18bac7df0c"),
+        PCR1 : getBytes("0x34c9578ce5105b9de453fe1ed082b09cc5a7587f6b1dd3304b4b2e159004b8f35d1ff2376593a2e9322b118fec3fa06f"),
+        PCR2 : getBytes("0xb6546c776a76b94285c0124a1658b90fd9eaf2676efe2070ef46486b51755e76c76239755fdde5c9b0e9a6d81fc39330"),
+    };
 
-    // Admin address
+
+    // get enclave pub key for attestation verifier to be whitelisted
+    let verifierEnclavePubKey = "0xe646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb";
+
+    // NOTE: Admin address same as address deploying the contracts, configured in environment file
     let signers = await ethers.getSigners();
     let admin_addr = await signers[0].getAddress();
 
-    // Deploy POND Token Contract
-    console.log("Deploying Pond");
-    const Pond = await ethers.getContractFactory("Pond");
-    let staking_token = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-        kind: "uups",
-    });
-    let staking_token_addr = staking_token.target;
+    // POND Token Contract
+    let staking_token_addr = "0xdA0a57B710768ae17941a9Fa33f8B720c8bD9ddD";
     console.log("Pond Deployed address: ", staking_token_addr);
 
+    // TODO: remove after local testing
     // Deploy USDC Token Contract
     console.log("Deploying USDCoin...");
     const USDCoin = await ethers.getContractFactory("USDCoin");
@@ -52,35 +63,28 @@ async function main() {
     let usdc_token_addr = usdc_token.target;
     console.log("USDCoin Deployed address: ", usdc_token_addr);
 
+    // TODO: uncomment
+    // // USDC Token Contract
+    // let usdc_token_addr = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+    // console.log("USDCoin Deployed address: ", usdc_token_addr);
+
+    // Attestation Verifier
+    let av_addr = "0x778c1AdeaB57DD4B5b930bbdB8c892F8d2606228";
+    console.log("AttestationVerifier Deployed address: ", av_addr);
+
     const env = 1;
     const executorFeePerMs = envConfig[env].executorFeePerMs; // 0.001 usd per ms
     const stakingRewardPerMs = envConfig[env].stakingRewardPerMs; // 0.001 usd per ms
     const executionFeePerMs = executorFeePerMs + stakingRewardPerMs;
-    const gatewayFee = 100; // 0.1 usd
+    const gatewayFee = 100; // 0.1 usd // TODO
     const stakingPaymentPoolAddress = await signers[0].getAddress();
     const usdcPaymentPoolAddress = await signers[0].getAddress();
     const signMaxAge = 600;
 
-    // Attestation Verifier
-    const AttestationVerifier = await ethers.getContractFactory("AttestationVerifier");
-    console.log("Deploying AttestationVerifier")
-    let attestationverifier = await upgrades.deployProxy(
-        AttestationVerifier,
-        [
-            [img],
-            [enclavePubKey],
-            admin_addr
-        ],
-        {
-            kind : "uups"
-        });
-    let av_addr = attestationverifier.target;
-    console.log("AttestationVerifier Deployed address: ", av_addr);
-
     // Request Chain Relay Contract
-    let overallTimeout = 120;
+    let overallTimeout = 570;
     let minUserDeadline = 1000;
-    let maxUserDeadline = 50000;
+    let maxUserDeadline = 300000;
     let fixedGas = 150000;
     let callbackMeasureGas = 4530;
     const Relay = await ethers.getContractFactory("Relay");
@@ -89,7 +93,7 @@ async function main() {
         Relay,
         [
             admin_addr,
-            [img]
+            []
         ],
         {
             initializer : "initialize",
@@ -111,7 +115,7 @@ async function main() {
 
     await relay.addGlobalEnv(env, executionFeePerMs);
     
-    let minPeriodicGap = 10,
+    let minPeriodicGap = 30, // check product requirements
         maxPeriodicGap = 60 * 60 * 24 * 365,    // 1 year
         maxTerminationDuration = 60 * 60 * 24 * 365 * 5;    // 5 years
     const RelaySubscriptions = await ethers.getContractFactory("RelaySubscriptions");
@@ -135,14 +139,14 @@ async function main() {
     console.log("RelaySubscriptions Deployed address: ", relaySubscriptionsAddress);
 
     // Common Chain Gateways Contract
-    let epochInterval = 600;
+    let epochInterval = 60;
     const Gateways = await ethers.getContractFactory("Gateways");
     console.log("Deploying Gateways...")
     let gatewaysContract = await upgrades.deployProxy(
         Gateways,
         [
             admin_addr,
-            [img]
+            []
         ],
         {
             initializer : "initialize",
@@ -152,7 +156,7 @@ async function main() {
                 signMaxAge,
                 staking_token_addr,
                 epochInterval + overallTimeout,
-                100, // 0.01 %
+                100, // 0.01 % // TODO
                 1000000
             ]
         });
@@ -168,7 +172,7 @@ async function main() {
         Executors,
         [
             admin_addr,
-            [img]
+            []
         ],
         {
             initializer : "initialize",
@@ -178,7 +182,7 @@ async function main() {
                 signMaxAge,
                 staking_token_addr,
                 minStake,
-                100, // 0.01 %
+                100, // 0.01 % // TODO
                 1000000
             ]
         });
@@ -215,30 +219,32 @@ async function main() {
     await executorsContract.grantRole(await executorsContract.JOBS_ROLE(), jobsAddress);
     await jobsContract.addGlobalEnv(env, executorFeePerMs, stakingRewardPerMs);
 
-     // Common Chain Gateway Jobs Contract
-     let relayBufferTime = 120;
-     const GatewayJobs = await ethers.getContractFactory("GatewayJobs");
-     console.log("Deploying GatewayJobs...")
-     let gatewayJobs = await upgrades.deployProxy(
-         GatewayJobs,
-         [
-             admin_addr
-         ],
-         {
-             initializer : "initialize",
-             kind : "uups",
-             constructorArgs : [
-                 staking_token_addr,
-                 usdc_token_addr,
-                 signMaxAge,
-                 relayBufferTime,
-                 10n**16n, // 0.01 POND
-                 10n**16n, // 0.01 POND
-                 jobsAddress,
-                 gatewaysAddress,
-                 stakingPaymentPoolAddress
-             ]
-         });
+    // Common Chain Gateway Jobs Contract
+    let relayBufferTime = 210;
+    let slashCompForGateway = 10n**14n; // 0.0001 POND // TODO
+    let reassignCompForReporterGateway = 10n**14n; // 0.0001 POND // TODO
+    const GatewayJobs = await ethers.getContractFactory("GatewayJobs");
+    console.log("Deploying GatewayJobs...")
+    let gatewayJobs = await upgrades.deployProxy(
+        GatewayJobs,
+        [
+            admin_addr
+        ],
+        {
+            initializer : "initialize",
+            kind : "uups",
+            constructorArgs : [
+                staking_token_addr,
+                usdc_token_addr,
+                signMaxAge,
+                relayBufferTime,
+                slashCompForGateway,
+                reassignCompForReporterGateway,
+                jobsAddress,
+                gatewaysAddress,
+                stakingPaymentPoolAddress
+            ]
+        });
     let gatewayJobsAddress = gatewayJobs.target;
     console.log("GatewayJobs Deployed address: ", gatewayJobsAddress);
     await gatewaysContract.grantRole(await gatewaysContract.GATEWAY_JOBS_ROLE(), gatewayJobsAddress);

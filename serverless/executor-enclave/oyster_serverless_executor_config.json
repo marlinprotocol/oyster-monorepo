@@ -1,12 +1,12 @@
 {
     "workerd_runtime_path": "/app/runtime/",
-    "common_chain_id": 421614,
-    "http_rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
-    "web_socket_url": "wss://arb-sepolia.g.alchemy.com/v2/",
-    "executors_contract_addr": "0xa5F525145219D16763d24670DBF0E62fFbA19571",
-    "jobs_contract_addr": "0xF14Ff55120210912Ffb32B7D48b926186168166C",
-    "code_contract_addr": "0x44fe06d2940b8782a0a9a9ffd09c65852c0156b1",
+    "common_chain_id": 42161,
+    "http_rpc_url": "https://arb1.arbitrum.io/rpc",
+    "web_socket_url": "wss://arb-mainnet.g.alchemy.com/v2/",
+    "executors_contract_addr": "0x2fCB1F84491A84B719143959730A1237AE6E55a6",
+    "jobs_contract_addr": "0x3eA9a428E5FdF2f088435A04041E674E33D3d856",
+    "code_contract_addr": "0x71c8c416fa8c78e58d7b6bc3c6ebc8ee93c0fc80",
     "enclave_signer_file": "/app/ecdsa.sec",
-    "execution_buffer_time": 20,
+    "execution_buffer_time": 60,
     "num_selected_executors": 3
 }
