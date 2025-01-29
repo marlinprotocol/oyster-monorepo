@@ -18,7 +18,7 @@
   pkgs = nixpkgs.legacyPackages."${system}";
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
-  keygenEd25519 = "${keygen}/bin/keygen-ed25519";
+  keygenX25519 = "${keygen}/bin/keygen-x25519";
   itvroProxy = "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
   vtiriProxy = "${raw-proxy}/bin/vsock-to-ip-raw-incoming";
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
@@ -38,7 +38,7 @@
 		mkdir -p $out/etc
     mkdir -p $out/app/docker-images
 		cp ${supervisord'} $out/app/supervisord
-		cp ${keygenEd25519} $out/app/keygen-ed25519
+		cp ${keygenX25519} $out/app/keygen-x25519
 		cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
 		cp ${vtiriProxy} $out/app/vsock-to-ip-raw-incoming
 		cp ${attestationServer} $out/app/attestation-server
