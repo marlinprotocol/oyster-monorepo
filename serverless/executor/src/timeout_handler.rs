@@ -5,7 +5,8 @@ use ethers::types::U256;
 use tokio::sync::mpsc::Sender;
 use tokio::time::{sleep, Duration};
 
-use crate::utils::{AppState, JobsTxnMetadata, JobsTxnType, TIMEOUT_TXN_RESEND_DEADLINE};
+use crate::constant::TIMEOUT_TXN_RESEND_DEADLINE;
+use crate::model::{AppState, JobsTxnMetadata, JobsTxnType};
 
 // Start task to handle the execution timeout scenario for a job request
 pub async fn handle_timeout(

@@ -7,7 +7,9 @@ mod server;
 mod utils;
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
+use actix_web::http::Uri;
 use actix_web::web::Data;
 use actix_web::{App, HttpServer};
 use alloy::primitives::Address;
@@ -27,9 +29,9 @@ use utils::verify_rpc_url;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    // Server port
+    /// External port to expose outside enclave for injecting secret
     #[clap(long, value_parser, default_value = "6002")]
-    port: u16,
+    external_port: u16,
 
     // Path to the configuration file
     #[clap(
@@ -44,7 +46,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
     let config_manager = ConfigManager::new(&args.config_file);
-    let config = config_manager.load_config().unwrap();
+    let mut config = config_manager.load_config().unwrap();
 
     verify_rpc_url(&config.http_rpc_url).context("Invalid RPC URL")?;
 
@@ -65,13 +67,22 @@ async fn main() -> Result<()> {
     let secret_manager_contract =
         SecretManagerContract::new(config.secret_manager_contract_addr, http_rpc_client);
 
+    // Validate the format of the web_socket_url
+    let _ = config
+        .web_socket_url
+        .parse::<Uri>()
+        .context("Invalid web_socket_url format")?;
+    if !config.web_socket_url.ends_with('/') {
+        config.web_socket_url.push('/');
+    }
+
     // Initialize App data that will be shared across multiple threads and tasks
     let app_data = Data::new(AppState {
         secret_store_path: config.secret_store_path,
         common_chain_id: config.common_chain_id,
         http_rpc_url: config.http_rpc_url,
-        web_socket_url: config.web_socket_url,
-        secret_store_contract_addr: config.secret_store_contract_addr,
+        web_socket_url: Arc::new(RwLock::new(config.web_socket_url)),
+        tee_manager_contract_addr: config.tee_manager_contract_addr,
         secret_manager_contract_addr: config.secret_manager_contract_addr,
         secret_manager_contract_instance: secret_manager_contract,
         num_selected_stores: config.num_selected_stores,
@@ -91,24 +102,40 @@ async fn main() -> Result<()> {
         secrets_stored: HashMap::new().into(),
     });
 
-    // Start actix server to expose the secret store API endpoints outside the enclave
-    let server = HttpServer::new(move || {
+    let app_data_clone = app_data.clone();
+    // Start actix server to expose the secret store API endpoints for configuration and registration requests inside the enclave local system
+    let config_server = HttpServer::new(move || {
         App::new()
-            .app_data(app_data.clone())
+            .app_data(app_data_clone.clone())
             .service(index)
             .service(inject_immutable_config)
             .service(inject_mutable_config)
             .service(get_secret_store_details)
-            .service(export_signed_registration_message)
-            .service(inject_and_store_secret)
+            .service(export_registration_details)
     })
-    .bind(("0.0.0.0", args.port))
-    .context(format!("could not bind to port {}", args.port))?
+    .bind(("0.0.0.0", config.config_port))
+    .context(format!("could not bind to port {}", config.config_port))?
     .run();
 
-    println!("Node server started on port {}", args.port);
+    println!("Config server started on port {}", config.config_port);
 
-    server.await?;
+    // Start actix server to expose the inject secret endpoint outside the enclave
+    let external_server = HttpServer::new(move || {
+        App::new()
+            .app_data(app_data.clone())
+            .service(inject_and_store_secret)
+    })
+    .bind(("0.0.0.0", args.external_port))
+    .context(format!("could not bind to port {}", args.external_port))?
+    .run();
+
+    println!(
+        "Secret inject server started on port {}",
+        args.external_port
+    );
+
+    // Run both servers concurrently
+    tokio::try_join!(config_server, external_server)?;
 
     Ok(())
 }

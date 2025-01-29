@@ -15,8 +15,9 @@ pub const GARBAGE_CLEAN_JOB_INTERVAL_SECS: u64 = 300;
 pub const SECRET_EXPIRATION_BUFFER_SECS: u64 = 5;
 
 // Event signatures of 'SecretStore' and 'SecretManager' contracts
-pub const SECRET_STORE_REGISTERED_EVENT: &str = "SecretStoreRegistered(address,address,uint256)";
-pub const SECRET_STORE_DEREGISTERED_EVENT: &str = "SecretStoreDeregistered(address)";
+pub const SECRET_STORE_REGISTERED_EVENT: &str =
+    "TeeNodeRegistered(address,address,uint256,uint256,uint8)";
+pub const SECRET_STORE_DEREGISTERED_EVENT: &str = "TeeNodeDeregistered(address)";
 pub const SECRET_CREATED_EVENT: &str =
     "SecretCreated(uint256,address,uint256,uint256,uint256,address[])";
 pub const SECRET_STORE_ACKNOWLEDGEMENT_SUCCESS_EVENT: &str =

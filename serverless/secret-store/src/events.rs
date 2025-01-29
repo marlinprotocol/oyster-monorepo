@@ -24,7 +24,8 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
     }
     loop {
         // web socket connection
-        let ws_connect = WsConnect::new(&app_state.web_socket_url);
+        let web_socket_url = app_state.web_socket_url.read().unwrap().clone();
+        let ws_connect = WsConnect::new(web_socket_url);
         let web_socket_client = match ProviderBuilder::new().on_ws(ws_connect).await {
             Ok(client) => client,
             Err(err) => {
@@ -38,9 +39,9 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'SecretStoreRegistered' event emitted by the SecretStore contract
+            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_store_filter = Filter::new()
-                .address(app_state.secret_store_contract_addr)
+                .address(app_state.tee_manager_contract_addr)
                 .event(SECRET_STORE_REGISTERED_EVENT)
                 .topic1(B256::from(app_state.enclave_address.into_word()))
                 .topic2(B256::from(
@@ -57,7 +58,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                 Err(err) => {
                     eprintln!(
                         "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreRegistered' event logs: {:?}",
-                        app_state.secret_store_contract_addr,
+                        app_state.tee_manager_contract_addr,
                         err,
                     );
                     continue;
@@ -75,6 +76,15 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     event.block_number.unwrap_or(starting_block),
                     Ordering::SeqCst,
                 );
+
+                let txn_manager = app_state
+                    .http_rpc_txn_manager
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap();
+                txn_manager.run().await;
+
                 break;
             }
 
@@ -110,9 +120,9 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
         let secrets_stream = pin!(secrets_subscription.into_stream());
 
-        // Create filter to listen to 'SecretStoreDeregistered' event emitted by the SecretStore contract
+        // Create filter to listen to 'TeeNodeDeregistered' event emitted by the TeeManager contract
         let store_deregistered_filter = Filter::new()
-            .address(app_state.secret_store_contract_addr)
+            .address(app_state.tee_manager_contract_addr)
             .event(SECRET_STORE_DEREGISTERED_EVENT)
             .topic1(B256::from(app_state.enclave_address.into_word()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
@@ -125,7 +135,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
             Err(err) => {
                 eprintln!(
                     "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreDeregistered' event logs: {:?}",
-                    app_state.secret_store_contract_addr,
+                    app_state.tee_manager_contract_addr,
                     err
                 );
                 continue;

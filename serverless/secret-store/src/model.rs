@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use alloy::primitives::{Address, U256};
@@ -29,11 +29,12 @@ pub struct ConfigManager {
 // Config struct containing the secret store configuration parameters
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub config_port: u16,
     pub secret_store_path: String,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
     pub web_socket_url: String,
-    pub secret_store_contract_addr: Address,
+    pub tee_manager_contract_addr: Address,
     pub secret_manager_contract_addr: Address,
     pub num_selected_stores: u8,
     pub enclave_signer_file: String,
@@ -47,8 +48,8 @@ pub struct AppState {
     pub secret_store_path: String,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
-    pub web_socket_url: String,
-    pub secret_store_contract_addr: Address,
+    pub web_socket_url: Arc<RwLock<String>>,
+    pub tee_manager_contract_addr: Address,
     pub secret_manager_contract_addr: Address,
     pub secret_manager_contract_instance: SecretManagerAbi,
     pub num_selected_stores: u8,
@@ -76,6 +77,7 @@ pub struct ImmutableConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MutableConfig {
     pub gas_key_hex: String,
+    pub ws_api_key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

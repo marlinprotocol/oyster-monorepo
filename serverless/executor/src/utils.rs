@@ -1,165 +1,17 @@
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use bytes::Bytes;
 use ethers::abi::{Abi, Token};
-use ethers::middleware::SignerMiddleware;
-use ethers::providers::{Http, Middleware, Provider};
-use ethers::signers::LocalWallet;
+use ethers::providers::Middleware;
 use ethers::types::transaction::eip2718::TypedTransaction;
-use ethers::types::{Address, Eip1559TransactionRequest, H160, H256, U256};
-use k256::ecdsa::SigningKey;
-use serde::{Deserialize, Serialize};
-use serde_json::from_str;
+use ethers::types::{Address, Eip1559TransactionRequest, U256};
+use serde_json::{from_str, Value};
 use tokio::time::sleep;
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
 
-use crate::cgroups::Cgroups;
-
-// Execution environment ID for the executor image
-pub const EXECUTION_ENV_ID: u8 = 1;
-
-pub const HTTP_CALL_RETRY_DELAY: u64 = 10; // Retry interval (in milliseconds) for HTTP requests
-pub const GAS_LIMIT_BUFFER: u64 = 200000; // Fixed buffer to add to the estimated gas for setting gas limit
-pub const TIMEOUT_TXN_RESEND_DEADLINE: u64 = 20; // Deadline (in secs) for resending pending/dropped execution timeout txns
-pub const RESEND_TXN_INTERVAL: u64 = 5; // Interval (in secs) in which to confirm/resend pending/dropped txns
-pub const RESEND_GAS_PRICE_INCREMENT_PERCENT: u64 = 10; // Gas price increment percent while resending pending/dropped txns
-pub const MAX_OUTPUT_BYTES_LENGTH: usize = 20 * 1024; // 20kB, Maximum allowed serverless output size
-
-pub type HttpSignerProvider = SignerMiddleware<Provider<Http>, LocalWallet>;
-
-pub struct ConfigManager {
-    pub path: String,
-}
-
-// Config struct containing the executor configuration parameters
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    pub workerd_runtime_path: String,
-    pub common_chain_id: u64,
-    pub http_rpc_url: String,
-    pub web_socket_url: String,
-    pub executors_contract_addr: H160,
-    pub jobs_contract_addr: H160,
-    pub code_contract_addr: String,
-    pub enclave_signer_file: String,
-    pub execution_buffer_time: u64,
-    pub num_selected_executors: u8,
-}
-
-// App data struct containing the necessary fields to run the executor
-#[derive(Debug, Clone)]
-pub struct AppState {
-    pub cgroups: Arc<Mutex<Cgroups>>,
-    pub job_capacity: usize,
-    pub workerd_runtime_path: String,
-    pub execution_buffer_time: u64,
-    pub common_chain_id: u64,
-    pub http_rpc_url: String,
-    pub ws_rpc_url: Arc<RwLock<String>>,
-    pub executors_contract_addr: Address,
-    pub jobs_contract_addr: Address,
-    pub code_contract_addr: String,
-    pub num_selected_executors: u8,
-    pub enclave_address: H160,
-    pub enclave_signer: SigningKey,
-    pub immutable_params_injected: Arc<Mutex<bool>>,
-    pub mutable_params_injected: Arc<Mutex<bool>>,
-    pub enclave_registered: Arc<AtomicBool>,
-    pub events_listener_active: Arc<Mutex<bool>>,
-    pub enclave_owner: Arc<Mutex<H160>>,
-    pub http_rpc_client: Arc<Mutex<Option<HttpSignerProvider>>>,
-    pub jobs_contract_abi: Abi,
-    pub job_requests_running: Arc<Mutex<HashSet<U256>>>,
-    pub last_block_seen: Arc<AtomicU64>,
-    pub nonce_to_send: Arc<Mutex<U256>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ImmutableConfig {
-    pub owner_address_hex: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MutableConfig {
-    pub gas_key_hex: String,
-    pub ws_api_key: String,
-}
-
-#[derive(Serialize)]
-pub struct ExecutorConfig {
-    pub enclave_address: H160,
-    pub enclave_public_key: String,
-    pub owner_address: H160,
-    pub gas_address: H160,
-    pub ws_rpc_url: String,
-}
-
-#[derive(Serialize)]
-pub struct RegistrationMessage {
-    pub job_capacity: usize,
-    pub sign_timestamp: u64,
-    pub env: u8,
-    pub owner: H160,
-    pub signature: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum JobsTxnType {
-    OUTPUT,
-    TIMEOUT,
-}
-
-impl JobsTxnType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            JobsTxnType::OUTPUT => "output",
-            JobsTxnType::TIMEOUT => "timeout",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct JobOutput {
-    pub output: Bytes,
-    pub error_code: u8,
-    pub total_time: u128,
-    pub sign_timestamp: U256,
-    pub signature: Bytes,
-}
-
-#[derive(Debug, Clone)]
-pub struct JobsTxnMetadata {
-    pub txn_type: JobsTxnType,
-    pub job_id: U256,
-    pub job_output: Option<JobOutput>,
-    pub gas_estimate_block: Option<u64>,
-    pub retry_deadline: Instant,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingTxnData {
-    pub txn_hash: H256,
-    pub txn_data: JobsTxnMetadata,
-    pub http_rpc_client: HttpSignerProvider,
-    pub nonce: U256,
-    pub gas_limit: U256,
-    pub gas_price: U256,
-    pub last_monitor_instant: Instant,
-}
-
-pub enum JobsTxnSendError {
-    NonceTooLow,
-    NonceTooHigh,
-    OutOfGas,
-    GasTooHigh,
-    GasPriceLow,
-    ContractExecution,
-    NetworkConnectivity,
-    OtherRetryable,
-}
+use crate::constant::HTTP_CALL_RETRY_DELAY;
+use crate::model::{HttpSignerProvider, JobsTxnMetadata, JobsTxnSendError, JobsTxnType};
 
 // Returns the 'Jobs' Contract Abi object for encoding transaction data, takes the JSON ABI from 'Jobs.json' file
 pub fn load_abi_from_file() -> Result<Abi> {
@@ -320,4 +172,92 @@ pub fn parse_send_error(error: String) -> JobsTxnSendError {
     }
 
     return JobsTxnSendError::OtherRetryable;
+}
+
+pub async fn call_secret_store_endpoint_post(
+    port: u16,
+    endpoint: &str,
+    request_json: Value,
+) -> Result<(reqwest::StatusCode, String, Option<Value>), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let req_url = "http://127.0.0.1:".to_string() + &port.to_string() + endpoint;
+
+    let response = Retry::spawn(
+        ExponentialBackoff::from_millis(5).map(jitter).take(3),
+        || async {
+            client
+                .post(req_url.clone())
+                .json(&request_json.clone())
+                .send()
+                .await
+        },
+    )
+    .await
+    .map_err(|err| {
+        eprintln!(
+            "Failed to send the request to secret store endpoint {}: {:?}",
+            endpoint, err
+        );
+        err
+    })?;
+
+    parse_response(response).await
+}
+
+pub async fn call_secret_store_endpoint_get(
+    port: u16,
+    endpoint: &str,
+) -> Result<(reqwest::StatusCode, String, Option<Value>), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let req_url = "http://127.0.0.1:".to_string() + &port.to_string() + endpoint;
+
+    let response = Retry::spawn(
+        ExponentialBackoff::from_millis(5).map(jitter).take(3),
+        || async { client.get(req_url.clone()).send().await },
+    )
+    .await
+    .map_err(|err| {
+        eprintln!(
+            "Failed to send the request to secret store endpoint {}: {:?}",
+            endpoint, err
+        );
+        err
+    })?;
+
+    parse_response(response).await
+}
+
+async fn parse_response(
+    response: reqwest::Response,
+) -> Result<(reqwest::StatusCode, String, Option<Value>), reqwest::Error> {
+    let status_code = response.status();
+
+    let mut response_body = String::new();
+    let mut response_json = None;
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if content_type.contains("application/json") {
+        response_json = Some(response.json::<Value>().await.map_err(|err| {
+            eprintln!(
+                "Failed to parse the response json from the secret store response: {:?}",
+                err
+            );
+            err
+        })?);
+    } else {
+        response_body = response.text().await.map_err(|err| {
+            eprintln!(
+                "Failed to parse the response body from the secret store response: {:?}",
+                err
+            );
+            err
+        })?;
+    }
+
+    Ok((status_code, response_body, response_json))
 }

@@ -18,9 +18,14 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use tokio_stream::Stream;
 
+use crate::constant::{
+    EXECUTION_ENV_ID, GAS_LIMIT_BUFFER, HTTP_CALL_RETRY_DELAY, RESEND_GAS_PRICE_INCREMENT_PERCENT,
+    RESEND_TXN_INTERVAL,
+};
 use crate::job_handler::handle_job;
+use crate::model::{AppState, JobsTxnMetadata, JobsTxnSendError, PendingTxnData};
 use crate::timeout_handler::handle_timeout;
-use crate::utils::*;
+use crate::utils::{estimate_gas_and_price, generate_txn, parse_send_error};
 
 // Start listening to Job requests emitted by the Jobs contract if enclave is registered else listen for Executor registered events first
 pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
@@ -42,17 +47,17 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'ExecutorRegistered' event emitted by the Executors contract
+            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_executor_filter = Filter::new()
-                .address(app_state.executors_contract_addr)
+                .address(app_state.tee_manager_contract_addr)
                 .topic0(H256::from(keccak256(
-                    "ExecutorRegistered(address,address,uint256,uint8)",
+                    "TeeNodeRegistered(address,address,uint256,uint256,uint8)",
                 )))
                 .topic1(H256::from(app_state.enclave_address))
                 .topic2(H256::from(*app_state.enclave_owner.lock().unwrap()))
                 .from_block(starting_block);
 
-            // Subscribe to the executors filter through the rpc web socket client
+            // Subscribe to the TeeManager filter through the rpc web socket client
             let mut register_stream = match web_socket_client
                 .subscribe_logs(&register_executor_filter)
                 .await
@@ -60,8 +65,8 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
                 Ok(stream) => stream,
                 Err(err) => {
                     eprintln!(
-                        "Failed to subscribe to Executors ({:?}) contract 'ExecutorRegistered' event logs: {:?}",
-                        app_state.executors_contract_addr,
+                        "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeRegistered' event logs: {:?}",
+                        app_state.tee_manager_contract_addr,
                         err,
                     );
                     continue;
@@ -91,7 +96,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         let jobs_created_filter = Filter::new()
             .address(app_state.jobs_contract_addr)
             .topic0(H256::from(keccak256(
-                "JobCreated(uint256,uint8,address,bytes32,bytes,uint256,address[])",
+                "JobCreated(uint256,uint8,address,uint256,bytes32,bytes,uint256,address[])",
             )))
             .topic2(H256::from_uint(&EXECUTION_ENV_ID.into()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
@@ -132,13 +137,13 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         };
         let jobs_responded_stream = pin!(jobs_responded_stream);
 
-        // Create filter to listen to 'ExecutorDeregistered' event emitted by the Executors contract
+        // Create filter to listen to 'TeeNodeDeregistered' event emitted by the TeeManager contract
         let executor_deregistered_filter = Filter::new()
-            .address(app_state.executors_contract_addr)
-            .topic0(H256::from(keccak256("ExecutorDeregistered(address)")))
+            .address(app_state.tee_manager_contract_addr)
+            .topic0(H256::from(keccak256("TeeNodeDeregistered(address)")))
             .topic1(H256::from(app_state.enclave_address))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
-        // Subscribe to the executors filter through the rpc web socket client
+        // Subscribe to the TeeManager filter through the rpc web socket client
         let executor_deregistered_stream = match web_socket_client
             .subscribe_logs(&executor_deregistered_filter)
             .await
@@ -146,8 +151,8 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
-                    "Failed to subscribe to Executors ({:?}) contract 'ExecutorDeregistered' event logs: {:?}",
-                    app_state.executors_contract_addr,
+                    "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeDeregistered' event logs: {:?}",
+                    app_state.tee_manager_contract_addr,
                     err
                 );
                 continue;
@@ -365,6 +370,7 @@ pub async fn handle_event_logs(
                 // Decode the event parameters using the ABI information
                 let event_tokens = decode(
                     &vec![
+                        ParamType::Uint(256),
                         ParamType::FixedBytes(32),
                         ParamType::Bytes,
                         ParamType::Uint(256),
@@ -381,35 +387,44 @@ pub async fn handle_event_logs(
                     continue;
                 };
 
-                let Some(code_hash) = event_tokens[0].clone().into_fixed_bytes() else {
+                let Some(secret_id) = event_tokens[0].clone().into_uint() else {
                     eprintln!(
-                        "Failed to decode codeHash token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode secretId token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[0]
                     );
                     continue;
                 };
-                let Some(code_inputs) = event_tokens[1].clone().into_bytes() else {
+
+                let Some(code_hash) = event_tokens[1].clone().into_fixed_bytes() else {
                     eprintln!(
-                        "Failed to decode codeInputs token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode codeHash token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[1]
                     );
                     continue;
                 };
-                let Some(user_deadline) = event_tokens[2].clone().into_uint() else {
+                let Some(code_inputs) = event_tokens[2].clone().into_bytes() else {
                     eprintln!(
-                        "Failed to decode deadline token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode codeInputs token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[2]
                     );
                     continue;
                 };
-                let Some(selected_nodes) = event_tokens[3].clone().into_array() else {
+                let Some(user_deadline) = event_tokens[3].clone().into_uint() else {
+                    eprintln!(
+                        "Failed to decode deadline token from the 'JobCreated' event data for job id {}: {:?}",
+                        job_id,
+                        event_tokens[3]
+                    );
+                    continue;
+                };
+                let Some(selected_nodes) = event_tokens[4].clone().into_array() else {
                     eprintln!(
                         "Failed to decode selectedExecutors token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
-                        event_tokens[3]
+                        event_tokens[4]
                     );
                     continue;
                 };
@@ -444,6 +459,7 @@ pub async fn handle_event_logs(
                     tokio::spawn(async move {
                         handle_job(
                             job_id,
+                            secret_id,
                             code_hash,
                             code_inputs.into(),
                             user_deadline.as_u64(),
