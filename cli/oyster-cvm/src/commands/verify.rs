@@ -40,6 +40,10 @@ pub async fn verify_enclave(
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
     info!("Enclave public key: {}", hex::encode(decoded.public_key));
+    info!("User data: {}", hex::encode(&decoded.user_data));
+    if let Ok(user_data) = String::from_utf8(decoded.user_data) {
+        info!("User data, decoded as UTF-8: {user_data}");
+    }
     info!("PCR0: {}", hex::encode(decoded.pcrs[0]));
     info!("PCR1: {}", hex::encode(decoded.pcrs[1]));
     info!("PCR2: {}", hex::encode(decoded.pcrs[2]));

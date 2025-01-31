@@ -4,6 +4,7 @@ use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::task::{ready, Poll};
 
+use hyper::StatusCode;
 use libc::{freeifaddrs, getifaddrs, ifaddrs, strncmp};
 
 use anyhow::Context;
@@ -11,6 +12,7 @@ use anyhow::Context;
 use axum::{routing::get, Router};
 use clap::{builder::TypedValueParser, error::ErrorKind, Arg, Command, Parser};
 use hyper::server::accept::Accept;
+use tokio::fs;
 use tokio_vsock::{VsockListener, VsockStream};
 
 struct VsockServer {
@@ -107,6 +109,12 @@ struct Cli {
     /// job id served by the enclave
     #[clap(short, long, value_parser)]
     job_id: String,
+    /// path to init params file
+    #[clap(short, long, value_parser)]
+    init_params_path: String,
+    /// path to extra init params file
+    #[clap(short, long, value_parser)]
+    extra_init_params_path: String,
 }
 
 #[tokio::main]
@@ -120,6 +128,30 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let app = Router::new()
         .route("/oyster/job", get(|| async { cli.job_id }))
+        .route(
+            "/oyster/init-params",
+            get(|| async {
+                fs::read(cli.init_params_path)
+                    .await
+                    .map(|data| (StatusCode::OK, data))
+                    .unwrap_or((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Vec::from(b"could not read init params"),
+                    ))
+            }),
+        )
+        .route(
+            "/oyster/extra-init-params",
+            get(|| async {
+                fs::read(cli.extra_init_params_path)
+                    .await
+                    .map(|data| (StatusCode::OK, data))
+                    .unwrap_or((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Vec::from(b"could not read extra init params"),
+                    ))
+            }),
+        )
         .route("/instance/ip", get(|| async { ip }));
 
     axum::Server::builder(VsockServer {

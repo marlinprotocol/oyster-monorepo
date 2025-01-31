@@ -19,8 +19,9 @@ pub const AWS_ROOT_KEY: [u8; 96] = hex_literal::hex!("fc0254eba608c1f36870e29ada
 pub struct AttestationDecoded {
     pub timestamp: usize,
     pub pcrs: [[u8; 48]; 3],
-    pub root_public_key: Vec<u8>,
-    pub public_key: Vec<u8>,
+    pub root_public_key: Box<[u8]>,
+    pub public_key: Box<[u8]>,
+    pub user_data: Box<[u8]>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -36,23 +37,26 @@ pub enum AttestationError {
 }
 
 #[derive(Debug, Default)]
-pub struct AttestationExpectations {
+pub struct AttestationExpectations<'a> {
     pub timestamp: Option<usize>,
     // (max age, current timestamp)
     pub age: Option<(usize, usize)>,
     pub pcrs: Option<[[u8; 48]; 3]>,
-    pub root_public_key: Option<Vec<u8>>,
+    pub public_key: Option<&'a [u8]>,
+    pub user_data: Option<&'a [u8]>,
+    pub root_public_key: Option<&'a [u8]>,
 }
 
 pub fn verify(
-    attestation_doc: Vec<u8>,
+    attestation_doc: &[u8],
     expectations: AttestationExpectations,
 ) -> Result<AttestationDecoded, AttestationError> {
     let mut result = AttestationDecoded {
         pcrs: [[0; 48]; 3],
         timestamp: 0,
-        root_public_key: Vec::new(),
-        public_key: Vec::new(),
+        root_public_key: Default::default(),
+        public_key: Default::default(),
+        user_data: Default::default(),
     };
 
     // parse attestation doc
@@ -90,7 +94,7 @@ pub fn verify(
 
     // check root public key if exists
     if let Some(root_public_key) = expectations.root_public_key {
-        if result.root_public_key != root_public_key {
+        if result.root_public_key.as_ref() != root_public_key {
             return Err(AttestationError::VerifyFailed(
                 "root public key mismatch".into(),
             ));
@@ -99,6 +103,25 @@ pub fn verify(
 
     // return the enclave key
     result.public_key = parse_enclave_key(&mut attestation_doc)?;
+
+    // check enclave public key if exists
+    if let Some(public_key) = expectations.public_key {
+        if result.public_key.as_ref() != public_key {
+            return Err(AttestationError::VerifyFailed(
+                "enclave public key mismatch".into(),
+            ));
+        }
+    }
+
+    // return the user data
+    result.user_data = parse_user_data(&mut attestation_doc)?;
+
+    // check user data if exists
+    if let Some(user_data) = expectations.user_data {
+        if result.user_data.as_ref() != user_data {
+            return Err(AttestationError::VerifyFailed("user data mismatch".into()));
+        }
+    }
 
     Ok(result)
 }
@@ -172,7 +195,7 @@ fn parse_pcrs(
 fn verify_root_of_trust(
     attestation_doc: &mut BTreeMap<Value, Value>,
     cosesign1: &CoseSign1,
-) -> Result<Vec<u8>, AttestationError> {
+) -> Result<Box<[u8]>, AttestationError> {
     // verify attestation doc signature
     let enclave_certificate = attestation_doc
         .remove(&"certificate".to_owned().into())
@@ -212,12 +235,12 @@ fn verify_root_of_trust(
     })?;
     cabundle.reverse();
 
-    let root_public_key = verify_cert_chain(enclave_certificate, cabundle)?;
+    let root_public_key = verify_cert_chain(enclave_certificate, &cabundle)?;
 
     Ok(root_public_key)
 }
 
-fn verify_cert_chain(cert: X509, cabundle: Vec<Value>) -> Result<Vec<u8>, AttestationError> {
+fn verify_cert_chain(cert: X509, cabundle: &[Value]) -> Result<Box<[u8]>, AttestationError> {
     let certs = get_all_certs(cert, cabundle)?;
 
     for i in 0..(certs.len() - 1) {
@@ -266,10 +289,10 @@ fn verify_cert_chain(cert: X509, cabundle: Vec<Value>) -> Result<Vec<u8>, Attest
         )
         .map_err(|e| AttestationError::ParseFailed(format!("sec1: {e}")))?;
 
-    Ok(root_public_key_sec1[1..].to_vec())
+    Ok(root_public_key_sec1[1..].to_vec().into_boxed_slice())
 }
 
-fn get_all_certs(cert: X509, cabundle: Vec<Value>) -> Result<Vec<X509>, AttestationError> {
+fn get_all_certs(cert: X509, cabundle: &[Value]) -> Result<Box<[X509]>, AttestationError> {
     let mut all_certs = vec![cert];
     for cert in cabundle {
         let cert = (match cert {
@@ -280,12 +303,12 @@ fn get_all_certs(cert: X509, cabundle: Vec<Value>) -> Result<Vec<X509>, Attestat
             .map_err(|e| AttestationError::ParseFailed(format!("der: {e}")))?;
         all_certs.push(cert);
     }
-    Ok(all_certs)
+    Ok(all_certs.into_boxed_slice())
 }
 
 fn parse_enclave_key(
     attestation_doc: &mut BTreeMap<Value, Value>,
-) -> Result<Vec<u8>, AttestationError> {
+) -> Result<Box<[u8]>, AttestationError> {
     let public_key = attestation_doc
         .remove(&"public_key".to_owned().into())
         .ok_or(AttestationError::ParseFailed(
@@ -298,13 +321,31 @@ fn parse_enclave_key(
         )),
     })?;
 
-    Ok(public_key)
+    Ok(public_key.into_boxed_slice())
 }
 
-pub async fn get(endpoint: Uri) -> Result<Vec<u8>, AttestationError> {
+fn parse_user_data(
+    attestation_doc: &mut BTreeMap<Value, Value>,
+) -> Result<Box<[u8]>, AttestationError> {
+    let user_data = attestation_doc
+        .remove(&"user_data".to_owned().into())
+        .ok_or(AttestationError::ParseFailed(
+            "user data not found in attestation doc".to_owned(),
+        ))?;
+    let user_data = (match user_data {
+        Value::Bytes(b) => Ok(b),
+        _ => Err(AttestationError::ParseFailed(
+            "user data decode failure".to_owned(),
+        )),
+    })?;
+
+    Ok(user_data.into_boxed_slice())
+}
+
+pub async fn get(endpoint: Uri) -> Result<Box<[u8]>, AttestationError> {
     let client = Client::builder(TokioExecutor::new()).build_http::<Full<Bytes>>();
     let res = client.get(endpoint).await?;
     let body = res.collect().await?.to_bytes();
 
-    Ok(body.to_vec())
+    Ok(body.to_vec().into_boxed_slice())
 }

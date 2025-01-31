@@ -1,47 +1,46 @@
 // Axum based example for the scallop transport
-// Sadly, the only real axum usage here is for the router
-// We end up having to repeat the connection loop in order to wrap the underlying stream
 
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
 
+use axum::extract::ConnectInfo;
 use axum::{routing::get, Router};
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use http_body_util::Empty;
 use hyper::body::Bytes;
-use hyper::body::Incoming;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 use libsodium_sys::{
     crypto_sign_ed25519_pk_to_curve25519, crypto_sign_ed25519_sk_to_curve25519, crypto_sign_keypair,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
-use tower::Service;
 
+pub use oyster::axum::*;
 pub use oyster::scallop::*;
 
-#[derive(Default)]
+type Pcrs = [[u8; 48]; 3];
+
+#[derive(Default, Clone)]
 struct AuthStore {
     store: HashMap<Key, Pcrs>,
 }
 
 impl ScallopAuthStore for AuthStore {
-    fn contains(&self, key: &Key) -> bool {
-        self.store.contains_key(key)
+    type State = Pcrs;
+
+    fn contains(&mut self, key: &Key) -> ContainsResponse<Pcrs> {
+        if let Some(pcrs) = self.store.get(key) {
+            ContainsResponse::Approved(pcrs.to_owned())
+        } else {
+            ContainsResponse::NotFound
+        }
     }
 
-    fn get(&self, key: &Key) -> Option<&Pcrs> {
-        self.store.get(key)
-    }
-
-    fn set(&mut self, key: Key, pcrs: Pcrs) {
-        self.store.insert(key, pcrs);
-    }
-
-    fn verify(&mut self, attestation: &[u8], _key: &Key) -> Option<Pcrs> {
+    fn verify(&mut self, attestation: &[u8], key: Key) -> Option<Pcrs> {
         if attestation == b"good auth" {
+            self.store.insert(key, [[1u8; 48], [2u8; 48], [3u8; 48]]);
             Some([[1u8; 48], [2u8; 48], [3u8; 48]])
         } else {
             None
@@ -49,6 +48,7 @@ impl ScallopAuthStore for AuthStore {
     }
 }
 
+#[derive(Clone)]
 struct Auther {}
 
 impl ScallopAuther for Auther {
@@ -58,46 +58,37 @@ impl ScallopAuther for Auther {
     }
 }
 
+async fn hello(ConnectInfo(info): ConnectInfo<ScallopState<Pcrs>>) -> &'static str {
+    println!("Pcrs: {:?}", info.0);
+    "Hello World!"
+}
+
+async fn welcome() -> &'static str {
+    "Welcome!"
+}
+
 async fn server_task(key: Key) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let auth_store = AuthStore::default();
+    let auther = Auther {};
+
     let app = Router::new()
-        .route("/hello", get(|| async { "Hello World!" }))
-        .route("/welcome", get(|| async { "Welcome!" }));
+        .route("/hello", get(hello))
+        .route("/welcome", get(welcome));
 
-    let server = TcpListener::bind("127.0.0.1:21000").await?;
+    let tcp_listener = TcpListener::bind("127.0.0.1:21000").await?;
 
-    let mut auth_store = AuthStore::default();
-    let mut auther = Auther {};
+    let server = ScallopListener {
+        listener: tcp_listener,
+        secret: key,
+        auth_store,
+        auther,
+    };
 
-    loop {
-        let (stream, _) = server.accept().await?;
-
-        let stream = new_server_async_Noise_IX_25519_ChaChaPoly_BLAKE2b(
-            stream,
-            &key,
-            Some(&mut auth_store),
-            Some(&mut auther),
-        )
-        .await?;
-
-        let app = app.clone();
-
-        println!("Client key: {:?}", stream.get_remote_static());
-
-        tokio::spawn(async move {
-            let stream = TokioIo::new(stream);
-
-            let app = hyper::service::service_fn(move |request: Request<Incoming>| {
-                app.clone().call(request)
-            });
-
-            if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                .serve_connection(stream, app)
-                .await
-            {
-                eprintln!("failed to serve connection: {err:#}");
-            }
-        });
-    }
+    Ok(axum::serve(
+        server,
+        app.into_make_service_with_connect_info::<ScallopState<Pcrs>>(),
+    )
+    .await?)
 }
 
 async fn client_task(key: Key) -> Result<(), Box<dyn Error + Send + Sync>> {

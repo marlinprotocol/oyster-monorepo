@@ -77,7 +77,7 @@ pub async fn create_code_file(
     }?;
 
     // Check if the contract address matches the expected user code contract
-    if contract_address != contract {
+    if !contract_address.eq_ignore_ascii_case(contract) {
         return Err(ServerlessError::InvalidTxToValue(
             contract_address,
             contract.to_owned(),

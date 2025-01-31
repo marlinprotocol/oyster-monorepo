@@ -218,6 +218,9 @@ contract Gateways is
     /// @param removedAmount The amount of stake removed.
     event GatewayStakeRemoved(address indexed enclaveAddress, uint256 removedAmount);
 
+    /// @notice Thrown when a global chain already exists.
+    /// @param chainId The ID of the chain.
+    error GatewaysGlobalChainAlreadyExists(uint256 chainId);
     /// @notice Thrown when an invalid signer is detected.
     error GatewaysInvalidSigner();
     /// @notice Thrown when a gateway already exists for the given enclave address, during registration.
@@ -256,6 +259,8 @@ contract Gateways is
         for (uint256 index = 0; index < _requestChains.length; index++) {
             RequestChain memory reqChain = _requestChains[index];
             uint256 chainId = _chainIds[index];
+            if(requestChains[chainId].relayAddress != address(0))
+                revert GatewaysGlobalChainAlreadyExists(chainId);
             requestChains[chainId] = reqChain;
 
             emit ChainAddedGlobal(

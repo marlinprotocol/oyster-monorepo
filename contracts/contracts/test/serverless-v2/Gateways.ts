@@ -462,6 +462,27 @@ describe("Gateways - Global chains", function () {
             .to.be.revertedWithCustomError(gateways, "GatewaysInvalidLength");
     });
 
+    it("cannot add already existing global chain again", async function () {
+        let chainIds = [1, 1];
+        let reqChains = [
+            {
+                relayAddress: addrs[1],
+                relaySubscriptionsAddress: addrs[2],
+                httpRpcUrl: "https://eth.rpc",
+                wsRpcUrl: "wss://eth.rpc"
+            },
+            {
+                relayAddress: addrs[3],
+                relaySubscriptionsAddress: addrs[4],
+                httpRpcUrl: "https://eth.rpc",
+                wsRpcUrl: "wss://eth.rpc"
+            }
+        ]
+        await expect(gateways.addChainGlobal(chainIds, reqChains))
+            .to.be.revertedWithCustomError(gateways, "GatewaysGlobalChainAlreadyExists")
+            .withArgs(1);
+    });
+
     it("can remove global chain", async function () {
         let chainIds = [1];
         await gateways.removeChainGlobal(chainIds);
@@ -791,7 +812,7 @@ describe("Gateways - Draining gateway", function () {
         expect((await gateways.gateways(addrs[15])).draining).to.be.eq(false);
     });
 
-    it('cannot drain without gateway owner', async function () {
+    it('cannot revive without gateway owner', async function () {
         await expect(gateways.connect(signers[0]).reviveGateway(addrs[15]))
             .to.be.revertedWithCustomError(gateways, "GatewaysNotGatewayOwner");
     });

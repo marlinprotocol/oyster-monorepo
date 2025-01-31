@@ -25,6 +25,8 @@ pub struct SpinUpOutcome {
     pub bandwidth: u64,
     pub image_url: String,
     pub debug: bool,
+    pub init_params: Box<[u8]>,
+    pub extra_init_params: Box<[u8]>,
     pub contract_address: String,
     pub chain_id: String,
     pub instance_id: String,
@@ -123,6 +125,8 @@ impl InfraProvider for TestAws {
         bandwidth: u64,
         image_url: &str,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> Result<()> {
         let res = self.instances.get_key_value(&job.id);
         if let Some(x) = res {
@@ -137,6 +141,8 @@ impl InfraProvider for TestAws {
                 bandwidth,
                 image_url: image_url.to_owned(),
                 debug,
+                init_params: init_params.into(),
+                extra_init_params: extra_init_params.into(),
                 contract_address: job.contract.clone(),
                 chain_id: job.chain.clone(),
                 instance_id: x.1.instance_id.clone(),
@@ -162,6 +168,8 @@ impl InfraProvider for TestAws {
             bandwidth,
             image_url: image_url.to_owned(),
             debug,
+            init_params: init_params.into(),
+            extra_init_params: extra_init_params.into(),
             contract_address: job.contract.clone(),
             chain_id: job.chain.clone(),
             instance_id: instance_metadata.instance_id.clone(),

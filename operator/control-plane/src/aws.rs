@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::str::FromStr;
@@ -262,6 +262,8 @@ impl Aws {
         req_mem: i64,
         bandwidth: u64,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> Result<()> {
         if family != "salmon" && family != "tuna" {
             return Err(anyhow!("unsupported image family"));
@@ -290,7 +292,7 @@ impl Aws {
             // set up iptables rules
             Self::run_fragment_iptables_tuna(sess)?;
             // set up job id in the init server
-            Self::run_fragment_init_server(sess, job_id)?;
+            Self::run_fragment_init_server(sess, job_id, init_params, extra_init_params)?;
         } else {
             // set up iptables rules
             Self::run_fragment_iptables_salmon(sess)?;
@@ -560,7 +562,13 @@ impl Aws {
     // Goal: set up init server params
     // assumes the .conf has not been modified externally
     // cheap, so just always does `sed`
-    fn run_fragment_init_server(sess: &Session, job_id: &str) -> Result<()> {
+    fn run_fragment_init_server(
+        sess: &Session,
+        job_id: &str,
+        init_params: &[u8],
+        extra_init_params: &[u8],
+    ) -> Result<()> {
+        // set job id
         let (_, stderr) = Self::ssh_exec(
             sess,
             &format!(
@@ -572,6 +580,50 @@ impl Aws {
         if !stderr.is_empty() {
             return Err(anyhow!(stderr)).context("Failed to set job id for init server");
         }
+
+        // set init params
+        let mut init_params_file = sess
+            .scp_send(
+                Path::new("/home/ubuntu/init-params"),
+                0o644,
+                init_params.len() as u64,
+                None,
+            )
+            .context("failed to scp init params")?;
+        init_params_file
+            .write_all(init_params)
+            .context("failed to write init params")?;
+        init_params_file.send_eof().context("failed to send eof")?;
+        init_params_file
+            .wait_eof()
+            .context("failed to wait for eof")?;
+        init_params_file.close().context("failed to close")?;
+        init_params_file
+            .wait_close()
+            .context("failed to wait for close")?;
+
+        // set extra init params
+        let mut extra_init_params_file = sess
+            .scp_send(
+                Path::new("/home/ubuntu/extra-init-params"),
+                0o644,
+                extra_init_params.len() as u64,
+                None,
+            )
+            .context("failed to scp extra init params")?;
+        extra_init_params_file
+            .write_all(extra_init_params)
+            .context("failed to write extra init params")?;
+        extra_init_params_file
+            .send_eof()
+            .context("failed to send eof")?;
+        extra_init_params_file
+            .wait_eof()
+            .context("failed to wait for eof")?;
+        extra_init_params_file.close().context("failed to close")?;
+        extra_init_params_file
+            .wait_close()
+            .context("failed to wait for close")?;
 
         let (_, stderr) = Self::ssh_exec(sess, "sudo supervisorctl update")
             .context("Failed to update init server")?;
@@ -1266,6 +1318,8 @@ EOF
         bandwidth: u64,
         image_url: &str,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> Result<()> {
         let (mut exist, mut instance, state) = self
             .get_job_instance_id(job, region)
@@ -1302,7 +1356,17 @@ EOF
         }
 
         self.run_enclave_impl(
-            &job.id, family, &instance, region, image_url, req_vcpu, req_mem, bandwidth, debug,
+            &job.id,
+            family,
+            &instance,
+            region,
+            image_url,
+            req_vcpu,
+            req_mem,
+            bandwidth,
+            debug,
+            init_params,
+            extra_init_params,
         )
         .await
         .context("failed to run enclave")
@@ -1459,6 +1523,8 @@ impl InfraProvider for Aws {
         bandwidth: u64,
         image_url: &str,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> Result<()> {
         self.spin_up_impl(
             job,
@@ -1470,6 +1536,8 @@ impl InfraProvider for Aws {
             bandwidth,
             image_url,
             debug,
+            init_params,
+            extra_init_params,
         )
         .await
         .context("could not spin up enclave")

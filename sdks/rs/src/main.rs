@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as usize;
     let decoded = verify(
-        attestation_doc,
+        &attestation_doc,
         AttestationExpectations {
             age: Some((cli.max_age, now)),
             ..Default::default()

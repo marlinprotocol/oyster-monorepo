@@ -8,6 +8,8 @@ use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
 use alloy::transports::ws::WsConnect;
 use anyhow::{Context, Result};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::time::sleep;
@@ -59,6 +61,8 @@ pub trait InfraProvider {
         bandwidth: u64,
         image_url: &str,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn spin_down(&mut self, job: &JobId, region: &str) -> impl Future<Output = Result<()>> + Send;
@@ -87,6 +91,8 @@ where
         bandwidth: u64,
         image_url: &str,
         debug: bool,
+        init_params: &[u8],
+        extra_init_params: &[u8],
     ) -> Result<()> {
         (**self)
             .spin_up(
@@ -99,6 +105,8 @@ where
                 bandwidth,
                 image_url,
                 debug,
+                init_params,
+                extra_init_params,
             )
             .await
     }
@@ -464,6 +472,8 @@ struct JobState<'a> {
     req_vcpus: i32,
     req_mem: i64,
     debug: bool,
+    init_params: Box<[u8]>,
+    extra_init_params: Box<[u8]>,
 
     // whether instance should exist or not
     infra_state: bool,
@@ -501,6 +511,8 @@ impl<'a> JobState<'a> {
             req_vcpus: 2,
             req_mem: 4096,
             debug: false,
+            init_params: Box::new([0; 0]),
+            extra_init_params: Box::new([0; 0]),
             infra_state: false,
             infra_change_time: Instant::now(),
             infra_change_scheduled: false,
@@ -592,6 +604,8 @@ impl<'a> JobState<'a> {
                     self.bandwidth,
                     &self.eif_url,
                     self.debug,
+                    &self.init_params,
+                    &self.extra_init_params,
                 )
                 .await;
             if let Err(err) = res {
@@ -734,6 +748,21 @@ impl<'a> JobState<'a> {
 
             // we leave the default debug mode unchanged if not found for backward compatibility
             v["debug"].as_bool().inspect(|f| self.debug = *f);
+
+            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
+            else {
+                error!("failed to decode init params");
+                return JobResult::Failed;
+            };
+            self.init_params = init_params.into_boxed_slice();
+
+            let Ok(extra_init_params) =
+                BASE64_STANDARD.decode(v["extra_init_params"].as_str().unwrap_or(""))
+            else {
+                error!("failed to decode extra init params");
+                return JobResult::Failed;
+            };
+            self.extra_init_params = extra_init_params.into_boxed_slice();
 
             // blacklist whitelist check
             let allowed =
@@ -1017,6 +1046,27 @@ impl<'a> JobState<'a> {
             };
 
             self.eif_url = url.to_string();
+
+            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
+            else {
+                error!("failed to decode init params");
+                return JobResult::Failed;
+            };
+            if self.init_params != init_params.into_boxed_slice() {
+                error!("Init params change not allowed");
+                return JobResult::Failed;
+            }
+
+            let Ok(extra_init_params) =
+                BASE64_STANDARD.decode(v["extra_init_params"].as_str().unwrap_or(""))
+            else {
+                error!("failed to decode extra init params");
+                return JobResult::Failed;
+            };
+            if self.extra_init_params != extra_init_params.into_boxed_slice() {
+                error!("Extra init params change not allowed");
+                return JobResult::Failed;
+            }
 
             // schedule change immediately if not already scheduled
             if !self.infra_change_scheduled {
@@ -1328,6 +1378,61 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(301),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_init_params() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open, ("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"init_params\":\"c29tZSBwYXJhbXM=\",\"extra_init_params\":\"c29tZSBleHRyYSBwYXJhbXM=\"}".to_string(),31000000000000u64,31000u64,0).abi_encode_sequence()),
+            (301, Action::Close, [].into()),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: b"some params".to_vec().into_boxed_slice(),
+                    extra_init_params: b"some extra params".to_vec().into_boxed_slice(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1379,6 +1484,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: true,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1430,6 +1537,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1484,6 +1593,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1539,6 +1650,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1831,6 +1944,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1885,6 +2000,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -1939,6 +2056,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2067,6 +2186,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2317,6 +2438,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/updated-enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2369,6 +2492,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2393,6 +2518,42 @@ mod tests {
             (0, Action::Open, ("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0).abi_encode_sequence()),
             // instance type has also been updated in the metadata. should fail this job.
             (100, Action::MetadataUpdated, "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.large\",\"memory\":4096,\"vcpu\":2}".to_string().abi_encode()),
+            (505, Action::Close, [].into()),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(100),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_init_params_update_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open, ("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0).abi_encode_sequence()),
+            // instance type has also been updated in the metadata. should fail this job.
+            (100, Action::MetadataUpdated, "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"init_params\":\"some params\"}".to_string().abi_encode()),
             (505, Action::Close, [].into()),
         ];
 
@@ -2457,6 +2618,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2509,6 +2672,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2524,6 +2689,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/updated-enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2576,6 +2743,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: true,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2591,6 +2760,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2613,7 +2784,7 @@ mod tests {
 
         let logs = vec![
             (0, Action::Open, ("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0).abi_encode_sequence()),
-            // instance type has also been updated in the metadata. should fail this job.
+            // init params have also been updated in the metadata. should fail this job.
             (400, Action::MetadataUpdated, "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.large\",\"memory\":4096,\"vcpu\":2}".to_string().abi_encode()),
             (505, Action::Close, [].into()),
         ];
@@ -2644,6 +2815,63 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_init_params_update_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open, ("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0).abi_encode_sequence()),
+            // init params have also been updated in the metadata. should fail this job.
+            (400, Action::MetadataUpdated, "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"init_params\":\"some params\"}".to_string().abi_encode()),
+            (505, Action::Close, [].into()),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2696,6 +2924,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),
@@ -2711,6 +2941,8 @@ mod tests {
                     bandwidth: 76,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
+                    init_params: [].into(),
+                    extra_init_params: [].into(),
                     contract_address: "xyz".into(),
                     chain_id: "123".into(),
                     instance_id: compute_instance_id(0),

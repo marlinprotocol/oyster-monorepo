@@ -31,13 +31,15 @@ Supported outputs:
 
 ```bash
 $ ./target/release/oyster-init-server --help
-Usage: oyster-init-server --vsock-addr <VSOCK_ADDR> --job-id <JOB_ID>
+Usage: oyster-init-server --vsock-addr <VSOCK_ADDR> --job-id <JOB_ID> --init-params-path <INIT_PARAMS_PATH> --extra-init-params-path <EXTRA_INIT_PARAMS_PATH>
 
 Options:
-  -v, --vsock-addr <VSOCK_ADDR>  vsock address to listen on <cid:port>
-  -j, --job-id <JOB_ID>          job id served by the enclave
-  -h, --help                     Print help
-  -V, --version                  Print version
+  -v, --vsock-addr <VSOCK_ADDR>                          vsock address to listen on <cid:port>
+  -j, --job-id <JOB_ID>                                  job id served by the enclave
+  -i, --init-params-path <INIT_PARAMS_PATH>              path to init params file
+  -e, --extra-init-params-path <EXTRA_INIT_PARAMS_PATH>  path to extra init params file
+  -h, --help                                             Print help
+  -V, --version                                          Print version
 ```
 
 ## Endpoints
@@ -70,6 +72,34 @@ $ vet --url vsock://3:1500/oyster/job
 ```
 $ vet --url vsock://3:1500/instance/ip
 192.168.0.1
+```
+
+### Init params
+
+##### Endpoint
+
+```
+/oyster/init-params
+```
+
+##### Example
+
+```
+$ vet --url vsock://3:1500/oyster/init-params
+some params
+```
+
+##### Endpoint
+
+```
+/oyster/extra-init-params
+```
+
+##### Example
+
+```
+$ vet --url vsock://3:1500/oyster/extra-init-params
+some extra params
 ```
 
 ## License

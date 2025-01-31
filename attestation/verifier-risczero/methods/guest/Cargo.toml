@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 p384 = { version = "0.13.0", features = ["ecdsa-core"] }
-risc0-zkvm = { version = "1.1.2", default-features = false, features = ['std'] }
+risc0-zkvm = { version = "1.2.1", default-features = false, features = ['std'] }
 sha2 = "0.10.8"
 x509-cert = "0.2.5"
 

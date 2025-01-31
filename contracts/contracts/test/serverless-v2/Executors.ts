@@ -74,7 +74,7 @@ describe("Executors - Init", function () {
 
     it("deploys with initialization disabled", async function () {
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors = await Executors.deploy(
             attestationVerifier.target,
             600,
@@ -100,7 +100,7 @@ describe("Executors - Init", function () {
     });
 
     it("deploys as proxy and initializes", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image1]],
@@ -132,7 +132,7 @@ describe("Executors - Init", function () {
     });
 
     it("cannot initialize with zero address as admin", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         await expect(
             upgrades.deployProxy(
                 Executors,
@@ -154,7 +154,7 @@ describe("Executors - Init", function () {
     });
 
     it("cannot initialize with zero address as staking token", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         await expect(
             upgrades.deployProxy(
                 Executors,
@@ -176,7 +176,7 @@ describe("Executors - Init", function () {
     });
 
     it("cannot initialize with zero minimum stakes", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         await expect(
             upgrades.deployProxy(
                 Executors,
@@ -198,7 +198,7 @@ describe("Executors - Init", function () {
     });
 
     it("upgrades", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image1, image2, image3]],
@@ -263,7 +263,7 @@ describe("Executors - Init", function () {
     });
 
     it("does not upgrade without admin", async function () {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image1, image2, image3]],
@@ -300,7 +300,7 @@ describe("Executors - Init", function () {
 testERC165(
     "Executors - ERC165",
     async function (_signers: Signer[], addrs: string[]) {
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image1]],
@@ -357,7 +357,7 @@ describe("Executors - TreeMap functions", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3, image4, image5, image6]],
@@ -514,7 +514,7 @@ describe("Executors - Verify", function () {
 
         token = addrs[1];
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3]],
@@ -589,7 +589,7 @@ describe("Executors - Register executor", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3]],
@@ -945,7 +945,7 @@ describe("Executors - Staking", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3]],
@@ -1104,7 +1104,7 @@ describe("Executors - Revive", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3]],
@@ -1255,7 +1255,7 @@ describe("Executors - Select/Release/Slash", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3]],

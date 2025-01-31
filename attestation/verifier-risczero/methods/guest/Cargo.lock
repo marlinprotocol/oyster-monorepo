@@ -274,9 +274,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.18.0"
+version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94bbb0ad554ad961ddc5da507a12a29b14e4ae5bda06b19f575a3e6079d2e2ae"
+checksum = "ef657dfab802224e671f5818e9a4935f9b1957ed18e58292690cc39e7a4092a3"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -874,9 +874,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-binfmt"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "543230f7117ce0e6b92b4797fbb3da722575973258cc38a48e28af8d3cf3a26d"
+checksum = "fac7b3a4d7f6e86b2be2daf0ec53b9b8740895ff8279011cee24e4bae72cd77e"
 dependencies = [
  "anyhow",
  "borsh",
@@ -888,10 +888,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "risc0-circuit-recursion"
-version = "1.1.2"
+name = "risc0-circuit-keccak"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "436c762db677faf2cd616c55a69012d6b4f46c426b7d553c1b3d717e0c7e9438"
+checksum = "25beb2e593a72e4baa3ed9a18a2ee4148f629bfa9dcdac5cbe84faa12d2590d1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "paste",
+ "risc0-binfmt",
+ "risc0-circuit-recursion",
+ "risc0-core",
+ "risc0-zkp",
+ "tracing",
+]
+
+[[package]]
+name = "risc0-circuit-recursion"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e02357d6333355b2f9f3903149757fec59c59ef7cefd7494738446f33148cd00"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -904,9 +920,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-circuit-rv32im"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21f81638d4349eb5a816f3fd6ea12b314007572fc63d45cdb83891bed64e2a2a"
+checksum = "d062e3ee0a8a788cfeff90777e95792d58520fb71b40c28a04000277a3f0054d"
 dependencies = [
  "anyhow",
  "metal",
@@ -920,9 +936,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-core"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1714b8968a5e4583a15018dc2ae95878c76f4cdbc643268a34670fde5b08252a"
+checksum = "da950fcd306644dc5c2c0a09ad288901450eb5f41c42f4f2120be2949f63cd2e"
 dependencies = [
  "bytemuck",
  "rand_core",
@@ -930,9 +946,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-groth16"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5f11beecdcabeac264fb868e0b5db22c7e2db5fa2ce68fd482d8ab9ffb88e5d"
+checksum = "414481d8f3f8c666a7f45b03dd9c5e32cc6dadb2abd0f55b9460386f731eeb4a"
 dependencies = [
  "anyhow",
  "ark-bn254",
@@ -946,13 +962,14 @@ dependencies = [
  "risc0-binfmt",
  "risc0-zkp",
  "serde",
+ "stability",
 ]
 
 [[package]]
 name = "risc0-zkp"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "285aa3993827b4a646d70e68240e138f71574680a02d2e97ad30b1db80efda80"
+checksum = "ddf3776370f26ea04e50f7e6f9d2468807aa1049063ca1b9000e1974d092ddc5"
 dependencies = [
  "anyhow",
  "blake2",
@@ -974,9 +991,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkvm"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "614fad8046130321e3be9ca3a36d9edad6ff4c538549ae191ec4d82576bb3893"
+checksum = "6700c4875b90726b7bf9e981fccbde4ea11b3593d3b2ac6fa09c96f6de166152"
 dependencies = [
  "anyhow",
  "borsh",
@@ -984,6 +1001,7 @@ dependencies = [
  "getrandom",
  "hex",
  "risc0-binfmt",
+ "risc0-circuit-keccak",
  "risc0-circuit-recursion",
  "risc0-circuit-rv32im",
  "risc0-core",
@@ -1000,11 +1018,12 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkvm-platform"
-version = "1.1.2"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6acf0b0d7a55578f892e0460ed1f2ca06d0380e32440531d80ca82530d41272"
+checksum = "a6b5ac61f6d36b02655a415a8a2afd021aa260402d45deff5524c80dbc521f29"
 dependencies = [
  "bytemuck",
+ "cfg-if",
  "getrandom",
  "libm",
  "stability",

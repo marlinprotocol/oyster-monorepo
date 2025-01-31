@@ -72,7 +72,7 @@ describe("Jobs - Init", function () {
 
     it("deploys with initialization disabled", async function () {
 
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         const jobs = await Jobs.deploy(
             staking_token,
             usdc_token,
@@ -90,7 +90,7 @@ describe("Jobs - Init", function () {
     });
 
     it("deploys as proxy and initializes", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         const jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -114,7 +114,7 @@ describe("Jobs - Init", function () {
     });
 
     it("cannot initialize with zero address as admin", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         await expect(
             upgrades.deployProxy(
                 Jobs,
@@ -138,7 +138,7 @@ describe("Jobs - Init", function () {
     });
 
     it("cannot initialize with zero address as staking token", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         await expect(
             upgrades.deployProxy(
                 Jobs,
@@ -162,7 +162,7 @@ describe("Jobs - Init", function () {
     });
 
     it("cannot initialize with zero address as usdc token", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         await expect(
             upgrades.deployProxy(
                 Jobs,
@@ -186,7 +186,7 @@ describe("Jobs - Init", function () {
     });
 
     it("upgrades", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         const jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -207,7 +207,7 @@ describe("Jobs - Init", function () {
         );
 
         // Deploy new executor contract
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         const executors2 = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image1]],
@@ -254,7 +254,7 @@ describe("Jobs - Init", function () {
     });
 
     it("does not upgrade without admin", async function () {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         const jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -296,7 +296,7 @@ describe("Jobs - Init", function () {
 testERC165(
     "Jobs - ERC165",
     async function (_signers: Signer[], addrs: string[]) {
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         const jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -356,7 +356,7 @@ describe("Jobs - Global Execution Env", function () {
             kind: "uups",
         }) as unknown as Pond;
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], [image2, image3, image4, image5, image6]],
@@ -380,7 +380,7 @@ describe("Jobs - Global Execution Env", function () {
             noOfNodesToSelect = 3,
             stakingPaymentPoolAddress = addrs[3],
             usdcPaymentPoolAddress = addrs[4];
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -585,7 +585,7 @@ describe("Jobs - Create", function () {
         ) as unknown as AttestationVerifier;
 
         let executor_images = [image4, image5, image6, image7];
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], executor_images],
@@ -603,7 +603,7 @@ describe("Jobs - Create", function () {
             },
         ) as unknown as Executors;
 
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -771,7 +771,7 @@ describe("Jobs - Output", function () {
             { kind: "uups" },
         ) as unknown as AttestationVerifier;
         let executor_images = [image4, image5, image6, image7];
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], executor_images],
@@ -790,7 +790,7 @@ describe("Jobs - Output", function () {
         ) as unknown as Executors;
 
 
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],
@@ -1257,7 +1257,7 @@ describe("Jobs - Slashing", function () {
 
         let executor_images = [image4, image5, image6, image7];
 
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], executor_images],
@@ -1275,7 +1275,7 @@ describe("Jobs - Slashing", function () {
             },
         ) as unknown as Executors;
 
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],

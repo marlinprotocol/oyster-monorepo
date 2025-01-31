@@ -50,7 +50,7 @@ pub mod serverless_executor_test {
     const CODE_CONTRACT_ADDR: &str = "0x44fe06d2940b8782a0a9a9ffd09c65852c0156b1";
 
     // Generate test app state
-    async fn generate_app_state() -> AppState {
+    async fn generate_app_state(code_contract_uppercase: bool) -> AppState {
         let signer = SigningKey::random(&mut OsRng);
         let signer_verifier_address = public_key_to_address(signer.verifying_key());
 
@@ -64,7 +64,11 @@ pub mod serverless_executor_test {
             ws_rpc_url: Arc::new(RwLock::new(WS_URL.to_owned())),
             executors_contract_addr: EXECUTORS_CONTRACT_ADDR.parse::<Address>().unwrap(),
             jobs_contract_addr: JOBS_CONTRACT_ADDR.parse::<Address>().unwrap(),
-            code_contract_addr: CODE_CONTRACT_ADDR.to_owned(),
+            code_contract_addr: if code_contract_uppercase {
+                CODE_CONTRACT_ADDR.to_uppercase()
+            } else {
+                CODE_CONTRACT_ADDR.to_owned()
+            },
             num_selected_executors: 1,
             enclave_address: signer_verifier_address,
             enclave_signer: signer,
@@ -99,7 +103,7 @@ pub mod serverless_executor_test {
     // Test the various response cases for the 'inject_immutable_config' endpoint
     #[tokio::test]
     async fn inject_immutable_config_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
         // Inject invalid owner address hex string (odd length)
@@ -167,7 +171,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test the various response cases for the 'inject_mutable_config' endpoint
     async fn inject_mutable_config_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
         // Inject invalid gas private key hex string (less than 32 bytes)
@@ -285,7 +289,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test the various response cases for the 'get_executor_details' endpoint
     async fn get_executor_details_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
         // Get the executor details without injecting any config params
@@ -404,7 +408,7 @@ pub mod serverless_executor_test {
     async fn export_signed_registration_message_test() {
         let metrics = Handle::current().metrics();
 
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
         let verifying_key = app_state.enclave_signer.verifying_key().to_owned();
 
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
@@ -514,7 +518,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test a valid job request with different inputs and verify the responses
     async fn valid_job_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
         let user_deadline = 5000;
@@ -618,9 +622,68 @@ pub mod serverless_executor_test {
     }
 
     #[tokio::test]
+    // Test a valid job request with user code contract set in uppercase and verify the response
+    async fn valid_job_test_with_uppercase_code_contract() {
+        let app_state = generate_app_state(true).await;
+
+        let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({
+            "num": 10
+        }))
+        .unwrap()
+        .into();
+
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes,
+            user_deadline,
+            app_state.enclave_address,
+        )];
+        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(responses[0].clone(), 0.into(), 0, "2,5".into());
+    }
+
+    #[tokio::test]
     // Test a valid job request with invalid input and verify the response
     async fn invalid_input_job_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
         let user_deadline = 5000;
@@ -680,7 +743,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test '1' error code job requests and verify the responses
     async fn invalid_transaction_job_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let user_deadline = 5000;
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -761,7 +824,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test '2' error code job request and verify the response
     async fn invalid_code_calldata_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "d23370ce64d1679fb53497b882347e25a026ba0bc54536340243ae7464d5d12d";
         let user_deadline = 5000;
@@ -818,7 +881,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test '3' error code job request and verify the response
     async fn invalid_code_job_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "96179f60fd7917c04ad9da6dd64690a1a960f39b50029d07919bf2628f5e7fe5";
         let user_deadline = 5000;
@@ -875,7 +938,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test '4' error code job request and verify the response
     async fn deadline_timeout_job_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
         let user_deadline = 5000;
@@ -932,7 +995,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test the execution timeout case where enough job responses are not received and slashing transaction should be sent for the job request
     async fn timeout_job_execution_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
         let user_deadline = 5000;
@@ -999,7 +1062,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test ExecutorDeregistered event handling
     async fn executor_deregistered_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
         app_state.enclave_registered.store(true, Ordering::SeqCst);
 
         let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
@@ -1046,7 +1109,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test different env ID job created event
     async fn invalid_env_id_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
         let user_deadline = 5000;
@@ -1103,7 +1166,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     // Test '5' error code, serverless output size exceeds the limit
     async fn output_size_too_large() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         // This serverless code return bytes array of given length filled with zeros
         let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";
@@ -1165,7 +1228,7 @@ pub mod serverless_executor_test {
     #[tokio::test]
     //Test Output size is equals to the limit
     async fn output_size_limit_test() {
-        let app_state = generate_app_state().await;
+        let app_state = generate_app_state(false).await;
 
         // This serverless code return bytes array of given length filled with zeros
         let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";

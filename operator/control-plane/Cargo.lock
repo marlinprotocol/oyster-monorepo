@@ -1578,7 +1578,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "control-plane"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1586,6 +1586,7 @@ dependencies = [
  "aws-sdk-ec2",
  "aws-types",
  "axum",
+ "base64 0.22.1",
  "clap",
  "httpc-test",
  "rand_core",

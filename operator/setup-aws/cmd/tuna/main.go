@@ -106,7 +106,7 @@ func create_ami(keyPairName string, keyStoreLocation string, profile string, reg
 
 func SetupPreRequisites(client *connect.SshClient, host string, instanceID string, profile string, region string, arch string) {
 	RunCommand(client, "sudo apt-get -y update && sudo apt-get -y upgrade")
-	RunCommand(client, "sudo apt-get -y install build-essential")
+	RunCommand(client, "sudo apt-get -y install file build-essential")
 	RunCommand(client, "grep /boot/config-$(uname -r) -e NITRO_ENCLAVES")
 	RunCommand(client, "sudo apt-get -y install linux-modules-extra-aws")
 	RunCommand(client, "sudo apt-get -y install docker.io")
@@ -116,8 +116,8 @@ func SetupPreRequisites(client *connect.SshClient, host string, instanceID strin
 	RunCommand(client, "rm -rf aws-nitro-enclaves-cli && git clone https://github.com/aws/aws-nitro-enclaves-cli.git")
 	RunCommand(client, "cd aws-nitro-enclaves-cli && THIS_USER=\"$(whoami)\"")
 	RunCommand(client, "cd aws-nitro-enclaves-cli && export NITRO_CLI_INSTALL_DIR=/")
-	RunCommand(client, "cd aws-nitro-enclaves-cli && (docker ps -a -q | xargs -r sudo docker stop) && (docker ps -a -q | xargs -r sudo docker rm) && sudo docker image prune --all -f && make nitro-cli")
 	RunCommand(client, "cd aws-nitro-enclaves-cli && (docker ps -a -q | xargs -r sudo docker stop) && (docker ps -a -q | xargs -r sudo docker rm) && sudo docker image prune --all -f  && make vsock-proxy")
+	RunCommand(client, "cd aws-nitro-enclaves-cli && (docker ps -a -q | xargs -r sudo docker stop) && (docker ps -a -q | xargs -r sudo docker rm) && sudo docker image prune --all -f && make nitro-cli")
 	RunCommand(client, `cd aws-nitro-enclaves-cli && (docker ps -a -q | xargs -r sudo docker stop) && (docker ps -a -q | xargs -r sudo docker rm) && sudo docker image prune --all -f  &&
 						sudo make NITRO_CLI_INSTALL_DIR=/ install &&
 						source /etc/profile.d/nitro-cli-env.sh &&
@@ -127,13 +127,13 @@ func SetupPreRequisites(client *connect.SshClient, host string, instanceID strin
 	RunCommand(client, "sudo apt -y install network-manager")
 
 	// proxies
-	RunCommand(client, "wget -O vsock-to-ip-raw-outgoing http://public.artifacts.marlin.pro/projects/enclaves/vsock-to-ip-raw-outgoing_v1.0.0_linux_"+arch)
+	RunCommand(client, "wget -O vsock-to-ip-raw-outgoing https://artifacts.marlin.org/oyster/binaries/vsock-to-ip-raw-outgoing_v1.0.0_linux_"+arch)
 	RunCommand(client, "chmod +x vsock-to-ip-raw-outgoing")
-	RunCommand(client, "wget -O ip-to-vsock-raw-incoming http://public.artifacts.marlin.pro/projects/enclaves/ip-to-vsock-raw-incoming_v1.0.0_linux_"+arch)
+	RunCommand(client, "wget -O ip-to-vsock-raw-incoming https://artifacts.marlin.org/oyster/binaries/ip-to-vsock-raw-incoming_v1.0.0_linux_"+arch)
 	RunCommand(client, "chmod +x ip-to-vsock-raw-incoming")
 
 	// init server
-	RunCommand(client, "wget -O oyster-init-server http://public.artifacts.marlin.pro/projects/enclaves/oyster-init-server_v0.1.0_linux_"+arch)
+	RunCommand(client, "wget -O oyster-init-server https://artifacts.marlin.org/oyster/binaries/init-server_v1.0.0_linux_"+arch)
 	RunCommand(client, "chmod +x oyster-init-server")
 
 	// supervisord

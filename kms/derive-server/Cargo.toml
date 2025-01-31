@@ -1,0 +1,27 @@
+[package]
+name = "kms-derive-server"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1.0.95"
+axum = "0.8.1"
+clap = { version = "4.5.27", features = ["derive"] }
+hex = "0.4.3"
+http-body-util = "0.1.2"
+hyper = { version = "1.5.2", features = ["full"] }
+hyper-util = { version = "0.1.10", features = ["tokio"] }
+kms-derive-utils = { version = "0.1.0", path = "../derive-utils" }
+oyster-sdk = "0.15.0"
+reqwest = "0.12.12"
+serde = { version = "1.0.217", features = ["derive"] }
+tokio = { version = "1.43.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1

@@ -51,7 +51,7 @@ enum Commands {
         #[arg(
             short = 'r',
             long,
-            default_value = "2d7507501049f3c685f0859aa92e57397e490e88" // To be updated when nix configs are changed
+            default_value = "oyster-cvm-v1.1.0" // To be updated when new version is tagged
         )]
         commit_ref: String,
     },
@@ -75,7 +75,7 @@ enum Commands {
         #[arg(long, required = true)]
         wallet_private_key: String,
 
-        /// Optional operator address
+        /// Operator address
         #[arg(long, required = true)]
         operator: String,
 
@@ -98,6 +98,14 @@ enum Commands {
         /// Enable debug mode
         #[arg(long)]
         debug: bool,
+
+        /// Init params, base64 encoded
+        #[arg(long, default_value = "")]
+        init_params: String,
+
+        /// Extra init params, base64 encoded
+        #[arg(long, default_value = "")]
+        extra_init_params: String,
     },
     /// Verify Oyster Enclave Attestation
     Verify {
@@ -231,6 +239,8 @@ async fn main() -> Result<()> {
             duration_in_minutes,
             job_name,
             debug,
+            init_params,
+            extra_init_params,
         } => {
             let config = DeploymentConfig {
                 image_url: image_url.clone(),
@@ -240,6 +250,8 @@ async fn main() -> Result<()> {
                 duration: *duration_in_minutes,
                 job_name: job_name.clone(),
                 debug: *debug,
+                init_params: init_params.clone(),
+                extra_init_params: extra_init_params.clone(),
             };
             commands::deploy::deploy_oyster_instance(config, wallet_private_key, operator).await
         }

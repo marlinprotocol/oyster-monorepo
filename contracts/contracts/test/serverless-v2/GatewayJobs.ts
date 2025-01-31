@@ -482,7 +482,7 @@ describe("GatewayJobs - Relay", function () {
 
         images = [image4, image5, image6, image7];
         let minStakeAmount = 1;
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [admin, images],
@@ -498,7 +498,7 @@ describe("GatewayJobs - Relay", function () {
             noOfNodesToSelect = 3,
             stakingPaymentPoolAddress = addrs[0],
             usdcPaymentPoolAddress = addrs[0];
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [admin],
@@ -955,7 +955,7 @@ describe("GatewayJobs - Reassign Gateway", function () {
 
         images = [image4, image5, image6, image7];
         let minStakeAmount = 1;
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [admin, images],
@@ -971,7 +971,7 @@ describe("GatewayJobs - Reassign Gateway", function () {
             noOfNodesToSelect = 3,
             stakingPaymentPoolAddress = addrs[4],
             usdcPaymentPoolAddress = addrs[0];
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [admin],
@@ -1307,7 +1307,7 @@ describe("GatewayJobs - oyster callback in GatewayJobs", function () {
         ) as unknown as Gateways;
 
         let executor_images = [image4, image5, image6, image7];
-        const Executors = await ethers.getContractFactory("Executors");
+        const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
         executors = await upgrades.deployProxy(
             Executors,
             [addrs[0], executor_images],
@@ -1325,7 +1325,7 @@ describe("GatewayJobs - oyster callback in GatewayJobs", function () {
             },
         ) as unknown as Executors;
 
-        const Jobs = await ethers.getContractFactory("Jobs");
+        const Jobs = await ethers.getContractFactory("contracts/serverless-v2/Jobs.sol:Jobs");
         jobs = await upgrades.deployProxy(
             Jobs,
             [addrs[0]],

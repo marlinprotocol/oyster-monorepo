@@ -1,6 +1,6 @@
 [package]
 name = "oyster-sdk"
-version = "0.12.0"
+version = "0.15.0"
 edition = "2021"
 description = "Oyster SDK"
 license = "Apache-2.0"
@@ -22,12 +22,15 @@ serde_json = "1.0"
 snow = "0.9.6"
 thiserror = "2.0.3"
 tokio = { version = "1", features = ["full"] }
+# axum feature
+axum = { version = "0.8.1", optional = true }
 
 [dev-dependencies]
-axum = "0.7.9"
 http = "1.1.0"
 hyper = { version = "1.5.1", features = ["client", "http1", "http2", "server"] }
-tower = { version = "0.5.1", features = ["full"] }
+
+[features]
+axum = ["dep:axum"]
 
 [lib]
 name = "oyster"
@@ -47,6 +50,7 @@ path = "examples/hyper.rs"
 [[example]]
 name = "axum"
 path = "examples/axum.rs"
+required-features = ["axum"]
 
 [profile.release]
 strip = true

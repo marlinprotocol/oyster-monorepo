@@ -6,7 +6,7 @@ use hyper::{
     client::connect::{Connected, Connection},
     Body, Uri,
 };
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 struct VsockStream(tokio_vsock::VsockStream);
 
@@ -107,9 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response_bytes =
         hyper::body::to_bytes(client.get(cli.url.try_into()?).await?.into_body()).await?;
 
-    let res = String::from_utf8(response_bytes.to_vec())?;
-
-    println!("{res}");
+    tokio::io::stdout().write_all(&response_bytes).await?;
 
     Ok(())
 }

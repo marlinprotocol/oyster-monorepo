@@ -3,7 +3,6 @@ use alloy::{
     signers::local::PrivateKeySigner, sol,
 };
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 
 const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
@@ -32,16 +31,18 @@ pub async fn update_job(
         .on_http(ARBITRUM_ONE_RPC_URL.parse()?);
     let market = OysterMarket::new(OYSTER_MARKET_ADDRESS.parse()?, provider);
 
-    let mut metadata =
-        serde_json::from_str::<Metadata>(&market.jobs(job_id.parse()?).call().await?.metadata)?;
+    let mut metadata = serde_json::from_str::<serde_json::Value>(&market.jobs(job_id.parse()?).call().await?.metadata)?;
+    info!("Original metadata: {}", serde_json::to_string_pretty(&metadata)?);
 
     if let Some(debug) = debug {
-        metadata.debug = debug;
+        metadata["debug"] = serde_json::Value::Bool(debug);
     }
 
     if let Some(image_url) = image_url {
-        metadata.url = image_url.into();
+        metadata["url"] = serde_json::Value::String(image_url.into());
     }
+
+    info!("Updated metadata: {}", serde_json::to_string_pretty(&metadata)?);
 
     let tx_hash = market
         .jobMetadataUpdate(job_id.parse()?, serde_json::to_string(&metadata)?)
@@ -53,15 +54,4 @@ pub async fn update_job(
     info!("Metadata update transaction: {:?}", tx_hash);
 
     Ok(())
-}
-
-#[derive(Serialize, Deserialize)]
-struct Metadata {
-    instance: String,
-    region: String,
-    memory: u32,
-    vcpu: u32,
-    url: String,
-    name: String,
-    debug: bool,
 }
