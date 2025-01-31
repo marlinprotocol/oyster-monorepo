@@ -123,7 +123,7 @@ contract TeeManagerMock is Context, AttestationAuther {
         address _recipient
     ) external returns (uint256) {
         emit TeeManagerMockExecutorSlashed();
-        return 0;
+        return 10;
     }
 
     // ---------------------------------- Executors functions end -------------------------------------

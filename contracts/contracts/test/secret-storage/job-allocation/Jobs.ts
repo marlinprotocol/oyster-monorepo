@@ -873,43 +873,33 @@ describe("Jobs - Create", function () {
         }
     });
 
-    // it("can relay job without secret", async function () {
-    //     let env = 1,
-    //         secretId = 0,
-    //         codeHash = keccak256(solidityPacked(["string"], ["codehash"])),
-    //         codeInputs = solidityPacked(["string"], ["codeInput"]),
-    //         deadline = 10000,
-    //         jobOwner = addrs[1];
-    //     let tx = await jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline);
-    //     await tx.wait();
-    //     await expect(tx).to.emit(jobs, "JobCreated");
-
-    //     // Since it is a first job.
-    //     let jobId = 0;
-    //     let job = await jobs.jobs(jobId);
-
-    //     expect(job.jobOwner).to.eq(jobOwner);
-    //     expect(job.deadline).to.eq(deadline);
-    //     expect(job.execStartTime).to.eq((await tx.getBlock())?.timestamp);
-    //     expect(job.env).to.eq(env);
-
-    //     let selectedExecutors = await jobs.getSelectedExecutors(jobId);
-    //     console.log("select: ", selectedExecutors, selectedExecutors.length);
-    //     for (let index = 0; index < selectedExecutors.length; index++) {
-    //         const executor = selectedExecutors[index];
-    //         expect([addrs[17], addrs[18], addrs[19], addrs[20]]).to.contain(executor);
-    //     }
-    // });
-
-    it("cannot relay job without secret", async function () {
+    it("can relay job without secret", async function () {
         let env = 1,
             secretId = 0,
             codeHash = keccak256(solidityPacked(["string"], ["codehash"])),
             codeInputs = solidityPacked(["string"], ["codeInput"]),
-            deadline = 10000;
+            deadline = 10000,
+            jobOwner = addrs[1];
+        let tx = await jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline);
+        await tx.wait();
+        await expect(tx).to.emit(jobs, "JobCreated");
 
-        await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
-            .to.revertedWithCustomError(jobs, "JobsInvalidSecretId");
+        // Since it is a first job.
+        let jobId = 0;
+        let job = await jobs.jobs(jobId);
+
+        expect(job.jobOwner).to.eq(jobOwner);
+        expect(job.deadline).to.eq(deadline);
+        expect(job.execStartTime).to.eq((await tx.getBlock())?.timestamp);
+        expect(job.env).to.eq(env);
+
+        let selectedExecutors = await jobs.getSelectedExecutors(jobId);
+        expect(selectedExecutors.length).to.eq(3);
+        expect(new Set(selectedExecutors).size).to.eq(3);
+        for (let index = 0; index < selectedExecutors.length; index++) {
+            const executor = selectedExecutors[index];
+            expect([addrs[17], addrs[18], addrs[19], addrs[20]]).to.contain(executor);
+        }
     });
 
     it("cannot relay job with unsupported execution env", async function () {
@@ -923,30 +913,34 @@ describe("Jobs - Create", function () {
             .to.revertedWithCustomError(executors, "ExecutorsUnsupportedEnv");
     });
 
-    // it("cannot relay job when a minimum no. of executor nodes are not available", async function () {
-    //     let secretId = 1;
-    //     // remove the unselected store
-    //     let selectedStores = await secretManager.getSelectedEnclaves(secretId);
-    //     let stores = [addrs[17], addrs[18], addrs[19], addrs[20]];
-    //     for (let i = 0; i < selectedStores.length; i++) {
-    //         let index = stores.indexOf(selectedStores[i].enclaveAddress);
-    //         stores.splice(index, 1);
-    //     }
-    //     let unselectedStore = stores[0];
-    //     await teeManager.connect(signers[1]).drainTeeNode(unselectedStore);
+    it("cannot create job when a minimum no. of executor nodes are not available", async function () {
+        await teeManager.connect(signers[1]).drainTeeNode(addrs[19]);
+        await teeManager.connect(signers[1]).drainTeeNode(addrs[20]);
 
-    //     let env = 1,
-    //         codeHash = keccak256(solidityPacked(["string"], ["codehash"])),
-    //         codeInputs = solidityPacked(["string"], ["codeInput"]),
-    //         deadline = 10000;
+        // need to ack the replaced stores
+        let secretId = 1,
+            signTimestamp = await time.latest();
+        let selectedStores = await secretManager.getSelectedEnclaves(secretId);
+        for (let i = 0; i < selectedStores.length; i++) {
+            let index = addrs.indexOf(selectedStores[i].enclaveAddress);
+            const wallet = wallets[index];
+            if(!selectedStores[i].hasAcknowledgedStore) {
+                let signedDigest = await createAcknowledgeSignature(secretId, signTimestamp, wallet);
+                await secretManager.acknowledgeStore(secretId, signTimestamp, signedDigest);
+            }
+        }
 
-    //     // max 3 jobs can be assigned
-    //     await jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline);
-    //     await jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline);
-    //     await jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline);
-    //     await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
-    //         .to.revertedWithCustomError(executors, "ExecutorsUnavailableStores");
-    // });
+        let env = 1,
+            codeHash = keccak256(solidityPacked(["string"], ["codehash"])),
+            codeInputs = solidityPacked(["string"], ["codeInput"]),
+            deadline = 10000;
+        await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
+            .to.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
+
+        secretId = 0;
+        await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
+            .to.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
+    });
 
     it("cannot relay job after all the executors are fully occupied", async function () {
         let secretId = 1;
@@ -965,12 +959,17 @@ describe("Jobs - Create", function () {
             codeInputs = solidityPacked(["string"], ["codeInput"]),
             deadline = 10000;
 
+        // max 3 jobs can be assigned
         for (let index = 1; index <= 3; index++) {
             await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
                 .to.emit(jobs, "JobCreated");
         }
         await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
-            .to.revertedWithCustomError(executors, "ExecutorsUnavailableStores");
+            .to.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
+
+        secretId = 0;
+        await expect(jobs.connect(signers[1]).createJob(env, secretId, codeHash, codeInputs, deadline))
+            .to.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
     });
 });
 

@@ -328,7 +328,6 @@ contract Jobs is
     error JobsExecutorAlreadySubmittedOutput();
     /// @notice Thrown when there are unavailable resources to execute the job.
     error JobsUnavailableResources();
-    error JobsInvalidSecretId();
 
     //-------------------------------- internal functions start --------------------------------//
 
@@ -344,11 +343,9 @@ contract Jobs is
         // 1. Validate secretId (secretId should exist and owner should be msg sender)
         // 2. Check if the secret is acknowledged by all the selected stores
         // 3. Get the no. of selected stores(=L)
-        // TODO: not considering jobs without secretId until the selection algo issue is fixed
-        if(_secretId == 0)
-            revert JobsInvalidSecretId();
-
-        address[] memory selectedStores = SECRET_MANAGER.verifyUserAndGetSelectedStores(_secretId, _jobOwner);
+        address[] memory selectedStores;
+        if(_secretId != 0)
+            selectedStores = SECRET_MANAGER.verifyUserAndGetSelectedStores(_secretId, _jobOwner);
 
         // 4. if L >= N, then select N stores as executors(stake based selection)
         // 5. if 1 < L < N, then select all the L stores and other (N-L) via selection algo

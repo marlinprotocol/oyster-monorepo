@@ -120,7 +120,7 @@ contract Executors is
     error ExecutorsNotTeeManager();
     /// @notice Thrown when the provided execution environment is not supported globally.
     error ExecutorsUnsupportedEnv();
-    error ExecutorsUnavailableStores();
+    error ExecutorsUnavailableResources();
 
     modifier isValidEnv(uint8 _env) {
         _isValidEnv(_env);
@@ -304,28 +304,45 @@ contract Executors is
         uint256 storesCount = topNStores.length;
 
         uint256 noOfExecutorsToSelect = _noOfNodesToSelect > storesCount ? _noOfNodesToSelect - storesCount : 0;
-        // TODO: not selecting from the executors until selection algo issue is fixed
-        if(noOfExecutorsToSelect > 0)
-            revert ExecutorsUnavailableStores();
+        address[] memory selectedNodes;
+        if(noOfExecutorsToSelect > 0) {
+            selectedNodes = new address[](_noOfNodesToSelect);
+            for (uint256 i = 0; i < storesCount; i++) {
+                selectedNodes[i] = topNStores[i];
+            }
 
-        return topNStores;
+            // remove the already selected stores from the tree so they are not selected back again as duplicates
+            _deleteTreeNodes(_env, selectedStores);
+            address[] memory selectedExecutors = _selectExecutors(_env, noOfExecutorsToSelect);
+            // add back the removed stores to the tree
+            _addTreeNodes(_env, selectedStores);
+
+            // if reqd executors aren't available, then revert
+            if (selectedExecutors.length < noOfExecutorsToSelect)
+                revert ExecutorsUnavailableResources();
+
+            for (uint256 i = 0; i < noOfExecutorsToSelect; i++)
+                selectedNodes[storesCount + i] = selectedExecutors[i];
+        }
+
+        return noOfExecutorsToSelect > 0 ? selectedNodes : topNStores;
     }
 
-    // function _selectExecutors(
-    //     uint8 _env,
-    //     uint256 _noOfNodesToSelect
-    // ) internal returns (address[] memory selectedNodes) {
-    //     selectedNodes = _selectNodes(_env, _noOfNodesToSelect);
-    //     _updateExecutorsResource(_env, selectedNodes);
-    // }
+    function _selectExecutors(
+        uint8 _env,
+        uint256 _noOfNodesToSelect
+    ) internal returns (address[] memory selectedNodes) {
+        selectedNodes = _selectNodes(_env, _noOfNodesToSelect);
+        _updateExecutorsResource(_env, selectedNodes);
+    }
 
-    // function _selectNodes(
-    //     uint8 _env,
-    //     uint256 _noOfNodesToSelect
-    // ) internal view returns (address[] memory selectedNodes) {
-    //     uint256 randomizer = uint256(keccak256(abi.encode(blockhash(block.number - 1), block.timestamp)));
-    //     selectedNodes = _selectN(_env, randomizer, _noOfNodesToSelect);
-    // }
+    function _selectNodes(
+        uint8 _env,
+        uint256 _noOfNodesToSelect
+    ) internal view returns (address[] memory selectedNodes) {
+        uint256 randomizer = uint256(keccak256(abi.encode(blockhash(block.number - 1), block.timestamp)));
+        selectedNodes = _selectN(_env, randomizer, _noOfNodesToSelect);
+    }
 
     function _getTopNStores(
         address[] memory selectedStores,
@@ -358,28 +375,28 @@ contract Executors is
             topNStores[i] = selectedStores[i];
     }
 
-    // function _deleteTreeNodes(
-    //     uint8 _env,
-    //     address[] memory _enclaveAddresses
-    // ) internal {
-    //     uint256 len = _enclaveAddresses.length;
-    //     for (uint256 index = 0; index < len; index++) {
-    //         _deleteIfPresent(_env, _enclaveAddresses[index]);
-    //     }
-    // }
+    function _deleteTreeNodes(
+        uint8 _env,
+        address[] memory _enclaveAddresses
+    ) internal {
+        uint256 len = _enclaveAddresses.length;
+        for (uint256 index = 0; index < len; index++) {
+            _deleteIfPresent(_env, _enclaveAddresses[index]);
+        }
+    }
 
-    // function _addTreeNodes(
-    //     uint8 _env,
-    //     address[] memory _enclaveAddresses
-    // ) internal {
-    //     uint256[] memory stakeAmounts = TEE_MANAGER.getTeeNodesStake(_enclaveAddresses);
-    //     uint256 len = _enclaveAddresses.length;
-    //     for (uint256 index = 0; index < len; index++) {
-    //         address enclaveAddress = _enclaveAddresses[index];
-    //         if (executors[enclaveAddress].activeJobs < executors[enclaveAddress].jobCapacity)
-    //             _insert_unchecked(_env, enclaveAddress, uint64(stakeAmounts[index] / STAKE_ADJUSTMENT_FACTOR));
-    //     }
-    // }
+    function _addTreeNodes(
+        uint8 _env,
+        address[] memory _enclaveAddresses
+    ) internal {
+        uint256[] memory stakeAmounts = TEE_MANAGER.getTeeNodesStake(_enclaveAddresses);
+        uint256 len = _enclaveAddresses.length;
+        for (uint256 index = 0; index < len; index++) {
+            address enclaveAddress = _enclaveAddresses[index];
+            if (executors[enclaveAddress].activeJobs < executors[enclaveAddress].jobCapacity)
+                _insert_unchecked(_env, enclaveAddress, uint64(stakeAmounts[index] / STAKE_ADJUSTMENT_FACTOR));
+        }
+    }
 
     function _updateExecutorsResource(
         uint8 _env,

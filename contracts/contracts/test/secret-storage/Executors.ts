@@ -2,7 +2,7 @@ import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { expect } from "chai";
 import { BytesLike, Signer, Wallet, ZeroAddress, keccak256, solidityPacked } from "ethers";
 import { ethers, upgrades } from "hardhat";
-import { AttestationAutherUpgradeable, AttestationVerifier, Executors, TeeManagerMock } from "../../typechain-types";
+import { AttestationAutherUpgradeable, AttestationVerifier, Executors, ExecutorsUser, TeeManagerMock } from "../../typechain-types";
 import { takeSnapshotBeforeAndAfterEveryTest } from "../../utils/testSuite";
 import { testERC165 } from '../helpers/erc165';
 
@@ -761,6 +761,7 @@ describe("Executors - Select/Release/Slash", function () {
     let pubkeys: string[];
     let teeManager: TeeManagerMock;
     let executors: Executors;
+    let executorsUser: ExecutorsUser;
 
     before(async function () {
         signers = await ethers.getSigners();
@@ -784,14 +785,18 @@ describe("Executors - Select/Release/Slash", function () {
             },
         ) as unknown as Executors;
 
+        const ExecutorsUser = await ethers.getContractFactory("ExecutorsUser");
+        executorsUser = await ExecutorsUser.deploy(executors.target) as unknown as ExecutorsUser;
+
         await teeManager.setExecutors(executors.target);
         await executors.grantRole(keccak256(ethers.toUtf8Bytes("JOBS_ROLE")), addrs[0]);
+        await executors.grantRole(keccak256(ethers.toUtf8Bytes("JOBS_ROLE")), executorsUser.target);
 
         let env = 1;
         await executors.initTree(env);
 
         // REGISTER NODES
-        let jobCapacity = 20,
+        let jobCapacity = 3,
             storageCapacity = 1e9,
             stakeAmount = 10n ** 19n,
             timestamp = await time.latest() * 1000,
@@ -824,22 +829,27 @@ describe("Executors - Select/Release/Slash", function () {
     it("can select executors", async function () {
         let env = 1;
         // can select 1 node
-        await expect(executors.selectExecutionNodes(env, [addrs[15]], 1))
-            .to.be.not.reverted;
+        await expect(executorsUser.selectExecutionNodes(env, [addrs[15]], 1))
+            .to.emit(executorsUser, "ExecutorsUserNodesSelected")
+            .withArgs([addrs[15]]);
         expect((await executors.executors(addrs[15])).activeJobs).to.be.eq(1);
         expect(await executors.isNodePresentInTree(env, addrs[15])).to.be.true;
 
         // can select multiple nodes
-        await expect(executors.selectExecutionNodes(env, [addrs[15], addrs[16]], 2))
-            .to.be.not.reverted;
+        await expect(executorsUser.selectExecutionNodes(env, [addrs[15], addrs[16]], 2))
+            .to.emit(executorsUser, "ExecutorsUserNodesSelected")
+            .withArgs((args: string[]) => {
+                return args.length === 2 && args.includes(addrs[15]) && args.includes(addrs[16]);
+            });
         expect((await executors.executors(addrs[15])).activeJobs).to.be.eq(2);
         expect(await executors.isNodePresentInTree(env, addrs[15])).to.be.true;
         expect((await executors.executors(addrs[16])).activeJobs).to.be.eq(1);
         expect(await executors.isNodePresentInTree(env, addrs[16])).to.be.true;
 
         // can select topN nodes out of multiple nodes (here 16th and 17th nodes will be selcted as they have higher stakes)
-        await expect(executors.selectExecutionNodes(env, [addrs[15], addrs[16], addrs[17]], 2))
-            .to.be.not.reverted;
+        await expect(executorsUser.selectExecutionNodes(env, [addrs[15], addrs[16], addrs[17]], 2))
+            .to.emit(executorsUser, "ExecutorsUserNodesSelected")
+            .withArgs([addrs[16], addrs[17]]);
 
         expect((await executors.executors(addrs[15])).activeJobs).to.be.eq(2);
         expect(await executors.isNodePresentInTree(env, addrs[15])).to.be.true;
@@ -849,12 +859,22 @@ describe("Executors - Select/Release/Slash", function () {
         expect(await executors.isNodePresentInTree(env, addrs[17])).to.be.true;
     });
 
-    it("cannot select executors other than selected stores", async function () {
-        await expect(executors.selectExecutionNodes(1, [], 1))
-            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableStores");
+    it("cannot select executors when a minimum no. of executors aren't available", async function () {
+        await expect(executors.selectExecutionNodes(1, [], 4))
+            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
 
-        await expect(executors.selectExecutionNodes(1, [addrs[15]], 2))
-            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableStores");
+        await expect(executors.selectExecutionNodes(1, [addrs[15]], 4))
+            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
+        
+        // reaching the max job capacity
+        for (let index = 0; index < 3; index++) {
+            await executors.selectExecutionNodes(1, [addrs[17]], 3);
+        }
+        await expect(executors.selectExecutionNodes(1, [], 1))
+            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
+
+        await expect(executors.selectExecutionNodes(1, [addrs[17]], 2))
+            .to.be.revertedWithCustomError(executors, "ExecutorsUnavailableResources");
     });
 
     it("cannot select executors without JOBS_ROLE", async function () {
@@ -868,25 +888,20 @@ describe("Executors - Select/Release/Slash", function () {
             .to.revertedWithCustomError(executors, "ExecutorsUnsupportedEnv");
     });
 
-    // TODO: will be required once we enable executor selection along with secret stores
-    // it("can select executors along with the already selected stores", async function () {
-    //     let jobCapacity = 20,
-    //         env = 1,
-    //         stakeAmount = 10n ** 19n;
-    //     await teeManager.registerExecutor(
-    //         addrs[16],
-    //         jobCapacity,
-    //         env,
-    //         stakeAmount
-    //     );
+    it("can select executors along with the already selected stores", async function () {
+        await teeManager.drainTeeNode(addrs[16]);
 
-    //     let noOfNodesToSelect = 2;
-    //     await expect(executors.selectExecutionNodes(env, [addrs[15]], noOfNodesToSelect))
-    //         .to.be.not.reverted;
+        let env = 1,
+            noOfNodesToSelect = 2;
+        await expect(executorsUser.selectExecutionNodes(env, [addrs[15]], noOfNodesToSelect))
+            .to.emit(executorsUser, "ExecutorsUserNodesSelected")
+            .withArgs([addrs[15], addrs[17]]);
 
-    //     expect((await executors.executors(addrs[15])).activeJobs).to.be.eq(1);
-    //     expect((await executors.executors(addrs[16])).activeJobs).to.be.eq(1);
-    // });
+        expect((await executors.executors(addrs[15])).activeJobs).to.be.eq(1);
+        expect((await executors.executors(addrs[17])).activeJobs).to.be.eq(1);
+        expect(await executors.isNodePresentInTree(env, addrs[15])).to.be.true;
+        expect(await executors.isNodePresentInTree(env, addrs[17])).to.be.true;
+    });
 
     it("can release executor", async function () {
         await executors.selectExecutionNodes(1, [addrs[15]], 1);
@@ -921,8 +936,10 @@ describe("Executors - Select/Release/Slash", function () {
     it("can slash executor", async function () {
         await executors.selectExecutionNodes(1, [addrs[15]], 1);
 
-        await expect(executors.slashExecutor(addrs[15]))
-            .to.be.not.reverted;
+        await expect(executorsUser.slashExecutor(addrs[15]))
+            .to.emit(teeManager, "TeeManagerMockExecutorSlashed")
+            .and.to.emit(executorsUser, "ExecutorsUserNodeSlashed")
+            .withArgs(10);
 
         const executor = await executors.executors(addrs[15]);
         expect(executor.activeJobs).to.eq(0);
