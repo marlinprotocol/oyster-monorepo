@@ -5,16 +5,18 @@ use tracing::info;
 
 use oyster::attestation::{get, verify, AttestationExpectations};
 
+use crate::args::pcr::PcrArgs;
+
 pub async fn verify_enclave(
-    pcr0: &str,
-    pcr1: &str,
-    pcr2: &str,
+    pcr: &PcrArgs,
     enclave_ip: &str,
     attestation_port: &u16,
     max_age: &usize,
     root_public_key: &str,
     timestamp: &usize,
 ) -> Result<()> {
+    let pcrs = get_pcrs(pcr).context("Failed to load PCR data")?;
+
     let attestation_endpoint =
         format!("http://{}:{}/attestation/raw", enclave_ip, attestation_port);
     info!(
@@ -28,7 +30,7 @@ pub async fn verify_enclave(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as usize;
     let attestation_expectations = AttestationExpectations {
         age: Some((*max_age, now)),
-        pcrs: get_pcrs(pcr0, pcr1, pcr2)?,
+        pcrs: pcrs,
         root_public_key: Some(
             hex::decode(root_public_key).context("Failed to decode root public key hex string")?,
         ),
@@ -51,10 +53,18 @@ pub async fn verify_enclave(
     Ok(())
 }
 
-fn get_pcrs(pcr0: &str, pcr1: &str, pcr2: &str) -> Result<Option<[[u8; 48]; 3]>> {
-    if pcr0.is_empty() || pcr1.is_empty() || pcr2.is_empty() {
+fn get_pcrs(pcr: &PcrArgs) -> Result<Option<[[u8; 48]; 3]>> {
+    let Some((pcr0, pcr1, pcr2)) = pcr.load()? else {
+        tracing::info!("No PCR values provided - skipping PCR verification");
         return Ok(None);
-    }
+    };
+
+    tracing::info!(
+        "Loaded PCR data: pcr0: {}, pcr1: {}, pcr2: {}",
+        pcr0,
+        pcr1,
+        pcr2
+    );
 
     Ok(Some([
         hex::decode(pcr0)?

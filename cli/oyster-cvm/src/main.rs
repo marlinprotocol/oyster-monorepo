@@ -2,10 +2,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use oyster::attestation::AWS_ROOT_KEY;
 
+mod args;
 mod commands;
 mod types;
 mod utils;
 
+use crate::args::pcr::PcrArgs;
 use crate::commands::deploy::DeploymentConfig;
 use tracing_subscriber::EnvFilter;
 
@@ -113,17 +115,8 @@ enum Commands {
         #[arg(short = 'e', long, required = true)]
         enclave_ip: String,
 
-        /// PCR 0
-        #[arg(short = '0', long, default_value = "")]
-        pcr0: String,
-
-        /// PCR 1
-        #[arg(short = '1', long, default_value = "")]
-        pcr1: String,
-
-        /// PCR 2
-        #[arg(short = '2', long, default_value = "")]
-        pcr2: String,
+        #[command(flatten)]
+        pcr: PcrArgs,
 
         /// Attestation Port (default: 1300)
         #[arg(short = 'p', long, default_value = "1300")]
@@ -208,9 +201,7 @@ async fn main() -> Result<()> {
             commands::upload::upload_enclave_image(file, &default_provider).await
         }
         Commands::Verify {
-            pcr0,
-            pcr1,
-            pcr2,
+            pcr,
             enclave_ip,
             attestation_port,
             max_age,
@@ -218,9 +209,7 @@ async fn main() -> Result<()> {
             timestamp,
         } => {
             commands::verify::verify_enclave(
-                pcr0,
-                pcr1,
-                pcr2,
+                pcr,
                 enclave_ip,
                 attestation_port,
                 max_age,

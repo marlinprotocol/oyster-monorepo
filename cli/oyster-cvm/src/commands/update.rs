@@ -31,8 +31,13 @@ pub async fn update_job(
         .on_http(ARBITRUM_ONE_RPC_URL.parse()?);
     let market = OysterMarket::new(OYSTER_MARKET_ADDRESS.parse()?, provider);
 
-    let mut metadata = serde_json::from_str::<serde_json::Value>(&market.jobs(job_id.parse()?).call().await?.metadata)?;
-    info!("Original metadata: {}", serde_json::to_string_pretty(&metadata)?);
+    let mut metadata = serde_json::from_str::<serde_json::Value>(
+        &market.jobs(job_id.parse()?).call().await?.metadata,
+    )?;
+    info!(
+        "Original metadata: {}",
+        serde_json::to_string_pretty(&metadata)?
+    );
 
     if let Some(debug) = debug {
         metadata["debug"] = serde_json::Value::Bool(debug);
@@ -42,7 +47,10 @@ pub async fn update_job(
         metadata["url"] = serde_json::Value::String(image_url.into());
     }
 
-    info!("Updated metadata: {}", serde_json::to_string_pretty(&metadata)?);
+    info!(
+        "Updated metadata: {}",
+        serde_json::to_string_pretty(&metadata)?
+    );
 
     let tx_hash = market
         .jobMetadataUpdate(job_id.parse()?, serde_json::to_string(&metadata)?)
