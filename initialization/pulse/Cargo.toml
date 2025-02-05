@@ -1,0 +1,26 @@
+[package]
+name = "pulse"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pulse-server"
+path = "./src/server.rs"
+
+[[bin]]
+name = "pulse-client"
+path = "./src/client.rs"
+
+[dependencies]
+anyhow = "1.0.94"
+clap = { version = "4.5.23", features = ["derive"] }
+ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
+hex = "0.4.3"
+http-body-util = "0.1.2"
+hyper = "1.5.1"
+hyper-util = { version = "0.1.10", features = ["tokio"] }
+oyster-sdk = "0.12.0"
+rand = "0.8.5"
+reqwest = "0.12.9"
+tokio = { version = "1.42.0", features = ["full"] }
+url = "2.5.4"
