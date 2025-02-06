@@ -15,9 +15,20 @@
   dockerImages ? [],
 }: let
   system = systemConfig.system;
+  hostSystem = builtins.currentSystem;
+  # Use cross compilation if building on Darwin
+  pkgs = if builtins.match ".*darwin" hostSystem != null
+    then import nixpkgs {
+      system = hostSystem;
+      crossSystem = {
+        config = "${systemConfig.rust_target}";
+        system = system;
+      };
+    }
+    else nixpkgs.legacyPackages.${system};
+  
   nitro = nitro-util.lib.${system};
   eifArch = systemConfig.eif_arch;
-  pkgs = nixpkgs.legacyPackages."${system}";
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
   keygenX25519 = "${keygen}/bin/keygen-x25519";
