@@ -29,6 +29,16 @@ pub fn build_oyster_image(
         docker_images_list
     );
 
+    // Add cross-compilation flags when building on Darwin
+    let extra_args = if cfg!(target_os = "macos") {
+        vec![
+            "--option", "sandbox", "relaxed",
+            "--option", "system-features", "apple-virt benchmark big-parallel nixos-test",
+        ]
+    } else {
+        vec![]
+    };
+
     // TODO: Have to explicitly fill in the cache here to make it work
     // See if there is a better way
     let mut cmd = Command::new("nix")
@@ -43,6 +53,9 @@ pub fn build_oyster_image(
             "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= oyster.cachix.org-1:QEXLEQvMA7jPLn4VZWVk9vbtypkXhwZknX+kFgDpYQY=",
             "--system",
             platform.nix_arch(),
+        ])
+        .args(extra_args)
+        .args([
             "--expr",
             &nix_expr,
             "-vL",

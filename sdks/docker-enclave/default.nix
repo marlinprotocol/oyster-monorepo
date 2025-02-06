@@ -17,16 +17,19 @@
   system = systemConfig.system;
   hostSystem = builtins.currentSystem;
   
-  # Configure cross-compilation settings
-  crossPkgs = if builtins.match ".*darwin" hostSystem != null then
+  # Configure cross-compilation settings for Darwin
+  pkgs = if builtins.match ".*darwin" hostSystem != null then
     import nixpkgs {
       system = hostSystem;
+      # Properly configure cross-compilation target
       crossSystem = {
-        config = "${systemConfig.rust_target}";
+        config = "x86_64-unknown-linux-gnu";
         system = system;
+        libc = "glibc";
+        platform = nixpkgs.lib.systems.examples.gnu64;
       };
-      # Enable cross-compilation of native build inputs
-      pkgs.crossOverlays = [
+      # Enable cross-compilation overlays
+      overlays = [
         (self: super: {
           buildPackages = super.buildPackages // {
             inherit (super) busybox nettools iproute2 iptables-legacy ipset cacert docker jq;
@@ -37,10 +40,11 @@
   else
     nixpkgs.legacyPackages.${system};
 
-  pkgs = if builtins.match ".*darwin" hostSystem != null then
-    crossPkgs.buildPackages
+  # Use build packages for Darwin, regular packages for Linux
+  buildPkgs = if builtins.match ".*darwin" hostSystem != null then
+    pkgs.buildPackages
   else
-    crossPkgs;
+    pkgs;
 
   nitro = nitro-util.lib.${system};
   eifArch = systemConfig.eif_arch;
@@ -60,10 +64,8 @@
   init = kernels.init;
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
-  app = pkgs.runCommand "app" {
-    # Explicitly set the system for build
+  app = buildPkgs.runCommand "app" {
     inherit system;
-    # Enable cross-compilation if needed
     __structuredAttrs = true;
     preferLocalBuild = false;
     allowSubstitutes = true;
@@ -92,7 +94,7 @@
       then "# No docker images provided"
       else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/app/docker-images/") dockerImages)}
   '';
-  initPerms = pkgs.runCommand "initPerms" {
+  initPerms = buildPkgs.runCommand "initPerms" {
     inherit system;
     __structuredAttrs = true;
     preferLocalBuild = false;
@@ -114,9 +116,11 @@ in {
 
     entrypoint = "/app/setup.sh";
     env = "";
-    copyToRoot = pkgs.buildEnv {
+    copyToRoot = buildPkgs.buildEnv {
       name = "image-root";
-      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq];
+      paths = [app buildPkgs.busybox buildPkgs.nettools buildPkgs.iproute2 
+               buildPkgs.iptables-legacy buildPkgs.ipset buildPkgs.cacert 
+               buildPkgs.docker buildPkgs.jq];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
   };
