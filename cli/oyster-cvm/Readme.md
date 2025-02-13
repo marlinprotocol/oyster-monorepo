@@ -96,6 +96,48 @@ Optional args:
 - `--with-log-id`(-w): Include log ID prefix in output (default: false)
 - `--quiet` (-q): Suppress connection status message (default: false)
 
+#### `list`
+Lists all active jobs for a given wallet address.
+
+Required args:
+- `--wallet-address` (-w): The wallet address to list jobs for
+
+Sample output:
+```
++------------------+------------------+-------------+-----------+
+| ID               | RATE (USDC/hour) | BALANCE     | PROVIDER |
++------------------+------------------+-------------+-----------+
+| 0x123...         | 0.50            | 100.00 USDC | AWS      |
++------------------+------------------+-------------+-----------+
+```
+
+#### `deposit`
+Deposits additional USDC funds to an existing job.
+
+Required args:
+- `--job-id` (-j): The ID of the job to deposit funds to
+- `--amount` (-a): Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
+- `--wallet-private-key`: Wallet private key for transaction signing
+
+#### `stop`
+Stops an Oyster CVM instance.
+
+Required args:
+- `--job-id` (-j): The ID of the job to stop
+- `--wallet-private-key`: Wallet private key for transaction signing
+
+#### `withdraw`
+Withdraws USDC funds from an existing job. The command will first attempt to settle the job and then ensure a buffer balance is maintained for future operations.
+
+Required args:
+- `--job-id` (-j): The ID of the job to withdraw funds from
+- `--wallet-private-key`: Wallet private key for transaction signing
+- Either:
+  - `--amount` (-a): Amount to withdraw in USDC (minimum 0.000001 USDC)
+  - `--max`: Withdraw maximum available amount while maintaining required buffer
+
+Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensure smooth operation.
+
 ### Example
 
 ```bash
@@ -172,6 +214,71 @@ Optional args:
   --start-from abc123 \
   --with-log-id \
   --quiet
+
+# Deposit additional funds to a job
+./oyster-cvm deposit \
+  --job-id "0x123..." \
+  --amount 1000000 \
+  --wallet-private-key "your-private-key"
+
+# Sample output:
+[INFO] Starting deposit...
+[INFO] Depositing: 1.000000 USDC
+[INFO] USDC approval transaction: 0x3cc...e70
+[INFO] Deposit successful!
+[INFO] Transaction hash: 0x38b...008
+
+# Stop an oyster instance
+./oyster-cvm stop \
+  --job-id "0x000..." \
+  --wallet-private-key "your-private-key"
+
+# Sample output:
+[INFO] Stopping oyster instance with:
+[INFO]   Job ID: 0x000...
+[INFO] Found job, initiating stop...
+[INFO] Stop transaction sent: 0x03...1d
+[INFO] Instance stopped successfully!
+[INFO] Transaction hash: 0x03...1d
+
+# Withdraw funds from a job (specific amount)
+./oyster-cvm withdraw \
+  --job-id "0x123..." \
+  --amount 1000000 \
+  --wallet-private-key "your-private-key"
+
+# Sample output:
+[INFO] Starting withdrawal process...
+[INFO] Current balance: 5.000000 USDC, Required buffer: 1.500000 USDC
+[INFO] Initiating withdrawal of 1.000000 USDC
+[INFO] Withdrawal transaction sent. Transaction hash: 0x3cc...e70
+[INFO] Withdrawal successful!
+
+# Withdraw maximum available funds from a job
+./oyster-cvm withdraw \
+  --job-id "0x123..." \
+  --max \
+  --wallet-private-key "your-private-key"
+
+# Sample output:
+[INFO] Starting withdrawal process...
+[INFO] Current balance: 5.000000 USDC, Required buffer: 1.500000 USDC
+[INFO] Maximum withdrawal requested
+[INFO] Initiating withdrawal of 3.500000 USDC
+[INFO] Withdrawal transaction sent. Transaction hash: 0x38b...008
+[INFO] Withdrawal successful!
+
+# List active jobs for a wallet
+./oyster-cvm list --wallet-address "0x123..."
+
+# Sample output:
+[INFO] Listing active jobs for wallet address: 0x123...
++------------------+------------------+-------------+-----------+
+| ID               | RATE (USDC/hour) | BALANCE     | PROVIDER |
++------------------+------------------+-------------+-----------+
+| 0x123...         | 0.50            | 100.00 USDC | AWS      |
++------------------+------------------+-------------+-----------+
+
 ```
 
 ## License

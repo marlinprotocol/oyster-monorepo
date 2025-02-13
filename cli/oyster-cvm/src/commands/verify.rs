@@ -30,7 +30,7 @@ pub async fn verify_enclave(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as usize;
     let attestation_expectations = AttestationExpectations {
         age: Some((*max_age, now)),
-        pcrs: pcrs,
+        pcrs,
         root_public_key: Some(
             hex::decode(root_public_key).context("Failed to decode root public key hex string")?,
         ),
