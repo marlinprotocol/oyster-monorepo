@@ -14,7 +14,7 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::constants::*;
 use crate::model::{AppState, SecretCreatedMetadata, SecretManagerContract, SecretMetadata};
-use crate::scheduler::{garbage_cleaner, store_alive_monitor};
+use crate::scheduler::remove_expired_secrets_and_mark_store_alive;
 use crate::utils::*;
 
 // Start listening to events emitted by the 'SecretManager' contract if enclave is registered else listen for Store registered event first
@@ -24,7 +24,8 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
     }
     loop {
         // web socket connection
-        let ws_connect = WsConnect::new(&app_state.web_socket_url);
+        let web_socket_url = app_state.web_socket_url.read().unwrap().clone();
+        let ws_connect = WsConnect::new(web_socket_url);
         let web_socket_client = match ProviderBuilder::new().on_ws(ws_connect).await {
             Ok(client) => client,
             Err(err) => {
@@ -38,9 +39,9 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'SecretStoreRegistered' event emitted by the SecretStore contract
+            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_store_filter = Filter::new()
-                .address(app_state.secret_store_contract_addr)
+                .address(app_state.tee_manager_contract_addr)
                 .event(SECRET_STORE_REGISTERED_EVENT)
                 .topic1(B256::from(app_state.enclave_address.into_word()))
                 .topic2(B256::from(
@@ -57,7 +58,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                 Err(err) => {
                     eprintln!(
                         "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreRegistered' event logs: {:?}",
-                        app_state.secret_store_contract_addr,
+                        app_state.tee_manager_contract_addr,
                         err,
                     );
                     continue;
@@ -75,6 +76,15 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     event.block_number.unwrap_or(starting_block),
                     Ordering::SeqCst,
                 );
+
+                let txn_manager = app_state
+                    .http_rpc_txn_manager
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap();
+                txn_manager.run().await;
+
                 break;
             }
 
@@ -110,42 +120,37 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
         let secrets_stream = pin!(secrets_subscription.into_stream());
 
-        // Create filter to listen to 'SecretStoreDeregistered' event emitted by the SecretStore contract
-        let store_deregistered_filter = Filter::new()
-            .address(app_state.secret_store_contract_addr)
-            .event(SECRET_STORE_DEREGISTERED_EVENT)
+        // Create filter to listen to relevant events emitted by the TeeManager contract
+        let store_filter = Filter::new()
+            .address(app_state.tee_manager_contract_addr)
+            .events(vec![
+                SECRET_STORE_DRAINED_EVENT.as_bytes(),
+                SECRET_STORE_REVIVED_EVENT.as_bytes(),
+                SECRET_STORE_DEREGISTERED_EVENT.as_bytes(),
+            ])
             .topic1(B256::from(app_state.enclave_address.into_word()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
         // Subscribe to the deregistered filter through the rpc web socket client
-        let store_deregistered_subscription = match web_socket_client
-            .subscribe_logs(&store_deregistered_filter)
-            .await
-        {
+        let store_subscription = match web_socket_client.subscribe_logs(&store_filter).await {
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
                     "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreDeregistered' event logs: {:?}",
-                    app_state.secret_store_contract_addr,
+                    app_state.tee_manager_contract_addr,
                     err
                 );
                 continue;
             }
         };
-        let store_deregistered_stream = pin!(store_deregistered_subscription.into_stream());
+        let store_stream = pin!(store_subscription.into_stream());
 
         // Spawn task to submit periodic proofs for secrets stored and remove expired secrets
         let app_state_clone = app_state.clone();
         tokio::spawn(async move {
-            store_alive_monitor(app_state_clone).await;
+            remove_expired_secrets_and_mark_store_alive(app_state_clone).await;
         });
 
-        // Spawn task to remove expired secrets periodically
-        let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            garbage_cleaner(app_state_clone).await;
-        });
-
-        handle_event_logs(secrets_stream, store_deregistered_stream, app_state.clone()).await;
+        handle_event_logs(secrets_stream, store_stream, app_state.clone()).await;
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
             return;
@@ -156,24 +161,45 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
 // Listen to the "SecretStore" & "SecretManager" contract event logs and process them accordingly
 async fn handle_event_logs(
     mut secrets_stream: impl Stream<Item = Log> + Unpin,
-    mut store_deregistered_stream: impl Stream<Item = Log> + Unpin,
+    mut store_stream: impl Stream<Item = Log> + Unpin,
     app_state: Data<AppState>,
 ) {
     println!("Started listening to 'SecretManager' events!");
 
     loop {
         select! {
-            Some(event) = store_deregistered_stream.next() => {
+            Some(event) = store_stream.next() => {
                 if event.removed {
                     continue;
                 }
 
-                // Capture the Enclave deregistered event emitted by the 'SecretStore' contract
-                println!("Enclave deregistered from the common chain!");
-                app_state.enclave_registered.store(false, Ordering::SeqCst);
+                let Some(current_block) = event.block_number else {
+                    continue;
+                };
 
-                println!("Stopped listening to secret manager events!");
-                return;
+                if current_block < app_state.last_block_seen.load(Ordering::SeqCst) {
+                    continue;
+                }
+                app_state.last_block_seen.store(current_block, Ordering::SeqCst);
+
+                // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
+                if event.topic0() == Some(&keccak256(SECRET_STORE_DEREGISTERED_EVENT)) {
+                    println!("Enclave deregistered from the common chain!");
+                    app_state.enclave_registered.store(false, Ordering::SeqCst);
+
+                    println!("Stopped listening to secret manager events!");
+                    return;
+                }
+                // Capture the Enclave drained event emitted by the 'TeeManager' contract
+                else if event.topic0() == Some(&keccak256(SECRET_STORE_DRAINED_EVENT)) {
+                    println!("Enclave put in draining mode!");
+                    app_state.enclave_draining.store(true, Ordering::SeqCst);
+                }
+                // Capture the Enclave revived event emitted by the 'TeeManager' contract
+                else if event.topic0() == Some(&keccak256(SECRET_STORE_REVIVED_EVENT)) {
+                    println!("Enclave revived from draining mode!");
+                    app_state.enclave_draining.store(false, Ordering::SeqCst);
+                }
             }
             Some(event) = secrets_stream.next() => {
                 if event.removed {
