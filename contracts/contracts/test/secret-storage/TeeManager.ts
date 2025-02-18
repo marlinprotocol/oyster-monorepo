@@ -565,7 +565,7 @@ describe("TeeManager - Register/Deregister tee node", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 1,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -583,7 +583,7 @@ describe("TeeManager - Register/Deregister tee node", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1101,7 +1101,7 @@ describe("TeeManager - Staking/Unstaking", function () {
         ) as unknown as SecretStore;
 
         let noOfNodesToSelect = 1,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1119,7 +1119,7 @@ describe("TeeManager - Staking/Unstaking", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1421,7 +1421,7 @@ describe("TeeManager - Drain/Revive secret store", function () {
         ) as unknown as SecretStore;
 
         let noOfNodesToSelect = 1,
-            globalMaxSecretSize = 1500,
+            globalMaxStoreSize = 1500,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1439,7 +1439,7 @@ describe("TeeManager - Drain/Revive secret store", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,

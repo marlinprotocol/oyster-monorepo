@@ -44,7 +44,7 @@ describe("SecretManager - Init", function () {
     let wallets: Wallet[];
     let token: string;
     let noOfNodesToSelect: number;
-    let globalMaxSecretSize: number;
+    let globalMaxStoreSize: number;
     let globalMinStoreDuration: number;
     let globalMaxStoreDuration: number;
     let acknowledgementTimeout: number;
@@ -63,7 +63,7 @@ describe("SecretManager - Init", function () {
 
         token = addrs[1],
             noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -82,7 +82,7 @@ describe("SecretManager - Init", function () {
         const secretManager = await SecretManager.deploy(
             token,
             noOfNodesToSelect,
-            globalMaxSecretSize,
+            globalMaxStoreSize,
             globalMinStoreDuration,
             globalMaxStoreDuration,
             acknowledgementTimeout,
@@ -96,7 +96,7 @@ describe("SecretManager - Init", function () {
 
         expect(await secretManager.USDC_TOKEN()).to.equal(token);
         expect(await secretManager.NO_OF_NODES_TO_SELECT()).to.equal(noOfNodesToSelect);
-        expect(await secretManager.GLOBAL_MAX_SECRET_SIZE()).to.equal(globalMaxSecretSize);
+        expect(await secretManager.GLOBAL_MAX_STORE_SIZE()).to.equal(globalMaxStoreSize);
         expect(await secretManager.GLOBAL_MIN_STORE_DURATION()).to.equal(globalMinStoreDuration);
         expect(await secretManager.GLOBAL_MAX_STORE_DURATION()).to.equal(globalMaxStoreDuration);
         expect(await secretManager.ACKNOWLEDGEMENT_TIMEOUT()).to.equal(acknowledgementTimeout);
@@ -123,7 +123,7 @@ describe("SecretManager - Init", function () {
                 constructorArgs: [
                     token,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -139,7 +139,7 @@ describe("SecretManager - Init", function () {
 
         expect(await secretManager.USDC_TOKEN()).to.equal(token);
         expect(await secretManager.NO_OF_NODES_TO_SELECT()).to.equal(noOfNodesToSelect);
-        expect(await secretManager.GLOBAL_MAX_SECRET_SIZE()).to.equal(globalMaxSecretSize);
+        expect(await secretManager.GLOBAL_MAX_STORE_SIZE()).to.equal(globalMaxStoreSize);
         expect(await secretManager.GLOBAL_MIN_STORE_DURATION()).to.equal(globalMinStoreDuration);
         expect(await secretManager.GLOBAL_MAX_STORE_DURATION()).to.equal(globalMaxStoreDuration);
         expect(await secretManager.ACKNOWLEDGEMENT_TIMEOUT()).to.equal(acknowledgementTimeout);
@@ -165,7 +165,7 @@ describe("SecretManager - Init", function () {
                     constructorArgs: [
                         token,
                         noOfNodesToSelect,
-                        globalMaxSecretSize,
+                        globalMaxStoreSize,
                         globalMinStoreDuration,
                         globalMaxStoreDuration,
                         acknowledgementTimeout,
@@ -193,7 +193,7 @@ describe("SecretManager - Init", function () {
                     constructorArgs: [
                         ZeroAddress,
                         noOfNodesToSelect,
-                        globalMaxSecretSize,
+                        globalMaxStoreSize,
                         globalMinStoreDuration,
                         globalMaxStoreDuration,
                         acknowledgementTimeout,
@@ -220,7 +220,7 @@ describe("SecretManager - Init", function () {
                 constructorArgs: [
                     token,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -236,7 +236,7 @@ describe("SecretManager - Init", function () {
 
         const token2 = addrs[2],
             noOfNodesToSelect2 = 4,
-            globalMaxSecretSize2 = 100,
+            globalMaxStoreSize2 = 100,
             globalMinStoreDuration2 = 1,
             globalMaxStoreDuration2 = 10,
             acknowledgementTimeout2 = 10,
@@ -255,7 +255,7 @@ describe("SecretManager - Init", function () {
                 constructorArgs: [
                     token2,
                     noOfNodesToSelect2,
-                    globalMaxSecretSize2,
+                    globalMaxStoreSize2,
                     globalMinStoreDuration2,
                     globalMaxStoreDuration2,
                     acknowledgementTimeout2,
@@ -271,7 +271,7 @@ describe("SecretManager - Init", function () {
 
         expect(await secretManager.USDC_TOKEN()).to.equal(token2);
         expect(await secretManager.NO_OF_NODES_TO_SELECT()).to.equal(noOfNodesToSelect2);
-        expect(await secretManager.GLOBAL_MAX_SECRET_SIZE()).to.equal(globalMaxSecretSize2);
+        expect(await secretManager.GLOBAL_MAX_STORE_SIZE()).to.equal(globalMaxStoreSize2);
         expect(await secretManager.GLOBAL_MIN_STORE_DURATION()).to.equal(globalMinStoreDuration2);
         expect(await secretManager.GLOBAL_MAX_STORE_DURATION()).to.equal(globalMaxStoreDuration2);
         expect(await secretManager.ACKNOWLEDGEMENT_TIMEOUT()).to.equal(acknowledgementTimeout2);
@@ -296,7 +296,7 @@ describe("SecretManager - Init", function () {
                 constructorArgs: [
                     token,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -316,7 +316,7 @@ describe("SecretManager - Init", function () {
                 constructorArgs: [
                     token,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -337,7 +337,7 @@ testERC165(
     async function (_signers: Signer[], addrs: string[]) {
         let usdcToken = addrs[1],
             noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -358,7 +358,7 @@ testERC165(
                 constructorArgs: [
                     usdcToken,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -477,7 +477,7 @@ describe("SecretManager - Create secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -495,7 +495,7 @@ describe("SecretManager - Create secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -712,7 +712,7 @@ describe("SecretManager - Acknowledge secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -730,7 +730,7 @@ describe("SecretManager - Acknowledge secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1097,7 +1097,7 @@ describe("SecretManager - Alive/Dead checks for secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 8000,
+            globalMaxStoreSize = 8000,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1115,7 +1115,7 @@ describe("SecretManager - Alive/Dead checks for secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1584,7 +1584,7 @@ describe("SecretManager - Update end timestamp of secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1602,7 +1602,7 @@ describe("SecretManager - Update end timestamp of secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1859,7 +1859,7 @@ describe("SecretManager - Terminate secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1877,7 +1877,7 @@ describe("SecretManager - Terminate secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -2071,7 +2071,7 @@ describe("SecretManager - Remove secret", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -2089,7 +2089,7 @@ describe("SecretManager - Remove secret", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -2362,7 +2362,7 @@ describe("SecretManager - Other functions", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -2380,7 +2380,7 @@ describe("SecretManager - Other functions", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -2593,7 +2593,7 @@ describe("SecretManager - Renounce secrets", function () {
         await teeManager.setSecretStore(secretStore.target);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -2611,7 +2611,7 @@ describe("SecretManager - Renounce secrets", function () {
                 constructorArgs: [
                     usdcToken.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,

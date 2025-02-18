@@ -787,7 +787,7 @@ describe("Jobs - Create", function () {
         await usdc_token.connect(signers[1]).approve(jobs.target, 10n ** 6n);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -805,7 +805,7 @@ describe("Jobs - Create", function () {
                 constructorArgs: [
                     usdc_token.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1129,7 +1129,7 @@ describe("Jobs - Output", function () {
         await usdc_token.connect(signers[3]).approve(jobs.target, 10n ** 6n);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1147,7 +1147,7 @@ describe("Jobs - Output", function () {
                 constructorArgs: [
                     usdc_token.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,
@@ -1723,7 +1723,7 @@ describe("Jobs - Slashing", function () {
         await usdc_token.connect(signers[3]).approve(jobs.target, 10n ** 6n);
 
         let noOfNodesToSelect = 3,
-            globalMaxSecretSize = 1e6,
+            globalMaxStoreSize = 1e6,
             globalMinStoreDuration = 10,
             globalMaxStoreDuration = 1e6,
             acknowledgementTimeout = 120,
@@ -1741,7 +1741,7 @@ describe("Jobs - Slashing", function () {
                 constructorArgs: [
                     usdc_token.target,
                     noOfNodesToSelect,
-                    globalMaxSecretSize,
+                    globalMaxStoreSize,
                     globalMinStoreDuration,
                     globalMaxStoreDuration,
                     acknowledgementTimeout,

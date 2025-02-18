@@ -10,14 +10,14 @@ contract SecretManagerMock is Context {
         address _secretStoreAddress
     ) {
         SECRET_STORE = SecretStore(_secretStoreAddress);
-        GLOBAL_MAX_SECRET_SIZE = 1e6;
+        GLOBAL_MAX_STORE_SIZE = 1e6;
         MARK_ALIVE_TIMEOUT = 500;
         STAKING_PAYMENT_POOL = address(1);
     }
 
     SecretStore public immutable SECRET_STORE;
 
-    uint256 public immutable GLOBAL_MAX_SECRET_SIZE;
+    uint256 public immutable GLOBAL_MAX_STORE_SIZE;
 
     uint256 public immutable MARK_ALIVE_TIMEOUT;
 

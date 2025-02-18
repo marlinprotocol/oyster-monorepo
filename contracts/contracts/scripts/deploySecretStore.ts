@@ -145,7 +145,7 @@ async function main() {
     console.log("global env added");
 
     let noOfNodesToSelect = 3,
-        globalMaxSecretSize = 1e6,
+        globalMaxStoreSize = 1e6,
         globalMinStoreDuration = 10,
         globalMaxStoreDuration = 1e6,
         acknowledgementTimeout = 120,
@@ -162,7 +162,7 @@ async function main() {
             constructorArgs: [
                 usdcToken.target,
                 noOfNodesToSelect,
-                globalMaxSecretSize,
+                globalMaxStoreSize,
                 globalMinStoreDuration,
                 globalMaxStoreDuration,
                 acknowledgementTimeout,
@@ -257,7 +257,7 @@ async function markDeadTest() {
     ) as unknown as SecretStore;
 
     let noOfNodesToSelect = 3,
-        globalMaxSecretSize = 1e6,
+        globalMaxStoreSize = 1e6,
         globalMinStoreDuration = 10,
         globalMaxStoreDuration = 1e6,
         acknowledgementTimeout = 120,
@@ -275,7 +275,7 @@ async function markDeadTest() {
             constructorArgs: [
                 usdcToken.target,
                 noOfNodesToSelect,
-                globalMaxSecretSize,
+                globalMaxStoreSize,
                 globalMinStoreDuration,
                 globalMaxStoreDuration,
                 acknowledgementTimeout,
