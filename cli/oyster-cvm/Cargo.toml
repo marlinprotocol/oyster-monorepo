@@ -17,3 +17,4 @@ alloy = {version = "0.9.1", features = ["full"]}
 oyster-sdk = "0.14.2"
 hex = "0.4.3"
 futures-util = "0.3"
+prettytable-rs = "0.10"
