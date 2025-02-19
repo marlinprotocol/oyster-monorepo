@@ -14,10 +14,25 @@
   compose ? ./. + "/docker-compose.yml",
   dockerImages ? [],
 }: let
-  system = systemConfig.system;
-  nitro = nitro-util.lib.${system};
+  # Define the build platform (macOS) and target platform (Linux)
+  buildSystem = builtins.currentSystem;  # This will be x86_64-darwin or aarch64-darwin
+  targetSystem = systemConfig.system;     # This should be x86_64-linux
+  
+  # Setup cross-compilation
+  pkgs = import nixpkgs {
+    system = buildSystem;
+    crossSystem = {
+      config = "x86_64-unknown-linux-gnu";
+      system = targetSystem;
+    };
+  };
+
+  # Use cross-compiled packages
+  crossPkgs = pkgs.pkgsCross.${targetSystem};
+  
+  # Rest of the existing configuration using crossPkgs instead of pkgs
+  nitro = nitro-util.lib.${targetSystem};
   eifArch = systemConfig.eif_arch;
-  pkgs = nixpkgs.legacyPackages."${system}";
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
   keygenX25519 = "${keygen}/bin/keygen-x25519";
@@ -34,7 +49,7 @@
   init = kernels.init;
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
-  app = pkgs.runCommand "app" {} ''
+  app = crossPkgs.runCommand "app" {} ''
     echo Preparing the app folder
     pwd
     mkdir -p $out
@@ -62,7 +77,7 @@
     }
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
-  initPerms = pkgs.runCommand "initPerms" {} ''
+  initPerms = crossPkgs.runCommand "initPerms" {} ''
     cp ${init} $out
     chmod +x $out
   '';
@@ -79,9 +94,19 @@ in {
 
     entrypoint = "/app/setup.sh";
     env = "";
-    copyToRoot = pkgs.buildEnv {
+    copyToRoot = crossPkgs.buildEnv {
       name = "image-root";
-      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq];
+      paths = [
+        app 
+        crossPkgs.busybox 
+        crossPkgs.nettools 
+        crossPkgs.iproute2 
+        crossPkgs.iptables-legacy 
+        crossPkgs.ipset 
+        crossPkgs.cacert 
+        crossPkgs.docker 
+        crossPkgs.jq
+      ];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
   };
