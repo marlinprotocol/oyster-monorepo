@@ -101,6 +101,10 @@ enum Commands {
         #[arg(long)]
         debug: bool,
 
+        /// Disable automatic log streaming in debug mode
+        #[arg(long, requires = "debug")]
+        no_stream: bool,
+
         /// Init params, base64 encoded
         #[arg(long, default_value = "")]
         init_params: String,
@@ -228,6 +232,7 @@ async fn main() -> Result<()> {
             duration_in_minutes,
             job_name,
             debug,
+            no_stream,
             init_params,
             extra_init_params,
         } => {
@@ -239,6 +244,7 @@ async fn main() -> Result<()> {
                 duration: *duration_in_minutes,
                 job_name: job_name.clone(),
                 debug: *debug,
+                no_stream: *no_stream,
                 init_params: init_params.clone(),
                 extra_init_params: extra_init_params.clone(),
             };
