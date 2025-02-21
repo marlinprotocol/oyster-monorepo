@@ -11,8 +11,6 @@
   derive-server,
   init-params-manager,
   kernels,
-  compose ? ./. + "/docker-compose.yml",
-  dockerImages ? [],
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -54,12 +52,6 @@
     cp ${setup} $out/app/setup.sh
     chmod +x $out/app/*
     cp ${supervisorConf} $out/etc/supervisord.conf
-    cp ${compose} $out/app/docker-compose.yml
-    ${
-      if builtins.length dockerImages == 0
-      then "# No docker images provided"
-      else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/app/docker-images/") dockerImages)
-    }
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
