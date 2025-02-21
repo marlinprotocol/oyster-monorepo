@@ -111,19 +111,6 @@ until docker info >/dev/null 2>&1; do
     sleep 1
 done
 
-# Load Docker images if any exist
-if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
-    for image_tar in /app/docker-images/*.tar; do
-        if ! docker load -i "$image_tar"; then
-            echo "[setup.sh] ERROR: Failed to load Docker image from $image_tar"
-            exit 1
-        fi
-        echo "[setup.sh] Docker image loaded successfully from $image_tar."
-    done
-else
-    echo "[setup.sh] No Docker images to load"
-fi
-
 # start docker compose
 /app/supervisord ctl -c /etc/supervisord.conf start compose
 
