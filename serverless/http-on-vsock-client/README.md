@@ -31,15 +31,16 @@ Supported outputs:
 
 ```bash
 $ ./executor-vsock-client --help
-Usage: executor-vsock-client --url <URL> --owner-address <OWNER_ADDRESS> --gas-key <GAS_KEY> --ws-api-key <WS_API_KEY>
+Usage: executor-vsock-client --url <URL> --owner-address <OWNER_ADDRESS> --executor-gas-key <EXECUTOR_GAS_KEY> --store-gas-key <STORE_GAS_KEY> --ws-api-key <WS_API_KEY>
 
 Options:
-  -u, --url <URL>                      url to query
-  -o, --owner-address <OWNER_ADDRESS>  owner address
-  -g, --gas-key <GAS_KEY>              gas key
-  -w, --ws-api-key <WS_API_KEY>        ws api key
-  -h, --help                           Print help
-  -V, --version                        Print version
+  -u, --url <URL>                              url to query
+  -o, --owner-address <OWNER_ADDRESS>          owner address
+  -e, --executor-gas-key <EXECUTOR_GAS_KEY>    executor gas key
+  -s, --store-gas-key <STORE_GAS_KEY           secret store gas key
+  -w, --ws-api-key <WS_API_KEY>                ws api key
+  -h, --help                                   Print help
+  -V, --version                                Print version
 ```
 
 ```bash
@@ -59,7 +60,7 @@ Options:
 ## Example
 
 ```bash
-$ ./executor-vsock-client --url vsock://88:6000/ --owner-address <OWNER_ADDRESS> --gas-key <GAS_KEY> --ws-api-key <WS_API_KEY>
+$ ./executor-vsock-client --url vsock://88:6000/ --owner-address <OWNER_ADDRESS> --executor-gas-key <EXECUTOR_GAS_KEY> --store-gas-key <STORE_GAS_KEY> --ws-api-key <WS_API_KEY>
 ```
 
 ```bash

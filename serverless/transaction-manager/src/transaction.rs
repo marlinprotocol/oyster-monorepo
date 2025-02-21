@@ -353,7 +353,7 @@ impl TxnManager {
             }
 
             let transaction_request = transaction_request
-                .with_gas_limit(transaction.estimated_gas)
+                .with_gas_limit(transaction.estimated_gas + self.gas_limit_increment_amount)
                 .with_gas_price(transaction.gas_price);
 
             let pending_txn = provider.send_transaction(transaction_request).await;

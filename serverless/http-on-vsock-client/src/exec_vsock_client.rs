@@ -14,9 +14,13 @@ struct Cli {
     #[clap(short, long, value_parser)]
     owner_address: String,
 
-    /// gas key
+    /// executor gas key
     #[clap(short, long, value_parser)]
-    gas_key: String,
+    executor_gas_key: String,
+
+    /// secret store gas key
+    #[clap(short, long, value_parser)]
+    store_gas_key: String,
 
     /// ws api key
     #[clap(short, long, value_parser)]
@@ -60,7 +64,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // set mutable config
     let body = json!({
-        "gas_key_hex": cli.gas_key.clone(),
+        "executor_gas_key": cli.executor_gas_key.clone(),
+        "secret_store_gas_key": cli.store_gas_key.clone(),
         "ws_api_key": cli.ws_api_key.clone(),
     })
     .to_string();
@@ -76,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get the config
     resp = client
-        .get((cli.url.clone() + "executor-details").try_into()?)
+        .get((cli.url.clone() + "tee-details").try_into()?)
         .await?;
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let body_str = String::from_utf8(body_bytes.to_vec())?;

@@ -2612,7 +2612,6 @@ dependencies = [
 [[package]]
 name = "multi-block-txns"
 version = "0.1.0"
-source = "git+https://github.com/marlinprotocol/oyster-monorepo?branch=master#675b10d4e8934b2c3ab943a74caf12c7564d5fc2"
 dependencies = [
  "alloy",
  "thiserror 1.0.69",

@@ -51,7 +51,7 @@ Supported outputs:
 
 <b>cgroups v2 setup</b>
 ```
-sudo ./cgroupv2_setup.sh
+sudo ../executor-enclave/cgroupv2_setup.sh
 ```
 To check whether the cgroups were successfully created or not on your system, verify that the output of `ls /sys/fs/cgroup` contains folders `workerd_*`(specifically 20 according to current setup).
 
@@ -79,16 +79,18 @@ Options:
 Configuration file parameters required for running an executor node:
 ```
 {
-    "workerd_runtime_path": // Runtime path where code and config files will be created and executed (workerd binary should be present here),
-    "common_chain_id": // Common chain id,
-    "http_rpc_url": // Http url of the RPC endpoint,
-    "web_socket_url": // Websocket url of the RPC endpoint,
-    "executors_contract_addr": // Executors smart contract address on common chain,
-    "jobs_contract_addr": // Jobs smart contract address on common chain,
-    "code_contract_addr": // User code calldata smart contract address on common chain,
-    "enclave_signer_file": // path to enclave secp256k1 private key file,
-    "execution_buffer_time": // Execution buffer time as configured on common chain (in seconds),
-    "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain
+  "secret_store_config_port": // Secret store configuration port,
+  "workerd_runtime_path": // Runtime path where code and config files will be created and executed (workerd binary should be present here),
+  "secret_store_path": // Secret store path where secret files are stored
+  "common_chain_id": // Common chain id,
+  "http_rpc_url": // Http url of the RPC endpoint,
+  "web_socket_url": // Websocket url of the RPC endpoint,
+  "tee_manager_contract_addr": // TeeManager smart contract address on common chain,
+  "jobs_contract_addr": // Jobs smart contract address on common chain,
+  "code_contract_addr": // User code calldata smart contract address on common chain,
+  "enclave_signer_file": // path to enclave secp256k1 private key file,
+  "execution_buffer_time": // Execution buffer time as configured on common chain (in seconds),
+  "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain
 }
 ```
 Example command to run the executor locally:
@@ -100,7 +102,7 @@ sudo ./target/x86_64-unknown-linux-musl/release/oyster-serverless-executor --vso
 
 For generating `executor-vsock-client`, follow the [README](../http-on-vsock-client/README.md)
 ```shell
-./executor-vsock-client --url vsock://1:6000/ --owner-address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --gas-key 7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6 --ws-api-key ""
+./executor-vsock-client --url vsock://1:6000/ --owner-address {ENCLAVE_OWNER_ADDRESS} --executor-gas-key {EXECUTOR_GAS_KEY} --store-gas-key {SECRET_STORE_GAS_KEY} --ws-api-key ""
 ```
 This will also start the listening of registration event notifications on the common chain inside the enclave node.
 

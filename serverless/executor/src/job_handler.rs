@@ -14,7 +14,8 @@ use scopeguard::defer;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 
-use crate::utils::{AppState, JobOutput, JobsTxnMetadata, JobsTxnType, MAX_OUTPUT_BYTES_LENGTH};
+use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
+use crate::model::{AppState, JobOutput, JobsTxnMetadata, JobsTxnType};
 use crate::workerd;
 use crate::workerd::ServerlessError::*;
 
@@ -29,6 +30,7 @@ use crate::workerd::ServerlessError::*;
 // Execute the job request using workerd runtime and 'cgroup' environment
 pub async fn handle_job(
     job_id: U256,
+    secret_id: U256,
     code_hash: String,
     code_inputs: Bytes,
     user_deadline: u64, // time in millis
@@ -41,7 +43,7 @@ pub async fn handle_job(
     // Execute the job request under the specified user deadline
     let response = timeout(
         Duration::from_millis(user_deadline),
-        execute_job(&code_hash, code_inputs, slug, app_state.clone()),
+        execute_job(secret_id, &code_hash, code_inputs, slug, app_state.clone()),
     )
     .await;
 
@@ -114,6 +116,7 @@ pub async fn handle_job(
 }
 
 async fn execute_job(
+    secret_id: U256,
     code_hash: &String,
     code_inputs: Bytes,
     slug: &String,
@@ -169,8 +172,15 @@ async fn execute_job(
     };
 
     // Create config file in the desired location
-    if let Err(_) =
-        workerd::create_config_file(&code_hash, slug, &app_state.workerd_runtime_path, port).await
+    if let Err(_) = workerd::create_config_file(
+        &app_state.secret_store_path,
+        &secret_id.to_string(),
+        &code_hash,
+        slug,
+        &app_state.workerd_runtime_path,
+        port,
+    )
+    .await
     {
         return None;
     }
@@ -221,6 +231,7 @@ async fn execute_job(
         }
 
         eprintln!("Failed to execute worker service to serve the user code: {stderr_output}");
+
         return None;
     }
 
