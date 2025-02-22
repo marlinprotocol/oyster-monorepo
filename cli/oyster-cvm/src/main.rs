@@ -37,9 +37,6 @@ enum Commands {
         /// Perform Nix checks
         #[arg(short, long)]
         nix: bool,
-        /// Perform all checks
-        #[arg(short, long, default_value = "true", conflicts_with_all = ["docker", "nix"])]
-        all: bool,
     },
     /// Build Oyster CVM Image
     Build {
@@ -189,7 +186,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let result = match &cli.command {
-        Commands::Doctor { docker, nix, all } => commands::doctor::run_doctor(),
+        Commands::Doctor { docker, nix } => {
+            // enable all if nothing is enabled
+            let all = !docker && !nix;
+            commands::doctor::run_doctor(*docker || all, *nix || all)
+        }
         Commands::Build {
             platform,
             docker_compose,

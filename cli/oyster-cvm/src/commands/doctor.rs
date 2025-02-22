@@ -3,34 +3,38 @@ use anyhow::Result;
 use std::process::Command;
 use tracing::{error, info};
 
-pub fn run_doctor() -> Result<()> {
+pub fn run_doctor(docker: bool, nix: bool) -> Result<()> {
     let mut has_error = false;
     let mut error_msg = String::new();
 
-    // Check Docker
-    if let Err(e) = check_dependency(Dependency::Docker) {
-        has_error = true;
-        error_msg.push_str(&format!("{}\n", e));
-    }
-
-    // Check Nix
-    if let Err(e) = check_dependency(Dependency::Nix) {
-        has_error = true;
-        error_msg.push_str(&format!("{}\n", e));
-        error_msg.push_str("Additional Nix checks skipped till Nix check is healthy.\n");
-    } else {
-        // Additinal Nix checks, only if Nix is found
-
-        // Check Nix trusted user
-        if let Err(e) = check_nix_trusted_user() {
+    if docker {
+        // Check Docker
+        if let Err(e) = check_dependency(Dependency::Docker) {
             has_error = true;
             error_msg.push_str(&format!("{}\n", e));
         }
+    }
 
-        // Check Nix experimental features
-        if let Err(e) = check_nix_experimental_features() {
+    if nix {
+        // Check Nix
+        if let Err(e) = check_dependency(Dependency::Nix) {
             has_error = true;
             error_msg.push_str(&format!("{}\n", e));
+            error_msg.push_str("Additional Nix checks skipped till Nix check is healthy.\n");
+        } else {
+            // Additinal Nix checks, only if Nix is found
+
+            // Check Nix trusted user
+            if let Err(e) = check_nix_trusted_user() {
+                has_error = true;
+                error_msg.push_str(&format!("{}\n", e));
+            }
+
+            // Check Nix experimental features
+            if let Err(e) = check_nix_experimental_features() {
+                has_error = true;
+                error_msg.push_str(&format!("{}\n", e));
+            }
         }
     }
 
