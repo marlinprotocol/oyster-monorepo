@@ -109,6 +109,8 @@ impl InitParamsArgs {
             })
             .finalize();
 
+        info!(digest = hex::encode(digest), "Computed digest");
+
         // load pcrs
         // use pcrs of the blue base image by default
         let pcrs = self.pcrs.load().context("Failed to load PCRs")?.unwrap_or((
@@ -190,16 +192,6 @@ impl InitParamsArgs {
 
         Ok(Some(BASE64_STANDARD.encode(json)))
     }
-}
-
-fn has_secrets(init_params: Vec<String>) -> bool {
-    init_params.iter().any(|param| {
-        // extract components
-        let param_components = param.splitn(5, ":").collect::<Vec<_>>();
-        let should_encrypt = param_components[2] == "1";
-
-        should_encrypt
-    })
 }
 
 #[derive(Serialize)]
