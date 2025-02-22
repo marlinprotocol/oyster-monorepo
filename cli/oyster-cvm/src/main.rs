@@ -30,7 +30,17 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Check environment dependencies including Docker & Nix
-    Doctor,
+    Doctor {
+        /// Perform Docker checks
+        #[arg(short, long)]
+        docker: bool,
+        /// Perform Nix checks
+        #[arg(short, long)]
+        nix: bool,
+        /// Perform all checks
+        #[arg(short, long, default_value = "true", conflicts_with_all = ["docker", "nix"])]
+        all: bool,
+    },
     /// Build Oyster CVM Image
     Build {
         /// Platform (amd64 or arm64)
@@ -179,7 +189,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let result = match &cli.command {
-        Commands::Doctor => commands::doctor::run_doctor(),
+        Commands::Doctor { docker, nix, all } => commands::doctor::run_doctor(),
         Commands::Build {
             platform,
             docker_compose,
