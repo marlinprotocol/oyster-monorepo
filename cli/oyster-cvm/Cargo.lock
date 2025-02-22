@@ -2484,9 +2484,9 @@ dependencies = [
 
 [[package]]
 name = "libsodium-sys-stable"
-version = "1.22.1"
+version = "1.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "798a1c6d8c3424c0686ca46f2929d81809b371ef61a68c5d1880570584d32b85"
+checksum = "a7717550bb3ec725f7b312848902d1534f332379b1d575d2347ec265c8814566"
 dependencies = [
  "cc",
  "libc",
@@ -2794,6 +2794,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
+ "libsodium-sys-stable",
  "openssl",
  "oyster-sdk",
  "reqwest",
