@@ -17,18 +17,21 @@ pub fn run_doctor() -> Result<()> {
     if let Err(e) = check_dependency(Dependency::Nix) {
         has_error = true;
         error_msg.push_str(&format!("{}\n", e));
-    }
+        error_msg.push_str("Additional Nix checks skipped till Nix check is healthy.\n");
+    } else {
+        // Additinal Nix checks, only if Nix is found
 
-    // Check Nix trusted user
-    if let Err(e) = check_nix_trusted_user() {
-        has_error = true;
-        error_msg.push_str(&format!("{}\n", e));
-    }
+        // Check Nix trusted user
+        if let Err(e) = check_nix_trusted_user() {
+            has_error = true;
+            error_msg.push_str(&format!("{}\n", e));
+        }
 
-    // Check Nix experimental features
-    if let Err(e) = check_nix_experimental_features() {
-        has_error = true;
-        error_msg.push_str(&format!("{}\n", e));
+        // Check Nix experimental features
+        if let Err(e) = check_nix_experimental_features() {
+            has_error = true;
+            error_msg.push_str(&format!("{}\n", e));
+        }
     }
 
     if has_error {
