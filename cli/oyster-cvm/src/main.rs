@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use args::init_params::InitParamsArgs;
 use clap::{Parser, Subcommand};
 use oyster::attestation::AWS_ROOT_KEY;
 
@@ -108,13 +109,9 @@ enum Commands {
         #[arg(long)]
         debug: bool,
 
-        /// Init params, base64 encoded
-        #[arg(long, default_value = "")]
-        init_params: String,
-
-        /// Extra init params, base64 encoded
-        #[arg(long, default_value = "")]
-        extra_init_params: String,
+        /// Init params
+        #[command(flatten)]
+        init_params: InitParamsArgs,
     },
     /// Verify Oyster Enclave Attestation
     Verify {
@@ -240,7 +237,6 @@ async fn main() -> Result<()> {
             job_name,
             debug,
             init_params,
-            extra_init_params,
         } => {
             let config = DeploymentConfig {
                 image_url: image_url.clone(),
@@ -250,8 +246,10 @@ async fn main() -> Result<()> {
                 duration: *duration_in_minutes,
                 job_name: job_name.clone(),
                 debug: *debug,
-                init_params: init_params.clone(),
-                extra_init_params: extra_init_params.clone(),
+                init_params: init_params
+                    .load()
+                    .context("Failed to load init params")?
+                    .unwrap_or("".into()),
             };
             commands::deploy::deploy_oyster_instance(config, wallet_private_key, operator).await
         }
