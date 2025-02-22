@@ -17,7 +17,7 @@ use super::pcr::PcrArgs;
 #[group(multiple = true)]
 pub struct InitParamsArgs {
     /// Base64 encoded init params
-    #[arg(short = 'e', long, exclusive = true)]
+    #[arg(short = 'e', long, conflicts_with = "init_params")]
     pub init_params_encoded: Option<String>,
 
     /// Init params list, supports the following forms:
