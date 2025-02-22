@@ -2791,6 +2791,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "base64",
  "clap",
  "futures-util",
  "hex",
