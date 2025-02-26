@@ -150,7 +150,7 @@ contract MarketV1 is
         address provider;
         uint256 rate;
         uint256 balance;
-        uint256 lastSettled;
+        uint256 paymentSettledTimestamp; // payment has been settled up to this timestamp
     }
 
     mapping(bytes32 => Job) public jobs;
@@ -238,7 +238,7 @@ contract MarketV1 is
         address _provider = jobs[_job].provider;
         uint256 _rate = jobs[_job].rate;
         uint256 _balance = jobs[_job].balance;
-        uint256 _lastSettled = jobs[_job].lastSettled;
+        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
 
         uint256 _usageDuration = block.timestamp - _lastSettled;
         uint256 _amount = _calcAmountUsed(_rate, _usageDuration);
@@ -253,13 +253,13 @@ contract MarketV1 is
         _withdraw(_provider, _amount);
 
         jobs[_job].balance = _balance;
-        jobs[_job].lastSettled = block.timestamp;
+        jobs[_job].paymentSettledTimestamp = block.timestamp;
 
         emit JobSettled(_job, _amount);
     }
 
     function _jobClose(bytes32 _job) internal {
-        uint256 _lastSettled = jobs[_job].lastSettled;
+        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
         if(block.timestamp > _lastSettled) {
             _jobSettle(_job);
         }
@@ -286,7 +286,7 @@ contract MarketV1 is
     }
 
     function _jobWithdraw(bytes32 _job, address _to, uint256 _amount) internal {
-        uint256 lastSettled = jobs[_job].lastSettled;
+        uint256 lastSettled = jobs[_job].paymentSettledTimestamp;
         if(block.timestamp > lastSettled) {
             _jobSettle(_job);
         }
@@ -308,7 +308,7 @@ contract MarketV1 is
     }
 
     function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
-        uint256 _lastSettled = jobs[_job].lastSettled;
+        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
         if (block.timestamp > _lastSettled) {
             _jobSettle(_job);
         }
@@ -356,7 +356,7 @@ contract MarketV1 is
 
     function jobSettle(bytes32 _job) external {
         require(jobs[_job].owner != address(0), "job not found");
-        require(block.timestamp > jobs[_job].lastSettled, "nothing to settle");
+        require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle");
         return _jobSettle(_job);
     }
 
@@ -373,11 +373,6 @@ contract MarketV1 is
     function jobWithdraw(bytes32 _job, uint256 _amount) external onlyJobOwner(_job) {
         require(_amount > 0, "invalid amount");
         return _jobWithdraw(_job, _msgSender(), _amount);
-    }
-
-    function jobReviseRateInitiate(bytes32 _job, uint256 _newRate) external onlyJobOwner(_job) {
-        _lock(RATE_LOCK_SELECTOR, _job, _newRate);
-        emit JobReviseRateInitiated(_job, _newRate);
     }
 
     function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyJobOwner(_job) {
