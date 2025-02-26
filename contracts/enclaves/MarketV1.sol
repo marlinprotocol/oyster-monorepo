@@ -180,7 +180,7 @@ contract MarketV1 is
     event JobClosed(bytes32 indexed job);
     event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount); // TODO: is `from` needed?
     event JobWithdrawn(bytes32 indexed job, address indexed to, uint256 amount); // TODO: is `to` needed?
-    event JobReviseRate(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
+    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
 
     modifier onlyJobOwner(bytes32 _job) {
@@ -320,7 +320,7 @@ contract MarketV1 is
         // update rate and paymentSettledTimestamp
         uint256 paymentSettledTimestamp = block.timestamp + shutdownDelay;
         jobs[_job].rate = _newRate;
-        emit JobReviseRate(_job, _newRate, paymentSettledTimestamp);
+        emit JobRateRevised(_job, _newRate, paymentSettledTimestamp);
     }
 
     function _jobMetadataUpdate(bytes32 _job, string memory _metadata) internal {
@@ -382,6 +382,11 @@ contract MarketV1 is
 
     function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
         return _jobMetadataUpdate(_job, _metadata);
+    }
+
+
+    function getMaxRunTime() external view returns (uint256) {
+
     }
 
     //-------------------------------- Jobs end --------------------------------//
