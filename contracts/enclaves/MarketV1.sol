@@ -163,7 +163,8 @@ contract MarketV1 is
 
     uint256[46] private __gap_3;
 
-    event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
+    event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken); // TODO: is oldToken needed?
+    event ShutdownDelayUpdated(uint256 shutdownDelay);
 
     // TODO: add PaymentSettled timestamp
     event JobOpened(
@@ -175,15 +176,12 @@ contract MarketV1 is
         uint256 balance,
         uint256 paymentSettledTimestamp
     );
-    event JobSettled(bytes32 indexed job, uint256 amount, uint256 timestamp);
+    event JobSettled(bytes32 indexed job, uint256 amount);
     event JobClosed(bytes32 indexed job);
-    event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount);
-    event JobWithdrew(bytes32 indexed job, address indexed to, uint256 amount);
-    event JobReviseRateInitiated(bytes32 indexed job, uint256 newRate);
-    event JobReviseRateCancelled(bytes32 indexed job);
+    event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount); // TODO: is `from` needed?
+    event JobWithdrawn(bytes32 indexed job, address indexed to, uint256 amount); // TODO: is `to` needed?
     event JobReviseRate(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
-    event ShutdownDelayUpdated(uint256 shutdownDelay);
 
     modifier onlyJobOwner(bytes32 _job) {
         require(jobs[_job].owner == _msgSender(), "only job owner");
@@ -257,7 +255,7 @@ contract MarketV1 is
         jobs[_job].balance = _balance;
         jobs[_job].lastSettled = block.timestamp;
 
-        emit JobSettled(_job, _amount, block.timestamp);
+        emit JobSettled(_job, _amount);
     }
 
     function _jobClose(bytes32 _job) internal {
@@ -306,7 +304,7 @@ contract MarketV1 is
         jobs[_job].balance -= _amount;
         _withdraw(_to, _amount);
 
-        emit JobWithdrew(_job, _to, _amount);
+        emit JobWithdrawn(_job, _to, _amount);
     }
 
     function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
