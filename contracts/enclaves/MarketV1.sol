@@ -166,7 +166,6 @@ contract MarketV1 is
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken); // TODO: is oldToken needed?
     event ShutdownDelayUpdated(uint256 shutdownDelay);
 
-    // TODO: add PaymentSettled timestamp
     event JobOpened(
         bytes32 indexed job,
         string metadata,
@@ -182,6 +181,11 @@ contract MarketV1 is
     event JobWithdrawn(bytes32 indexed job, address indexed to, uint256 amount); // TODO: is `to` needed?
     event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
+
+    modifier onlyExistingJob(bytes32 _job) {
+        require(jobs[_job].owner != address(0), "job not found");
+        _;
+    }
 
     modifier onlyJobOwner(bytes32 _job) {
         require(jobs[_job].owner == _msgSender(), "only job owner");
@@ -354,28 +358,27 @@ contract MarketV1 is
         return _jobOpen(_metadata, _msgSender(), _provider, _rate, _balance);
     }
 
-    function jobSettle(bytes32 _job) external {
+    function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
         require(jobs[_job].owner != address(0), "job not found");
         require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle");
         return _jobSettle(_job);
     }
 
-    function jobClose(bytes32 _job) external onlyJobOwner(_job) {
+    function jobClose(bytes32 _job) external onlyExistingJob(_job) onlyJobOwner(_job) {
         return _jobClose(_job);
     }
 
-    function jobDeposit(bytes32 _job, uint256 _amount) external {
-        require(jobs[_job].owner != address(0), "job not found");
+    function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
         require(_amount > 0, "invalid amount");
         return _jobDeposit(_job, _msgSender(), _amount);
     }
 
-    function jobWithdraw(bytes32 _job, uint256 _amount) external onlyJobOwner(_job) {
+    function jobWithdraw(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) onlyJobOwner(_job) {
         require(_amount > 0, "invalid amount");
         return _jobWithdraw(_job, _msgSender(), _amount);
     }
 
-    function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyJobOwner(_job) {
+    function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
         require(jobs[_job].rate != _newRate, "no rate change");
         return _jobReviseRate(_job, _newRate);
     }
