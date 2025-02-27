@@ -232,15 +232,15 @@ contract MarketV1 is
 
     
     /**
-     * @dev     block.timestamp > lastSettled should be checked before calling this function
+     * @dev     block.timestamp > paymentSettleds should be checked before calling this function
      */
     function _jobSettle(bytes32 _job) internal {
         address _provider = jobs[_job].provider;
         uint256 _rate = jobs[_job].rate;
         uint256 _balance = jobs[_job].balance;
-        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
+        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
 
-        uint256 _usageDuration = block.timestamp - _lastSettled;
+        uint256 _usageDuration = block.timestamp - _paymentSettled;
         uint256 _amount = _calcAmountUsed(_rate, _usageDuration);
         if (_amount > _balance) {
             _amount = _balance; // withdraw all if balance is insufficient
@@ -259,13 +259,13 @@ contract MarketV1 is
     }
 
     function _jobClose(bytes32 _job) internal {
-        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > _lastSettled) {
+        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
+        if(block.timestamp > _paymentSettled) {
             _jobSettle(_job);
         }
 
         // deduct shutdown delay cost
-        _deductShutdownDelayCost(_job, jobs[_job].rate, _lastSettled);
+        _deductShutdownDelayCost(_job, jobs[_job].rate, _paymentSettled);
 
         // refund leftover balance
         uint256 _balance = jobs[_job].balance;
@@ -286,13 +286,13 @@ contract MarketV1 is
     }
 
     function _jobWithdraw(bytes32 _job, address _to, uint256 _amount) internal {
-        uint256 lastSettled = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > lastSettled) {
+        uint256 paymentSettled = jobs[_job].paymentSettledTimestamp;
+        if(block.timestamp > paymentSettled) {
             _jobSettle(_job);
         }
 
         // calculate shutdown delay cost
-        uint256 timeDelta = _calcTimeDelta(lastSettled);
+        uint256 timeDelta = _calcTimeDelta(paymentSettled);
         uint256 shutdownDelayCost = _calcAmountUsed(jobs[_job].rate, timeDelta);
         require(jobs[_job].balance > shutdownDelayCost, "not enough balance");
 
@@ -308,14 +308,14 @@ contract MarketV1 is
     }
 
     function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
-        uint256 _lastSettled = jobs[_job].paymentSettledTimestamp;
-        if (block.timestamp > _lastSettled) {
+        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
+        if (block.timestamp > _paymentSettled) {
             _jobSettle(_job);
         }
 
         // deduct shutdown delay cost
         uint256 rate = _max(jobs[_job].rate, _newRate);
-        _deductShutdownDelayCost(_job, rate, _lastSettled);
+        _deductShutdownDelayCost(_job, rate, _paymentSettled);
 
         // update rate and paymentSettledTimestamp
         uint256 paymentSettledTimestamp = block.timestamp + shutdownDelay;
@@ -328,16 +328,16 @@ contract MarketV1 is
         emit JobMetadataUpdated(_job, _metadata);
     }
 
-    function _calcTimeDelta(uint256 _lastSettled) internal view returns (uint256) {
-        return block.timestamp < _lastSettled ? (block.timestamp + shutdownDelay) - _lastSettled : shutdownDelay;
+    function _calcTimeDelta(uint256 _paymentSettled) internal view returns (uint256) {
+        return block.timestamp < _paymentSettled ? (block.timestamp + shutdownDelay) - _paymentSettled : shutdownDelay;
     }
 
     function _calcAmountUsed(uint256 _rate, uint256 _usageDuration) internal pure returns (uint256) {
         return (_rate * _usageDuration + 10 ** EXTRA_DECIMALS - 1) / 10 ** EXTRA_DECIMALS;
     }
 
-    function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _lastSettled) internal {
-        uint256 timeDelta = _calcTimeDelta(_lastSettled);
+    function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
+        uint256 timeDelta = _calcTimeDelta(_paymentSettled);
         uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
         require(jobs[_job].balance >= shutdownDelayCost, "not enough balance");
     
@@ -383,11 +383,6 @@ contract MarketV1 is
     function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
         return _jobMetadataUpdate(_job, _metadata);
     }
-
-
-    function getMaxRunTime() external view returns (uint256) {
-
-    }
-
+    
     //-------------------------------- Jobs end --------------------------------//
 }
