@@ -224,6 +224,8 @@ contract MarketV1 is
         require(_balance > shutdownDelayCost, "not enough balance"); // TODO: maybe force shutdownDelayCost + 1min?
 
         _deposit(_owner, _balance);
+        
+        _balance -= shutdownDelayCost;
         _withdraw(_provider, shutdownDelayCost); // shutdown delay is paid upfront
 
         uint256 _jobIndex = jobIndex;
@@ -234,7 +236,6 @@ contract MarketV1 is
         emit JobOpened(_job, _metadata, _owner, _provider, _rate, _balance, block.timestamp + shutdownDelay);
     }
 
-    
     /**
      * @dev     block.timestamp > paymentSettleds should be checked before calling this function
      */
@@ -253,7 +254,6 @@ contract MarketV1 is
         } else {
             _balance -= _amount;
         }
-
         _withdraw(_provider, _amount);
 
         jobs[_job].balance = _balance;
@@ -263,18 +263,19 @@ contract MarketV1 is
     }
 
     function _jobClose(bytes32 _job) internal {
-        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > _paymentSettled) {
+        uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
+        if(block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
         }
 
         // deduct shutdown delay cost
-        _deductShutdownDelayCost(_job, jobs[_job].rate, _paymentSettled);
+        _deductShutdownDelayCost(_job, jobs[_job].rate, paymentSettledTimestamp);
 
         // refund leftover balance
         uint256 _balance = jobs[_job].balance;
         if (_balance > 0) {
             address _owner = jobs[_job].owner;
+            jobs[_job].balance = 0;
             _withdraw(_owner, _balance);
         }
 
@@ -290,19 +291,19 @@ contract MarketV1 is
     }
 
     function _jobWithdraw(bytes32 _job, address _to, uint256 _amount) internal {
-        uint256 paymentSettled = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > paymentSettled) {
+        uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
+        if(block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
         }
 
         // calculate shutdown delay cost
-        uint256 timeDelta = _calcTimeDelta(paymentSettled);
+        uint256 timeDelta = _calcTimeDelta(paymentSettledTimestamp);
         uint256 shutdownDelayCost = _calcAmountUsed(jobs[_job].rate, timeDelta);
-        require(jobs[_job].balance > shutdownDelayCost, "not enough balance");
+        require(jobs[_job].balance > shutdownDelayCost, "balance below shutdown delay cost");
 
         // calculate max withdrawable amount
         uint256 maxWithdrawableAmount = jobs[_job].balance - shutdownDelayCost;
-        require(_amount <= maxWithdrawableAmount, "not enough balance");
+        require(_amount <= maxWithdrawableAmount, "amount exceeds max withdrawable amount");
         
         // withdraw
         jobs[_job].balance -= _amount;
@@ -312,19 +313,20 @@ contract MarketV1 is
     }
 
     function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
-        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
-        if (block.timestamp > _paymentSettled) {
+        uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
+        if (block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
         }
 
         // deduct shutdown delay cost
         uint256 rate = _max(jobs[_job].rate, _newRate);
-        _deductShutdownDelayCost(_job, rate, _paymentSettled);
+        _deductShutdownDelayCost(_job, rate, paymentSettledTimestamp);
 
         // update rate and paymentSettledTimestamp
-        uint256 paymentSettledTimestamp = block.timestamp + shutdownDelay;
         jobs[_job].rate = _newRate;
-        emit JobRateRevised(_job, _newRate, paymentSettledTimestamp);
+        uint256 paymentSettledTimestampNew = block.timestamp + shutdownDelay;
+        jobs[_job].paymentSettledTimestamp = paymentSettledTimestampNew;
+        emit JobRateRevised(_job, _newRate, paymentSettledTimestampNew);
     }
 
     function _jobMetadataUpdate(bytes32 _job, string memory _metadata) internal {
@@ -332,8 +334,8 @@ contract MarketV1 is
         emit JobMetadataUpdated(_job, _metadata);
     }
 
-    function _calcTimeDelta(uint256 _paymentSettled) internal view returns (uint256) {
-        return block.timestamp < _paymentSettled ? (block.timestamp + shutdownDelay) - _paymentSettled : shutdownDelay;
+    function _calcTimeDelta(uint256 _paymentSettledTimestamp) internal view returns (uint256) {
+        return block.timestamp < _paymentSettledTimestamp ? (block.timestamp + shutdownDelay) - _paymentSettledTimestamp : shutdownDelay;
     }
 
     function _calcAmountUsed(uint256 _rate, uint256 _usageDuration) internal pure returns (uint256) {
@@ -343,7 +345,7 @@ contract MarketV1 is
     function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
         uint256 timeDelta = _calcTimeDelta(_paymentSettled);
         uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
-        require(jobs[_job].balance >= shutdownDelayCost, "not enough balance");
+        require(jobs[_job].balance >= shutdownDelayCost, "balance below shutdown delay cost");
     
         jobs[_job].balance -= shutdownDelayCost;
         _withdraw(jobs[_job].provider, shutdownDelayCost);
@@ -361,30 +363,30 @@ contract MarketV1 is
     function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
         require(jobs[_job].owner != address(0), "job not found");
         require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle");
-        return _jobSettle(_job);
+        _jobSettle(_job);
     }
 
     function jobClose(bytes32 _job) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        return _jobClose(_job);
+        _jobClose(_job);
     }
 
     function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
         require(_amount > 0, "invalid amount");
-        return _jobDeposit(_job, _msgSender(), _amount);
+        _jobDeposit(_job, _msgSender(), _amount);
     }
 
     function jobWithdraw(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) onlyJobOwner(_job) {
         require(_amount > 0, "invalid amount");
-        return _jobWithdraw(_job, _msgSender(), _amount);
+        _jobWithdraw(_job, _msgSender(), _amount);
     }
 
     function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
         require(jobs[_job].rate != _newRate, "no rate change");
-        return _jobReviseRate(_job, _newRate);
+        _jobReviseRate(_job, _newRate);
     }
 
     function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
-        return _jobMetadataUpdate(_job, _metadata);
+        _jobMetadataUpdate(_job, _metadata);
     }
     
     //-------------------------------- Jobs end --------------------------------//
