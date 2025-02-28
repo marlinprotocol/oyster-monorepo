@@ -15,6 +15,7 @@ The repository is organized into projects:
 - [contracts/contracts](./contracts/contracts/): Most of the Oyster contracts are included here.
 - [contracts/contracts-foundry](./contracts/contracts-foundry/): Contains KMS related contracts.
 - [contracts/indexer](./contracts/indexer/): Indexer for the Oyster contracts.
+- [enclaves/blue](./enclaves/blue/): Base image to be used for docker based deployments.
 - [initialization/init-params-manager](./initialization/init-params-manager/): Encoder and decoder for structured initialization parameters.
 - [initialization/init-server](./initialization/init-server/): Server that provides data endpoints over vsocks during enclave initialization.
 - [initialization/vet](./initialization/vet/): Curl-like utility that makes http queries over vsocks instead of TCP sockets.

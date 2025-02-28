@@ -6,8 +6,8 @@ A command line utility to manage Oyster CVM lifecycle: build, upload, deploy and
 
 ## Prerequisites
 
-- Docker
-- Nix
+- Docker (optional - required only for custom builds)
+- Nix (optional - required only for custom builds)
 - Git (for fetching flakes)
 
 ## Installation
@@ -20,6 +20,8 @@ cd cli/oyster-cvm
 cargo build --release
 ```
 
+Supports both Linux and MacOS builds.
+
 ## Usage
 
 ### View help
@@ -31,11 +33,14 @@ oyster-cvm --help
 ### Commands
 
 #### `doctor`
+Checks environment dependencies (optional). You can control which checks to run.
 
-Checks if Docker and Nix are installed.
+Optional args:
+- `--check-docker`: Check if Docker is installed
+- `--check-nix`: Check if Nix is installed
 
 #### `build`
-Builds an oyster-cvm image.
+Builds an oyster-cvm image. Only needed for custom enclave images - you can use the base image for standard deployments.
 
 Required args:
 - `--platform` (amd64 or arm64)
@@ -64,6 +69,7 @@ Optional args:
 - `--pcr0` (-0): PCR0 value
 - `--pcr1` (-1): PCR1 value
 - `--pcr2` (-2): PCR2 value
+- `--pcr-preset`: Use predefined PCR values for known images
 - `--attestation-port` (-p): Attestation port (default: 1300)
 - `--max-age` (-a): Maximum age of attestation in milliseconds (default: 300000)
 - `--timestamp` (-t): Attestation timestamp in milliseconds (default: 0)
@@ -73,23 +79,35 @@ Optional args:
 Deploys an Oyster CVM instance.
 
 Required args:
-- `--image-url`: URL of the enclave image
-- `--region`: Region for deployment
-- `--wallet-private-key`: Wallet private key for transaction signing
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
 - `--operator`: Operator address
-- `--instance-type`: Instance type (e.g. "m5a.2xlarge")
-- `--duration-in-minutes`: Duration in minutes
 
 Optional args:
+- `--image-url`: URL of the enclave image (defaults to base image)
+- `--region`: Region for deployment (defaults to us-east-1)
+- `--instance-type`: Instance type (defaults to m5a.2xlarge)
+- `--duration-in-minutes`: Duration in minutes
 - `--bandwidth`: Bandwidth in KBps (default: 10)
 - `--job-name`: Job name
 - `--debug`: Start enclave in debug mode
+- `--docker-compose`: Path to custom docker-compose.yml file
+
+#### `update`
+Updates an existing Oyster CVM job's metadata.
+
+Required args:
+- `--job-id`: ID of the job to update
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+
+Optional args:
+- `--image-url`: New image URL to update to
+- `--debug`: Update debug mode setting
 
 #### `logs`
 Streams logs from an Oyster CVM instance.
 
 Required args:
-- `--ip` (-i): IP address of the instance (required)
+- `--ip` (-i): IP address of the instance
 
 Optional args:
 - `--start-from` (-s): Optional log ID to start streaming from
@@ -99,37 +117,41 @@ Optional args:
 ### Example
 
 ```bash
-# Check system requirements
-./oyster-cvm doctor
+# Check system requirements (optional)
+./oyster-cvm doctor --check-docker --check-nix
 # Sample output:
 [INFO] Docker is installed ✓
 [INFO] Nix is installed ✓
 
-# Build an oyster cvm image
+# Deploy using base image (quickstart)
+./oyster-cvm deploy \
+  --wallet-private-key-file ./key.txt \
+  --operator "0x..." \
+  --duration-in-minutes 60 \
+  --job-name "my-oyster-job"
+
+# Build a custom image (optional)
 ./oyster-cvm build \
   --platform amd64 \
   --docker-compose ./docker-compose.yml \
-  --docker-images ./image1.tar ./image2.tar \
   --output ./result
 # Generates a folder "result" with files
 # image.eif  log.txt  pcr.json
 
-# Upload image to IPFS using Pinata
+# Upload custom image to IPFS
 ./oyster-cvm upload --file ./result/image.eif
 # Sample output:
 [INFO] Successfully uploaded to Pinata: https://gateway.pinata.cloud/ipfs/Qm...
 
-
-# Deploy an encalve
+# Deploy custom image
 ./oyster-cvm deploy \
   --image-url "ipfs://Qm..." \
-  --region "us-east-1" \
-  --wallet-private-key "your-private-key" \
+  --wallet-private-key-file ./key.txt \
   --operator "0x..." \
   --instance-type "m5a.2xlarge" \
   --duration-in-minutes 60 \
   --bandwidth 200 \
-  --job-name "my-oyster-job" \
+  --job-name "my-custom-job" \
   --debug
 
 # Sample output:
@@ -149,12 +171,24 @@ Optional args:
 [INFO] Attestation check successful
 [INFO] Enclave is ready! IP address: 192.168.1.100
 
-# Verify an enclave
+# Update an existing job
+./oyster-cvm update \
+  --job-id "0x000...37a" \
+  --wallet-private-key-file ./key.txt \
+  --image-url "ipfs://Qm..." \
+  --debug true
+
+# Verify an enclave using PCR preset
+./oyster-cvm verify \
+  --enclave-ip 192.168.1.100 \
+  --pcr-preset base-image
+
+# Or verify with custom PCR values
 ./oyster-cvm verify \
   --enclave-ip 192.168.1.100 \
   --pcr0 pcr0_value \
   --pcr1 pcr1_value \
-  --pcr2 pcr2_value \
+  --pcr2 pcr2_value
 
 # Sample output:
 [INFO] Connecting to attestation endpoint: http://192.168.1.100:1300/attestation/raw
