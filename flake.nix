@@ -193,6 +193,7 @@
         tcp-proxy = networking.tcp-proxy.compressed;
         attestation-server = attestation.server.compressed;
         executor = serverless.executor.compressed;
+        secret-store = serverless.secret-store.compressed;
         kernels = kernels.serverless;
         workerd = serverless.workerd;
       };

@@ -14,11 +14,12 @@ use k256::ecdsa::SigningKey;
 use tokio::fs;
 
 use serverless::cgroups::Cgroups;
+use serverless::model::{AppState, ConfigManager};
 use serverless::node_handler::{
-    export_signed_registration_message, get_executor_details, index, inject_immutable_config,
+    export_signed_registration_message, get_tee_details, index, inject_immutable_config,
     inject_mutable_config,
 };
-use serverless::utils::{load_abi_from_file, AppState, ConfigManager};
+use serverless::utils::load_abi_from_file;
 use tokio_vsock::VsockListener;
 
 // EXECUTOR CONFIGURATION PARAMETERS
@@ -43,7 +44,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
     let config_manager = ConfigManager::new(&args.config_file);
-    let config = config_manager.load_config().unwrap();
+    let mut config = config_manager.load_config().unwrap();
 
     // Initialize the 'cgroups' available inside the enclave to execute user code
     let cgroups = Cgroups::new().context("Failed to retrieve cgroups")?;
@@ -70,7 +71,7 @@ async fn main() -> Result<()> {
         .parse::<Uri>()
         .context("Invalid web_socket_url format")?;
     if !config.web_socket_url.ends_with('/') {
-        return Err(anyhow!("web_socket_url should end with a '/'"));
+        config.web_socket_url.push('/');
     }
 
     let enclave_address = public_key_to_address(&enclave_signer_key.verifying_key());
@@ -79,12 +80,14 @@ async fn main() -> Result<()> {
     let app_data = AppState {
         job_capacity: cgroups.free.len(),
         cgroups: Arc::new(Mutex::new(cgroups)),
+        secret_store_config_port: config.secret_store_config_port,
         workerd_runtime_path: config.workerd_runtime_path,
+        secret_store_path: config.secret_store_path,
         execution_buffer_time: config.execution_buffer_time,
         common_chain_id: config.common_chain_id,
         http_rpc_url: config.http_rpc_url,
         ws_rpc_url: Arc::new(RwLock::new(config.web_socket_url)),
-        executors_contract_addr: config.executors_contract_addr,
+        tee_manager_contract_addr: config.tee_manager_contract_addr,
         jobs_contract_addr: config.jobs_contract_addr,
         code_contract_addr: config.code_contract_addr,
         num_selected_executors: config.num_selected_executors,
@@ -94,6 +97,7 @@ async fn main() -> Result<()> {
         mutable_params_injected: Arc::new(Mutex::new(false)),
         enclave_registered: Arc::new(AtomicBool::new(false)),
         events_listener_active: Arc::new(Mutex::new(false)),
+        enclave_draining: Arc::new(AtomicBool::new(false)),
         enclave_owner: Arc::new(Mutex::new(H160::zero())),
         http_rpc_client: Arc::new(Mutex::new(None)),
         job_requests_running: Arc::new(Mutex::new(HashSet::new())),
@@ -107,7 +111,7 @@ async fn main() -> Result<()> {
         .route("/", get(index))
         .route("/immutable-config", post(inject_immutable_config))
         .route("/mutable-config", post(inject_mutable_config))
-        .route("/executor-details", get(get_executor_details))
+        .route("/tee-details", get(get_tee_details))
         .route(
             "/signed-registration-message",
             get(export_signed_registration_message),

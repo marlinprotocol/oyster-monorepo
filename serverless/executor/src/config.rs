@@ -1,6 +1,6 @@
 use config::{self, ConfigError, File};
 
-use crate::utils::{Config, ConfigManager};
+use crate::model::{Config, ConfigManager};
 
 impl ConfigManager {
     pub fn new(path: &String) -> ConfigManager {
