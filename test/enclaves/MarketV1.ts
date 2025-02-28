@@ -11,112 +11,59 @@ import { testAdminRole } from "../helpers/rbac";
 
 declare module "ethers" {
 	interface BigNumber {
-		e12(this: BigNumber): BigNumber;
+    e6(this: BigNumber): BigNumber;
+    e12(this: BigNumber): BigNumber;
+    e16(this: BigNumber): BigNumber;
+    e18(this: BigNumber): BigNumber;
 	}
 }
-BN.prototype.e12 = function() {
-	return this.mul(BN.from(10).pow(12));
-};
 
+BN.prototype.e6 = function () {  
+  return this.mul(BN.from(10).pow(6));
+};
+BN.prototype.e12 = function() {
+  return this.mul(BN.from(10).pow(12));
+};
+BN.prototype.e16 = function() {
+  return this.mul(BN.from(10).pow(16));
+};
+BN.prototype.e18 = function() {
+  return this.mul(BN.from(10).pow(18));
+};
 
 const RATE_LOCK = ethers.utils.id("RATE_LOCK");
 const SELECTORS = [RATE_LOCK];
 const WAIT_TIMES: number[] = [600];
 
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
+const ONE_MINUTE = 60;
+const TWO_MINUTES = 60 * 2;
+const FIVE_MINUTES = 60 * 5;
+const SHUTDOWN_DELAY = FIVE_MINUTES;
+const SIGNER1_INITIAL_FUND = BN.from(1000).e6(); // 1000 USDC
+const INITIAL_TIMESTAMP = Math.floor(Date.now() / 1000) + 86400;
 
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-	});
+const JOB_RATE_1 = BN.from(1).e16();
 
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
+const calcShutdownDelayCost = (rate: BN) => {
+	return calcAmountToPay(rate, SHUTDOWN_DELAY);
+};
 
-	it("deploys with initialization disabled", async function() {
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1 = await MarketV1.deploy();
+const calcAmountToPay = (rate: BN, duration: number) => {
+  return rate.mul(BN.from(duration)).add(10 ** 12 - 1).div(10 ** 12);
+}
 
-		await expect(
-			marketv1.initialize(addrs[0], addrs[11], SELECTORS, WAIT_TIMES),
-		).to.be.revertedWith("Initializable: contract is already initialized");
-	});
-
-	it("deploys as proxy and initializes", async function() {
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1 = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-
-		await Promise.all(
-			SELECTORS.map(async (s, idx) => {
-				expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
-			}),
-		);
-		expect(
-			await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
-		).to.be.true;
-		expect(await marketv1.token()).to.equal(addrs[11]);
-	});
-
-	it("does not initialize with mismatched lengths", async function() {
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		await expect(
-			upgrades.deployProxy(
-				MarketV1,
-				[addrs[0], addrs[11], SELECTORS, [...WAIT_TIMES, 0]],
-				{ kind: "uups" },
-			),
-		).to.be.reverted;
-	});
-
-	it("upgrades", async function() {
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1 = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		await upgrades.upgradeProxy(marketv1.address, MarketV1, { kind: "uups" });
-
-		await Promise.all(
-			SELECTORS.map(async (s, idx) => {
-				expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
-			}),
-		);
-		expect(
-			await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
-		).to.be.true;
-		expect(await marketv1.token()).to.equal(addrs[11]);
-	});
-
-	it("does not upgrade without admin", async function() {
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1 = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-
-		await expect(
-			upgrades.upgradeProxy(marketv1.address, MarketV1.connect(signers[1]), {
-				kind: "uups",
-			}),
-		).to.be.revertedWith("only admin");
-	});
-});
+const usdc = (number: number) => {
+  return BN.from(number).e6();
+};
 
 testERC165(
-	"MarketV1",
+	"MarketV1 ERC165",
 	async function(_signers: Signer[], addrs: string[]) {
 		const MarketV1 = await ethers.getContractFactory("MarketV1");
 		const marketv1 = await upgrades.deployProxy(
 			MarketV1,
 			[addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
+			{ kind: "uups", unsafeAllow: ["missing-initializer-call"] },
 		);
 		return marketv1;
 	},
@@ -135,1468 +82,628 @@ testERC165(
 	},
 );
 
-testAdminRole("MarketV1", async function(_signers: Signer[], addrs: string[]) {
+testAdminRole("MarketV1 Admin Role", async function(_signers: Signer[], addrs: string[]) {
 	const MarketV1 = await ethers.getContractFactory("MarketV1");
 	const marketv1 = await upgrades.deployProxy(
 		MarketV1,
 		[addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
-		{ kind: "uups" },
+		{ kind: "uups", unsafeAllow: ["missing-initializer-call"] },
 	);
 	return marketv1;
 });
 
-describe("MarketV1", function() {
+describe("MarketV1", function () {
 	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
+  let addrs: string[];
+  let marketv1: MarketV1;
+  let pond: Contract;
 
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
+  let user: Signer;
+  let provider: Signer;
 
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
+  before(async function () {
+    signers = await ethers.getSigners();
+    addrs = await Promise.all(signers.map((a) => a.getAddress()));
 
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-	});
+    user = signers[1];
+    provider = signers[2];
+    
+    const Pond = await ethers.getContractFactory("Pond");
+    pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
+      kind: "uups",
+      unsafeAllow: ["missing-initializer-call"],
+    });
+    await pond.transfer(addrs[1], SIGNER1_INITIAL_FUND);
+    
+    const MarketV1 = await ethers.getContractFactory("MarketV1");
+    const marketv1Contract = await upgrades.deployProxy(
+      MarketV1,
+      [addrs[0], pond.address, SELECTORS, WAIT_TIMES],
+      { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+    );
+    marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
+    await pond.connect(user).approve(marketv1.address, usdc(100));
 
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
+    await marketv1.updateShutdownDelay(FIVE_MINUTES);
 
-	it("can register as provider", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+    await time.increaseTo(INITIAL_TIMESTAMP);
+  });
 
-		expect(await marketv1.providers(addrs[1])).to.equal("https://example.com/");
-	});
+  describe("Initialize", function() {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+    it("should deploy with initialization disabled", async function() {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await MarketV1.deploy();
+  
+      await expect(
+        marketv1.initialize(addrs[0], addrs[11], SELECTORS, WAIT_TIMES),
+      ).to.be.revertedWith("Initializable: contract is already initialized");
+    });
+  
+    it("should deploy as proxy and initializes", async function() {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+  
+      await Promise.all(
+        SELECTORS.map(async (s, idx) => {
+          expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
+        }),
+      );
+      expect(
+        await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
+      ).to.be.true;
+      expect(await marketv1.token()).to.equal(addrs[11]);
+    });
+  
+    it("should revert when initializing with mismatched lengths", async function() {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      await expect(
+        upgrades.deployProxy(
+          MarketV1,
+          [addrs[0], addrs[11], SELECTORS, [...WAIT_TIMES, 0]],
+          { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+        ),
+      ).to.be.reverted;
+    });
+  
+    it("should upgrade", async function() {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+      await upgrades.upgradeProxy(marketv1.address, MarketV1, { kind: "uups", unsafeAllow: ["missing-initializer-call"] });
+  
+      await Promise.all(
+        SELECTORS.map(async (s, idx) => {
+          expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
+        }),
+      );
+      expect(
+        await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
+      ).to.be.true;
+      expect(await marketv1.token()).to.equal(addrs[11]);
+    });
+  
+    it("should revert when upgrading without admin", async function() {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+  
+      await expect(
+        upgrades.upgradeProxy(marketv1.address, MarketV1.connect(signers[1]), {
+          kind: "uups",
+          unsafeAllow: ["missing-initializer-call"],
+        }),
+      ).to.be.revertedWith("only admin");
+    });
+  });
 
-	it("cannot register as provider with empty cp", async () => {
-		await expect(
-			marketv1.connect(signers[1]).providerAdd(""),
-		).to.be.revertedWith("invalid");
-	});
+  describe("Provider Registration", function () {
+    describe("Provider Registers", function() {
+      takeSnapshotBeforeAndAfterEveryTest(async () => { });
+    
+      it("should register as provider", async () => {
+        await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+    
+        expect(await marketv1.providers(addrs[1])).to.equal("https://example.com/");
+      });
+    
+      it("should revert when registering as provider with empty cp", async () => {
+        await expect(
+          marketv1.connect(signers[1]).providerAdd(""),
+        ).to.be.revertedWith("invalid");
+      });
+    
+      it("should revert when registering as provider if already registered", async () => {
+        await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+    
+        await expect(
+          marketv1.connect(signers[1]).providerAdd("https://example.com/"),
+        ).to.be.revertedWith("already exists");
+      });
+    });
+  
+    describe("Provider Unregisters", function() {
+      takeSnapshotBeforeAndAfterEveryTest(async () => { });
+    
+      it("should unregister as provider", async () => {
+        await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+        await marketv1.connect(signers[1]).providerRemove();
+    
+        expect(await marketv1.providers(addrs[1])).to.equal("");
+      });
+    
+      it("should revert when unregistering as provider if never registered", async () => {
+        await expect(
+          marketv1.connect(signers[1]).providerRemove(),
+        ).to.be.revertedWith("not found");
+      });
+    
+      it("should revert when unregistering as provider if already unregistered", async () => {
+        await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+        await marketv1.connect(signers[1]).providerRemove();
+    
+        await expect(
+          marketv1.connect(signers[1]).providerRemove(),
+        ).to.be.revertedWith("not found");
+      });
+    });
+  });
 
-	it("cannot register as provider if already registered", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+  describe("cp update", function() {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+    it("should update cp", async () => {
+      await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+      await marketv1
+        .connect(signers[1])
+        .providerUpdateWithCp("https://example.com/new");
+  
+      expect(await marketv1.providers(addrs[1])).to.equal(
+        "https://example.com/new",
+      );
+    });
+  
+    it("should revert when updating to empty cp", async () => {
+      await marketv1.connect(signers[1]).providerAdd("https://example.com/");
+      await expect(
+        marketv1.connect(signers[1]).providerUpdateWithCp(""),
+      ).to.be.revertedWith("invalid");
+    });
+  
+    it("should revert when updating if never registered", async () => {
+      await expect(
+        marketv1
+          .connect(signers[1])
+          .providerUpdateWithCp("https://example.com/new"),
+      ).to.be.revertedWith("not found");
+    });
+  });
+  
+  describe("Job Open", function() {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+    it("should open job", async () => {
+      const initialBalance = usdc(50);
+      const shutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
 
-		await expect(
-			marketv1.connect(signers[1]).providerAdd("https://example.com/"),
-		).to.be.revertedWith("already exists");
-	});
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialBalance);
+  
+      const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(await user.getAddress());
+      expect(jobInfo.provider).to.equal(await provider.getAddress());
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+      expect(jobInfo.balance).to.equal(initialBalance.sub(shutdownDelayCost));
+      expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES, INITIAL_TIMESTAMP + FIVE_MINUTES + 1);
+  
+      expect(await pond.balanceOf(addrs[1])).to.equal(SIGNER1_INITIAL_FUND.sub(initialBalance));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(shutdownDelayCost));
+    });
+  
+    it("should revert when opening job without enough approved", async () => {
+      await expect(
+        marketv1.connect(signers[1]).jobOpen("some metadata", addrs[2], JOB_RATE_1, usdc(150)), // 100 USDC approved
+      ).to.be.revertedWith("ERC20: insufficient allowance");
+    });
+  
+    it("should revert when opening job without enough balance", async () => {
+      await pond.connect(signers[1]).approve(marketv1.address, usdc(5000));
+      await expect(
+        marketv1.connect(signers[1]).jobOpen("some metadata", addrs[2], JOB_RATE_1, usdc(5000)),
+      ).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+    });
+  });
+
+  describe("Job Settle", function () {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+    
+    // TODO: does not revert when block.timestmap > paymentSettledTimestamp
+    it("should settle job with enough balance", async () => {
+      const initialDeposit = usdc(50);
+      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", addrs[2], JOB_RATE_1, initialDeposit);
+      
+      // Settle Job
+      let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      await time.increaseTo(jobInfo.paymentSettledTimestamp.add(FIVE_MINUTES));
+      await marketv1.jobSettle(ethers.constants.HashZero);
+      
+      const settleAmountExpected = calcAmountToPay(JOB_RATE_1, FIVE_MINUTES);
+      
+      // job after settle (need to settle 5 Minutes worth of tokens)
+      jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(addrs[1]);
+      expect(jobInfo.provider).to.equal(addrs[2]);
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+
+      const balanceExpected = initialBalance.sub(settleAmountExpected);
+      expect(jobInfo.balance).to.be.within(balanceExpected.sub(JOB_RATE_1), balanceExpected.add(JOB_RATE_1));
+      const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+      expect(jobInfo.paymentSettledTimestamp).to.be.within(currentTimestamp, currentTimestamp + 1);
+  
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1).add(settleAmountExpected));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(settleAmountExpected));
+    });
+  
+    // TODO: revert when block.timestamp < paymentSettledTimestamp
+  });
+
+  describe("Job Deposit", function() {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+    it("should deposit to job", async () => {
+      const initialDeposit = usdc(50);
+      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const additionalDepositAmount = usdc(25);
+
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      
+      // Deposit 25 USDC
+      await marketv1
+        .connect(signers[1])
+        .jobDeposit(ethers.constants.HashZero, additionalDepositAmount);
+  
+      // Job after deposit
+      const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(addrs[1]);
+      expect(jobInfo.provider).to.equal(addrs[2]);
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+      expect(jobInfo.balance).to.equal(initialBalance.add(additionalDepositAmount));
+      expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES, INITIAL_TIMESTAMP + FIVE_MINUTES + 1);
+  
+      expect(await pond.balanceOf(addrs[1])).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(additionalDepositAmount));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.add(additionalDepositAmount));
+    });
+  
+    it("should revert when depositing to job without enough approved", async () => {
+      const initialDeposit = usdc(50);
+      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const additionalDepositAmount = usdc(25);
+
+      await pond.connect(user).approve(marketv1.address, initialDeposit);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      
+      // Deposit 25 USDC
+      await expect(marketv1
+        .connect(user)
+        .jobDeposit(ethers.constants.HashZero, additionalDepositAmount)).to.be.revertedWith("ERC20: insufficient allowance");
+    });
+  
+    it("should revert when depositing to job without enough balance", async () => {
+      const initialDeposit = SIGNER1_INITIAL_FUND;
+      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const additionalDepositAmount = usdc(25);
+
+      // Open Job
+      await pond.connect(user).approve(marketv1.address, SIGNER1_INITIAL_FUND.add(usdc(1000)));
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      
+      // Deposit 25 USDC
+      await expect(marketv1
+        .connect(user)
+        .jobDeposit(ethers.constants.HashZero, additionalDepositAmount)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+    });
+  
+    it("should revert when depositing to never registered job", async () => {
+      await expect(marketv1
+        .connect(user)
+        .jobDeposit(ethers.utils.hexZeroPad("0x01", 32), 25)).to.be.revertedWith("job not found");
+    });
+  
+    it("should revert when depositing to closed job", async () => {
+      const initialDeposit = usdc(50);
+
+      // Job Open
+      await pond.connect(user).approve(marketv1.address, initialDeposit);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+  
+      // Job Close
+      await marketv1.connect(user).jobClose(ethers.constants.HashZero);
+  
+      // Job Deposit
+      await expect(marketv1
+        .connect(signers[1])
+        .jobDeposit(ethers.constants.HashZero, 25)).to.be.revertedWith("job not found");
+    });
+  });
+
+  describe("Job Withdraw", function() {
+    const initialDeposit = usdc(50);
+    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+
+    beforeEach(async () => {
+      await pond.connect(user).approve(marketv1.address, initialDeposit);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    });
+  
+    it("should withdraw from job immediately", async () => {
+      const withdrawAmount = usdc(10);
+
+      // Job Withdraw
+      await marketv1
+        .connect(signers[1])
+        .jobWithdraw(ethers.constants.HashZero, withdrawAmount);
+  
+      let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(addrs[1]);
+      expect(jobInfo.provider).to.equal(addrs[2]);
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+      expect(jobInfo.balance).to.equal(initialBalance.sub(withdrawAmount));
+      expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + 2);
+    
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(withdrawAmount));
+    });
+  
+    it("should withdraw from job before paymentSettledTimestamp", async () => {
+      const TWO_MINUTES = 60 * 2;
+      const withdrawAmount = usdc(10);
+      
+      // 2 minutes passed
+      await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+
+      // Job Withdraw
+      await marketv1
+        .connect(user)
+        .jobWithdraw(ethers.constants.HashZero, withdrawAmount);
+      
+      // Job info after Withdrawal
+      let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(await user.getAddress());
+      expect(jobInfo.provider).to.equal(await provider.getAddress());
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+      expect(jobInfo.balance).to.equal(initialBalance.sub(withdrawAmount));
+      // paymentSetteldTimestamp hasn't changed
+      expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + 2);
+  
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(withdrawAmount));
+    });
+  
+    it("should withdraw from job after paymentSettledTimestamp with settlement", async () => {
+      const withdrawAmount = usdc(10);
+      const settledAmountExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+
+      // 7 minutes passed after Job Open
+      await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY + TWO_MINUTES);
+      await marketv1
+        .connect(user)
+        .jobWithdraw(ethers.constants.HashZero, withdrawAmount);
+      
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
+
+      const providerBalanceExpected = calcShutdownDelayCost(JOB_RATE_1).add(settledAmountExpected);
+      expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+
+      const marketv1BalanceExpected = initialBalance.sub(withdrawAmount).sub(settledAmountExpected);
+      expect(await pond.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+    });
+  
+    it("should revert when withdrawing from non existent job", async () => {
+      const max_uint256_bytes32 = ethers.utils.hexZeroPad(ethers.constants.MaxUint256.toHexString(), 32);
+  
+      await expect(marketv1
+        .connect(user)
+        .jobWithdraw(max_uint256_bytes32, usdc(100))).to.be.revertedWith("job not found");
+    });
+  
+    it("should revert when withdrawing from third party job", async () => {
+      await expect(marketv1
+        .connect(signers[3]) // neither owner nor provider
+        .jobWithdraw(ethers.constants.HashZero, usdc(100))).to.be.revertedWith("only job owner");
+    });
+  
+    it("should revert when balance is below shutdown delay cost", async () => {
+      // deposited 50 USDC
+      // 0.01 USDC/s
+      // shutdown delay cost: 0.01 * 300 = 3 USDC
+      // 47 USDC left
+
+      await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY + 4500); // spend 45 USDC (300 + 4500 seconds passed)
+
+      await expect(marketv1
+        .connect(user)
+        .jobWithdraw(ethers.constants.HashZero, usdc(1))).to.be.revertedWith("balance below shutdown delay cost");
+    });
+  
+    it("should revert when withdrawal request amount exceeds max withdrawable amount", async () => {
+      // Current balance: 47 USDC
+
+      await expect(marketv1
+        .connect(user)
+        .jobWithdraw(ethers.constants.HashZero, usdc(48))).to.be.revertedWith("amount exceeds max withdrawable amount");
+    });
+  });
+
+  describe("Job Revise Rate", function () {
+    const JOB_LOWER_RATE = BN.from(5).e16().div(10);
+    const JOB_HIGHER_RATE = BN.from(2).e16();
+
+    const initialDeposit = usdc(50);
+    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+
+    beforeEach(async () => {
+      await pond.connect(user).approve(marketv1.address, initialDeposit);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    });
+
+    it("should revise rate higher", async () => {
+      const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+
+      await marketv1
+        .connect(user)
+        .jobReviseRate(ethers.constants.HashZero, JOB_HIGHER_RATE);
+      
+      const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.rate).to.equal(JOB_HIGHER_RATE);
+      expect(jobInfo.balance).to.equal(initialBalance);
+
+      expect(jobInfo.paymentSettledTimestamp).to.equal(currentTimestamp + FIVE_MINUTES);
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance);
+    });
+
+    it("should revise rate lower", async () => {
+      const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+
+      await marketv1
+        .connect(user)
+        .jobReviseRate(ethers.constants.HashZero, JOB_LOWER_RATE);
+
+      const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.rate).to.equal(JOB_LOWER_RATE);
+      expect(jobInfo.balance).to.equal(initialBalance);
+      expect(jobInfo.paymentSettledTimestamp).to.equal(currentTimestamp + FIVE_MINUTES);
+      expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance);
+    });
+
+    it("should revert when initiating rate revision for non existent job", async () => {
+      await expect(marketv1
+        .connect(user)
+        .jobReviseRate(ethers.utils.hexZeroPad("0x01", 32), JOB_HIGHER_RATE)).to.be.revertedWith("job not found");
+    });
+
+    it("should revert when initiating rate revision for third party job", async () => {
+      await expect(marketv1
+        .connect(signers[3]) // neither owner nor provider
+        .jobReviseRate(ethers.constants.HashZero, JOB_HIGHER_RATE)).to.be.revertedWith("only job owner");
+    });
+  });
+
+  describe("Job Close", function() {
+    const initialDeposit = usdc(50);
+    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+
+    beforeEach(async () => {
+      await pond.connect(user).approve(marketv1.address, initialDeposit);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    });
+  
+    it("should close job", async () => {
+      // Job Close
+      await marketv1
+        .connect(user)
+        .jobClose(ethers.constants.HashZero); // here, user should get back (initial deposit - shutdown delay cost)
+
+      const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+      expect(jobInfo.metadata).to.equal("");
+      expect(jobInfo.owner).to.equal(ethers.constants.AddressZero);
+      expect(jobInfo.provider).to.equal(ethers.constants.AddressZero);
+      expect(jobInfo.rate).to.equal(0);
+      expect(jobInfo.balance).to.equal(0);
+      expect(jobInfo.paymentSettledTimestamp).to.equal(0);
+      
+      const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+    });
+  
+    it("should revert when closing non existent job", async () => {
+      await expect(marketv1
+        .connect(user)
+        .jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("job not found");
+    });
+  
+    it("should revert when closing third party job", async () => {
+      await expect(marketv1
+        .connect(signers[3]) // neither owner nor provider
+        .jobClose(ethers.constants.HashZero)).to.be.revertedWith("only job owner");
+    });
+
+    describe("Metdata Update", function () {
+      const initialDeposit = usdc(50);
+  
+      takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+      beforeEach(async () => {
+        await pond.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      });
+
+      it("should update metadata", async () => {
+        await marketv1
+          .connect(user)
+          .jobMetadataUpdate(ethers.constants.HashZero, "some updated metadata");
+    
+        const jobInfo2 = await marketv1.jobs(ethers.constants.HashZero);
+        expect(jobInfo2.metadata).to.equal("some updated metadata");
+      });
+    
+      it("should revert when updating metadata of other jobs", async () => {
+        await expect(marketv1
+          .connect(signers[3]) // neither owner nor provider
+          .jobMetadataUpdate(ethers.constants.HashZero, "some updated metadata")).to.be.revertedWith("only job owner");
+      });
+    });
+  });
 });
 
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
 
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
 
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can unregister as provider", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
-		await marketv1.connect(signers[1]).providerRemove();
-
-		expect(await marketv1.providers(addrs[1])).to.equal("");
-	});
-
-	it("cannot unregister as provider if never registered", async () => {
-		await expect(
-			marketv1.connect(signers[1]).providerRemove(),
-		).to.be.revertedWith("not found");
-	});
-
-	it("cannot register as provider if already unregistered", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
-		await marketv1.connect(signers[1]).providerRemove();
-
-		await expect(
-			marketv1.connect(signers[1]).providerRemove(),
-		).to.be.revertedWith("not found");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can update cp", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
-		await marketv1
-			.connect(signers[1])
-			.providerUpdateWithCp("https://example.com/new");
-
-		expect(await marketv1.providers(addrs[1])).to.equal(
-			"https://example.com/new",
-		);
-	});
-
-	it("cannot update to empty cp", async () => {
-		await marketv1.connect(signers[1]).providerAdd("https://example.com/");
-		await expect(
-			marketv1.connect(signers[1]).providerUpdateWithCp(""),
-		).to.be.revertedWith("invalid");
-	});
-
-	it("cannot update if never registered", async () => {
-		await expect(
-			marketv1
-				.connect(signers[1])
-				.providerUpdateWithCp("https://example.com/new"),
-		).to.be.revertedWith("not found");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can open job", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 50);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-	});
-
-	it("cannot open job without enough approved", async () => {
-		await pond.connect(signers[1]).approve(marketv1.address, 49);
-		await expect(
-			marketv1.connect(signers[1]).jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50),
-		).to.be.revertedWith("ERC20: insufficient allowance");
-	});
-
-	it("cannot open job without enough balance", async () => {
-		await pond.connect(signers[1]).approve(marketv1.address, 5000);
-		await expect(
-			marketv1.connect(signers[1]).jobOpen("some metadata", addrs[2], BN.from(5).e12(), 5000),
-		).to.be.revertedWith("ERC20: transfer amount exceeds balance");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can settle job with enough balance", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 50);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await time.increaseTo(ts + 5);
-		await marketv1.jobSettle(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		let amount = 5 * (jobInfo.lastSettled.toNumber() - ts);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.be.equal(50 - amount);
-		expect(jobInfo.lastSettled).to.be.within(ts + 5, ts + 6);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(addrs[2])).to.equal(amount);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50 - amount);
-	});
-
-	it("can settle job without enough balance", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 50);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await time.increaseTo(ts + 11);
-		await marketv1.jobSettle(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(0);
-		expect(jobInfo.lastSettled).to.be.within(ts + 11, ts + 12);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(addrs[2])).to.equal(50);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(0);
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can deposit to job", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 75);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await marketv1
-			.connect(signers[1])
-			.jobDeposit(ethers.constants.HashZero, 25);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(75);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(925);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(75);
-	});
-
-	it("cannot deposit to job without enough approved", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 74);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobDeposit(ethers.constants.HashZero, 25)).to.be.revertedWith("ERC20: insufficient allowance");
-	});
-
-	it("cannot deposit to job without enough balance", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 5000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobDeposit(ethers.constants.HashZero, 951)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
-	});
-
-	it("cannot deposit to never registered job", async () => {
-		await expect(marketv1
-			.connect(signers[1])
-			.jobDeposit(ethers.utils.hexZeroPad("0x01", 32), 25)).to.be.revertedWith("not found");
-	});
-
-	it("cannot deposit to closed job", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 5000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await marketv1.connect(signers[1]).jobReviseRateInitiate(ethers.constants.HashZero, 0);
-		await time.increase(600);
-		await marketv1.connect(signers[1]).jobClose(ethers.constants.HashZero);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobDeposit(ethers.constants.HashZero, 25)).to.be.revertedWith("not found");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can withdraw from job immediately", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobWithdraw(ethers.constants.HashZero, 100);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		let amount = 1 * (jobInfo.lastSettled.toNumber() - ts);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(700 - amount);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(300);
-		expect(await pond.balanceOf(addrs[2])).to.equal(amount);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(700 - amount);
-	});
-
-	it("can withdraw from job with settlement", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await time.increaseTo(ts + 20);
-		await marketv1
-			.connect(signers[1])
-			.jobWithdraw(ethers.constants.HashZero, 100);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		let amount = 1 * (jobInfo.lastSettled.toNumber() - ts);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(700 - amount);
-		expect(jobInfo.lastSettled).to.be.within(ts + 20, ts + 21);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(300);
-		expect(await pond.balanceOf(addrs[2])).to.equal(amount);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(700 - amount);
-	});
-
-	it("can withdraw from job after a short period with settlement", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await time.increaseTo(ts + 20);
-		await marketv1
-			.connect(signers[1])
-			.jobWithdraw(ethers.constants.HashZero, 100);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		let amount = 1 * (jobInfo.lastSettled.toNumber() - ts);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(700 - amount);
-		expect(jobInfo.lastSettled).to.be.within(ts + 20, ts + 21);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(300);
-		expect(await pond.balanceOf(addrs[2])).to.equal(amount);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(700 - amount);
-	});
-
-	it("cannot withdraw from non existent job", async () => {
-		let signer = (pond.provider as any).getSigner(ethers.constants.AddressZero);
-
-		await expect(marketv1
-			.connect(signer)
-			.jobWithdraw(ethers.constants.HashZero, 100)).to.be.revertedWith("not found");
-	});
-
-	it("cannot withdraw from third party job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.connect(signers[2])
-			.jobWithdraw(ethers.constants.HashZero, 100)).to.be.revertedWith("only job owner");
-	});
-
-	it("cannot withdraw if balance is below leftover threshold", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await time.increaseTo(ts + 300);
-		await expect(marketv1
-			.connect(signers[1])
-			.jobWithdraw(ethers.constants.HashZero, 100)).to.be.revertedWith("not enough balance");
-	});
-
-	it("cannot withdraw if it puts balance below leftover threshold", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await time.increaseTo(ts + 20);
-		await expect(marketv1
-			.connect(signers[1])
-			.jobWithdraw(ethers.constants.HashZero, 300)).to.be.revertedWith("not enough balance");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can initiate rate revision", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-	});
-
-	it("cannot initiate rate revision if already initiated", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-		await expect(marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2)).to.be.reverted;
-	});
-
-	it("cannot initiate rate revision for non existent job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.jobReviseRateInitiate(ethers.utils.hexZeroPad("0x01", 32), 2)).to.be.revertedWith("only job owner");
-	});
-
-	it("cannot initiate rate revision for third party job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2)).to.be.revertedWith("only job owner");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can cancel rate revision", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateCancel(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-	});
-
-	it("cannot cancel rate revision if never requested", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobReviseRateCancel(ethers.constants.HashZero)).to.be.revertedWith("no request");
-	});
-
-	it("cannot cancel rate revision for non existent job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobReviseRateCancel(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("only job owner");
-	});
-
-	it("cannot cancel rate revision for third party job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.jobReviseRateCancel(ethers.constants.HashZero)).to.be.revertedWith("only job owner");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can finalize rate revision", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await time.increaseTo(ts + 650);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateFinalize(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		let amount = 1 * (jobInfo.lastSettled.toNumber() - ts);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(2);
-		expect(jobInfo.balance).to.equal(800 - amount);
-		expect(jobInfo.lastSettled).to.be.within(ts + 650, ts + 651);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(addrs[2])).to.equal(amount);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800 - amount);
-	});
-
-	it("cannot finalize rate revision if never requested", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobReviseRateFinalize(ethers.constants.HashZero)).to.be.reverted;
-	});
-
-	it("cannot finalize rate revision for non existent job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobReviseRateFinalize(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("only job owner");
-	});
-
-	it("cannot finalize rate revision for third party job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.jobReviseRateFinalize(ethers.constants.HashZero)).to.be.revertedWith("only job owner");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can close", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 0);
-
-		await time.increaseTo(ts + 650);
-
-		await marketv1
-			.connect(signers[1])
-			.jobClose(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("");
-		expect(jobInfo.owner).to.equal(ethers.constants.AddressZero);
-		expect(jobInfo.provider).to.equal(ethers.constants.AddressZero);
-		expect(jobInfo.rate).to.equal(0);
-		expect(jobInfo.balance).to.equal(0);
-		expect(jobInfo.lastSettled).to.be.equal(0);
-
-		expect(await pond.balanceOf(addrs[1])).to.be.within(349, 350);
-		expect(await pond.balanceOf(addrs[2])).to.be.within(650, 651);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(0);
-	});
-
-	it("can close immediately if rate is zero", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 0);
-
-		await time.increaseTo(ts + 650);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateFinalize(ethers.constants.HashZero);
-		await marketv1
-			.connect(signers[1])
-			.jobClose(ethers.constants.HashZero);
-
-		jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("");
-		expect(jobInfo.owner).to.equal(ethers.constants.AddressZero);
-		expect(jobInfo.provider).to.equal(ethers.constants.AddressZero);
-		expect(jobInfo.rate).to.equal(0);
-		expect(jobInfo.balance).to.equal(0);
-		expect(jobInfo.lastSettled).to.be.equal(0);
-
-		expect(await pond.balanceOf(addrs[1])).to.be.within(349, 350);
-		expect(await pond.balanceOf(addrs[2])).to.be.within(650, 651);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(0);
-	});
-
-	it("cannot close if new rate is not zero", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		ts = jobInfo.lastSettled.toNumber();
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await time.increaseTo(ts + 650);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobClose(ethers.constants.HashZero)).to.be.revertedWith("rate should be zero");
-	});
-
-	it("cannot close if never requested", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobClose(ethers.constants.HashZero)).to.be.reverted;
-	});
-
-	it("cannot close non existent job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.connect(signers[1])
-			.jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("only job owner");
-	});
-
-	it("cannot close third party job", async () => {
-		let ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 1000);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(1).e12(), 800);
-
-		let jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(1).e12());
-		expect(jobInfo.balance).to.equal(800);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(200);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(800);
-
-		await marketv1
-			.connect(signers[1])
-			.jobReviseRateInitiate(ethers.constants.HashZero, 2);
-
-		await expect(marketv1
-			.jobClose(ethers.constants.HashZero)).to.be.revertedWith("only job owner");
-	});
-});
-
-describe("MarketV1", function() {
-	let signers: Signer[];
-	let addrs: string[];
-	let marketv1: MarketV1;
-	let pond: Contract;
-
-	before(async function() {
-		signers = await ethers.getSigners();
-		addrs = await Promise.all(signers.map((a) => a.getAddress()));
-
-		const Pond = await ethers.getContractFactory("Pond");
-		pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
-			kind: "uups",
-		});
-
-		const MarketV1 = await ethers.getContractFactory("MarketV1");
-		const marketv1Contract = await upgrades.deployProxy(
-			MarketV1,
-			[addrs[0], pond.address, SELECTORS, WAIT_TIMES],
-			{ kind: "uups" },
-		);
-		marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
-		await pond.transfer(addrs[1], 1000);
-	});
-
-	takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-	it("can update metadata", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 100);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await marketv1
-			.connect(signers[1])
-			.jobMetadataUpdate(ethers.constants.HashZero, "some updated metadata");
-
-		const jobInfo2 = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo2.metadata).to.equal("some updated metadata");
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-	});
-
-	it("cannot update metadata of other jobs", async () => {
-		const ts = Math.floor(Date.now() / 1000) + 86400;
-		await time.increaseTo(ts);
-
-		await pond.connect(signers[1]).approve(marketv1.address, 100);
-		await marketv1
-			.connect(signers[1])
-			.jobOpen("some metadata", addrs[2], BN.from(5).e12(), 50);
-
-		const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-		expect(jobInfo.metadata).to.equal("some metadata");
-		expect(jobInfo.owner).to.equal(addrs[1]);
-		expect(jobInfo.provider).to.equal(addrs[2]);
-		expect(jobInfo.rate).to.equal(BN.from(5).e12());
-		expect(jobInfo.balance).to.equal(50);
-		expect(jobInfo.lastSettled).to.be.within(ts, ts + 1);
-
-		expect(await pond.balanceOf(addrs[1])).to.equal(950);
-		expect(await pond.balanceOf(marketv1.address)).to.equal(50);
-
-		await expect(marketv1
-			.jobMetadataUpdate(ethers.constants.HashZero, "some updated metadata")).to.be.revertedWith("only job owner");
-
-	});
-});
