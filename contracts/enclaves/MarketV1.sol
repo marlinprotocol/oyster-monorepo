@@ -362,7 +362,7 @@ contract MarketV1 is
 
     function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
         require(jobs[_job].owner != address(0), "job not found");
-        require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle");
+        require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle before paymentSettledTimestamp");
         _jobSettle(_job);
     }
 
