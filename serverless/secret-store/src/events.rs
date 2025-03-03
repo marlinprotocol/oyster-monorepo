@@ -14,7 +14,7 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::constants::*;
 use crate::model::{AppState, SecretCreatedMetadata, SecretManagerContract, SecretMetadata};
-use crate::scheduler::{garbage_cleaner, store_alive_monitor};
+use crate::scheduler::{garbage_cleaner, remove_expired_secrets_and_mark_store_alive};
 use crate::utils::*;
 
 // Start listening to events emitted by the 'SecretManager' contract if enclave is registered else listen for Store registered event first
@@ -22,9 +22,11 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
     defer! {
         *app_state.events_listener_active.lock().unwrap() = false;
     }
+
     loop {
         // web socket connection
-        let ws_connect = WsConnect::new(&app_state.web_socket_url);
+        let web_socket_url = app_state.web_socket_url.read().unwrap().clone();
+        let ws_connect = WsConnect::new(web_socket_url);
         let web_socket_client = match ProviderBuilder::new().on_ws(ws_connect).await {
             Ok(client) => client,
             Err(err) => {
@@ -38,9 +40,9 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'SecretStoreRegistered' event emitted by the SecretStore contract
+            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_store_filter = Filter::new()
-                .address(app_state.secret_store_contract_addr)
+                .address(app_state.tee_manager_contract_addr)
                 .event(SECRET_STORE_REGISTERED_EVENT)
                 .topic1(B256::from(app_state.enclave_address.into_word()))
                 .topic2(B256::from(
@@ -56,8 +58,8 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                 Ok(stream) => stream,
                 Err(err) => {
                     eprintln!(
-                        "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreRegistered' event logs: {:?}",
-                        app_state.secret_store_contract_addr,
+                        "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeRegistered' event logs: {:?}",
+                        app_state.tee_manager_contract_addr,
                         err,
                     );
                     continue;
@@ -75,6 +77,22 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     event.block_number.unwrap_or(starting_block),
                     Ordering::SeqCst,
                 );
+                app_state.enclave_draining.store(false, Ordering::SeqCst);
+
+                let txn_manager = app_state
+                    .http_rpc_txn_manager
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap();
+                txn_manager.run().await;
+
+                // Spawn task to submit periodic proofs for secrets stored and remove expired secrets
+                let app_state_clone = app_state.clone();
+                tokio::spawn(async move {
+                    remove_expired_secrets_and_mark_store_alive(app_state_clone).await;
+                });
+
                 break;
             }
 
@@ -83,7 +101,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
             }
         }
 
-        println!("Enclave registered successfully on the common chain!");
+        println!("Secret store registered successfully on the common chain!");
         // Create filter to listen to the relevant events emitted by the SecretManager contract
         let secrets_filter = Filter::new()
             .address(app_state.secret_manager_contract_addr)
@@ -110,42 +128,30 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
         };
         let secrets_stream = pin!(secrets_subscription.into_stream());
 
-        // Create filter to listen to 'SecretStoreDeregistered' event emitted by the SecretStore contract
-        let store_deregistered_filter = Filter::new()
-            .address(app_state.secret_store_contract_addr)
-            .event(SECRET_STORE_DEREGISTERED_EVENT)
+        // Create filter to listen to relevant events emitted by the TeeManager contract
+        let store_filter = Filter::new()
+            .address(app_state.tee_manager_contract_addr)
+            .events(vec![
+                SECRET_STORE_DRAINED_EVENT.as_bytes(),
+                SECRET_STORE_REVIVED_EVENT.as_bytes(),
+                SECRET_STORE_DEREGISTERED_EVENT.as_bytes(),
+            ])
             .topic1(B256::from(app_state.enclave_address.into_word()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
         // Subscribe to the deregistered filter through the rpc web socket client
-        let store_deregistered_subscription = match web_socket_client
-            .subscribe_logs(&store_deregistered_filter)
-            .await
-        {
+        let store_subscription = match web_socket_client.subscribe_logs(&store_filter).await {
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
-                    "Failed to subscribe to SecretStore ({:?}) contract 'SecretStoreDeregistered' event logs: {:?}",
-                    app_state.secret_store_contract_addr,
-                    err
+                    "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
+                    app_state.tee_manager_contract_addr, err
                 );
                 continue;
             }
         };
-        let store_deregistered_stream = pin!(store_deregistered_subscription.into_stream());
+        let store_stream = pin!(store_subscription.into_stream());
 
-        // Spawn task to submit periodic proofs for secrets stored and remove expired secrets
-        let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            store_alive_monitor(app_state_clone).await;
-        });
-
-        // Spawn task to remove expired secrets periodically
-        let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            garbage_cleaner(app_state_clone).await;
-        });
-
-        handle_event_logs(secrets_stream, store_deregistered_stream, app_state.clone()).await;
+        handle_event_logs(secrets_stream, store_stream, app_state.clone()).await;
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
             return;
@@ -156,24 +162,50 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
 // Listen to the "SecretStore" & "SecretManager" contract event logs and process them accordingly
 async fn handle_event_logs(
     mut secrets_stream: impl Stream<Item = Log> + Unpin,
-    mut store_deregistered_stream: impl Stream<Item = Log> + Unpin,
+    mut store_stream: impl Stream<Item = Log> + Unpin,
     app_state: Data<AppState>,
 ) {
-    println!("Started listening to 'SecretManager' events!");
+    println!("Started listening to 'SecretManager' and 'TeeManager' events!");
 
     loop {
         select! {
-            Some(event) = store_deregistered_stream.next() => {
+            Some(event) = store_stream.next() => {
                 if event.removed {
                     continue;
                 }
 
-                // Capture the Enclave deregistered event emitted by the 'SecretStore' contract
-                println!("Enclave deregistered from the common chain!");
-                app_state.enclave_registered.store(false, Ordering::SeqCst);
+                let Some(current_block) = event.block_number else {
+                    continue;
+                };
 
-                println!("Stopped listening to secret manager events!");
-                return;
+                if current_block < app_state.last_block_seen.load(Ordering::SeqCst) {
+                    continue;
+                }
+                app_state.last_block_seen.store(current_block, Ordering::SeqCst);
+
+                // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
+                if event.topic0() == Some(&keccak256(SECRET_STORE_DEREGISTERED_EVENT)) {
+                    println!("Secret store deregistered from the common chain!");
+                    app_state.enclave_registered.store(false, Ordering::SeqCst);
+
+                    println!("Stopped listening to 'SecretManager' events!");
+                    return;
+                }
+                // Capture the Enclave drained event emitted by the 'TeeManager' contract
+                else if event.topic0() == Some(&keccak256(SECRET_STORE_DRAINED_EVENT)) {
+                    println!("Secret store put in draining mode!");
+                    app_state.enclave_draining.store(true, Ordering::SeqCst);
+                    // Call the garbage cleaner to clean all secrets stored inside it
+                    garbage_cleaner(app_state.clone(), true).await;
+                    // Clear all the secrets waiting for acknowledgement and injection
+                    app_state.secrets_awaiting_acknowledgement.lock().unwrap().clear();
+                    app_state.secrets_created.lock().unwrap().clear();
+                }
+                // Capture the Enclave revived event emitted by the 'TeeManager' contract
+                else if event.topic0() == Some(&keccak256(SECRET_STORE_REVIVED_EVENT)) {
+                    println!("Secret store revived from draining mode!");
+                    app_state.enclave_draining.store(false, Ordering::SeqCst);
+                }
             }
             Some(event) = secrets_stream.next() => {
                 if event.removed {
@@ -188,6 +220,10 @@ async fn handle_event_logs(
                     continue;
                 }
                 app_state.last_block_seen.store(current_block, Ordering::SeqCst);
+
+                if app_state.enclave_draining.load(Ordering::SeqCst) {
+                    continue;
+                }
 
                 // Capture the Secret created event emitted by the 'SecretManager' contract
                 if event.topic0()
@@ -391,7 +427,7 @@ async fn handle_event_logs(
         }
     }
 
-    println!("Both the 'SecretManager' and 'SecretStore' subscription streams have ended!");
+    println!("Both the 'SecretManager' and 'TeeManager' subscription streams have ended!");
 }
 
 // Start task to handle the acknowledgement timeout for a secret created
@@ -400,11 +436,12 @@ async fn handle_acknowledgement_timeout(secret_id: U256, app_state: Data<AppStat
     sleep(Duration::from_secs(app_state.acknowledgement_timeout + 1)).await;
 
     // If the secret created has been acknowledged then don't send anything
-    if !app_state
+    if app_state
         .secrets_awaiting_acknowledgement
         .lock()
         .unwrap()
-        .contains_key(&secret_id)
+        .remove(&secret_id)
+        .is_none()
     {
         return;
     }
@@ -436,11 +473,4 @@ async fn handle_acknowledgement_timeout(secret_id: U256, app_state: Data<AppStat
             secret_id, err
         );
     };
-
-    // Mark the secret created as removed from awaiting acknowledgement
-    app_state
-        .secrets_awaiting_acknowledgement
-        .lock()
-        .unwrap()
-        .remove(&secret_id);
 }

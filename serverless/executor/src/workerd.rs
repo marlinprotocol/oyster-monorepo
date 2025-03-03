@@ -125,28 +125,53 @@ pub async fn create_code_file(
 }
 
 pub async fn create_config_file(
+    secret_store_path: &str,
+    secret_id: &str,
     tx_hash: &str,
     slug: &str,
     workerd_runtime_path: &str,
     free_port: u16,
 ) -> Result<(), ServerlessError> {
     // Initialize the config data for user code execution by workerd runtime
-    let capnp_data = format!(
+    // If secret_id is 0 then no need to embed any environment variable in the execution, else bind the secret data to 'secret' variable
+    let capnp_data = if secret_id == "0" {
+        format!(
+            "
+        using Workerd = import \"/workerd/workerd.capnp\";
+    
+        const oysterConfig :Workerd.Config = (
+          services = [ (name = \"main\", worker = .oysterWorker) ],
+          sockets = [ ( name = \"http\", address = \"*:{free_port}\", http = (), service = \"main\" ) ]
+        );
+    
+        const oysterWorker :Workerd.Worker = (
+          modules = [
+            (name = \"main\", esModule = embed \"{tx_hash}-{slug}.js\")
+          ],
+          compatibilityDate = \"2023-03-07\",
+        );"
+        )
+    } else {
+        format!(
         "
-using Workerd = import \"/workerd/workerd.capnp\";
+        using Workerd = import \"/workerd/workerd.capnp\";
 
-const oysterConfig :Workerd.Config = (
-  services = [ (name = \"main\", worker = .oysterWorker) ],
-  sockets = [ ( name = \"http\", address = \"*:{free_port}\", http = (), service = \"main\" ) ]
-);
+        const oysterConfig :Workerd.Config = (
+          services = [ (name = \"main\", worker = .oysterWorker) ],
+          sockets = [ ( name = \"http\", address = \"*:{free_port}\", http = (), service = \"main\" ) ]
+        );
 
-const oysterWorker :Workerd.Worker = (
-  modules = [
-    (name = \"main\", esModule = embed \"{tx_hash}-{slug}.js\")
-  ],
-  compatibilityDate = \"2023-03-07\",
-);"
-    );
+        const oysterWorker :Workerd.Worker = (
+          modules = [
+            (name = \"main\", esModule = embed \"{tx_hash}-{slug}.js\")
+          ],
+          bindings = [
+            (name = \"secret\", data = embed \"{secret_store_path}/{secret_id}.bin\")
+          ],
+          compatibilityDate = \"2023-03-07\",
+        );"
+        )
+    };
 
     // Write config to the desired file location
     Retry::spawn(

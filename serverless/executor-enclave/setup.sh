@@ -22,6 +22,10 @@ mkdir /app/runtime
 mv /app/workerd /app/runtime/
 ls -lath /app/runtime
 
+# Create secret store directory
+mkdir /app/store
+ls -lath /app/store
+
 # Set up cgroups
 cgexec -h
 mount -t cgroup2 -o nosuid,nodev,noexec cgroup2 /sys/fs/cgroup

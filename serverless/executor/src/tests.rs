@@ -10,14 +10,17 @@
 #[cfg(test)]
 pub mod serverless_executor_test {
     use std::collections::HashSet;
+    use std::net::SocketAddr;
     use std::pin::pin;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
 
     use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
     use axum::routing::{get, post};
-    use axum::Router;
+    use axum::{Json, Router};
     use axum_test::TestServer;
     use bytes::Bytes;
     use ethers::abi::{encode, encode_packed, Token};
@@ -27,26 +30,32 @@ pub mod serverless_executor_test {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use rand::rngs::OsRng;
     use serde::{Deserialize, Serialize};
-    use serde_json::json;
+    use serde_json::{json, Value};
+    use tempfile::Builder;
     use tokio::runtime::Handle;
     use tokio::sync::mpsc::channel;
     use tokio::time::{sleep, Duration};
     use tokio_stream::StreamExt as _;
 
     use crate::cgroups::Cgroups;
-    use crate::event_handler::handle_event_logs;
-    use crate::node_handler::*;
-    use crate::utils::{
-        load_abi_from_file, AppState, JobsTxnMetadata, JobsTxnType, EXECUTION_ENV_ID,
-        MAX_OUTPUT_BYTES_LENGTH,
+    use crate::constant::{
+        EXECUTION_ENV_ID, EXECUTOR_DEREGISTERED_EVENT, EXECUTOR_DRAINED_EVENT,
+        EXECUTOR_REVIVED_EVENT, MAX_OUTPUT_BYTES_LENGTH,
     };
+    use crate::event_handler::handle_event_logs;
+    use crate::model::{AppState, JobsTxnMetadata, JobsTxnType};
+    use crate::node_handler::{
+        export_signed_registration_message, get_tee_details, index, inject_immutable_config,
+        inject_mutable_config,
+    };
+    use crate::utils::load_abi_from_file;
 
     // Testnet or Local blockchain (Hardhat) configurations
     const CHAIN_ID: u64 = 421614;
     const HTTP_RPC_URL: &str = "https://sepolia-rollup.arbitrum.io/rpc";
     const WS_URL: &str = "wss://arb-sepolia.g.alchemy.com/v2/";
-    const EXECUTORS_CONTRACT_ADDR: &str = "0xE35E287DBC371561E198bFaCBdbEc9cF78bDe930";
-    const JOBS_CONTRACT_ADDR: &str = "0xd3b682f6F58323EC77dEaE730733C6A83a1561Fd";
+    const TEE_MANAGER_CONTRACT_ADDR: &str = "0xFbc9cB063848Db801B382A1Da13E5A213dD378c0";
+    const JOBS_CONTRACT_ADDR: &str = "0xb01AB6c250654978be77CD1098E5e760eC207b4F";
     const CODE_CONTRACT_ADDR: &str = "0x44fe06d2940b8782a0a9a9ffd09c65852c0156b1";
 
     // Generate test app state
@@ -57,12 +66,14 @@ pub mod serverless_executor_test {
         AppState {
             job_capacity: 20,
             cgroups: Arc::new(Mutex::new(Cgroups::new().unwrap())),
+            secret_store_config_port: 6002,
             workerd_runtime_path: "./runtime/".to_owned(),
+            secret_store_path: "../store".to_owned(),
             execution_buffer_time: 10,
             common_chain_id: CHAIN_ID,
             http_rpc_url: HTTP_RPC_URL.to_owned(),
             ws_rpc_url: Arc::new(RwLock::new(WS_URL.to_owned())),
-            executors_contract_addr: EXECUTORS_CONTRACT_ADDR.parse::<Address>().unwrap(),
+            tee_manager_contract_addr: TEE_MANAGER_CONTRACT_ADDR.parse::<Address>().unwrap(),
             jobs_contract_addr: JOBS_CONTRACT_ADDR.parse::<Address>().unwrap(),
             code_contract_addr: if code_contract_uppercase {
                 CODE_CONTRACT_ADDR.to_uppercase()
@@ -76,6 +87,7 @@ pub mod serverless_executor_test {
             mutable_params_injected: Arc::new(Mutex::new(false)),
             enclave_registered: Arc::new(AtomicBool::new(false)),
             events_listener_active: Arc::new(Mutex::new(false)),
+            enclave_draining: Arc::new(AtomicBool::new(false)),
             enclave_owner: Arc::new(Mutex::new(H160::zero())),
             http_rpc_client: Arc::new(Mutex::new(None)),
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
@@ -91,7 +103,7 @@ pub mod serverless_executor_test {
             .route("/", get(index))
             .route("/immutable-config", post(inject_immutable_config))
             .route("/mutable-config", post(inject_mutable_config))
-            .route("/executor-details", get(get_executor_details))
+            .route("/tee-details", get(get_tee_details))
             .route(
                 "/signed-registration-message",
                 get(export_signed_registration_message),
@@ -107,7 +119,6 @@ pub mod serverless_executor_test {
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
         // Inject invalid owner address hex string (odd length)
-
         let resp = server
             .post("/immutable-config")
             .json(&json!({
@@ -142,7 +153,18 @@ pub mod serverless_executor_test {
         resp.assert_status_bad_request();
         resp.assert_text("Owner address must be 20 bytes long!\n");
 
+        // Mock secret store immutable configuration endpoint
+        let (mock_params, mock_state) =
+            mock_post_endpoint(app_state.secret_store_config_port, "/immutable-config").await;
+
         // Inject valid immutable config params
+        {
+            let mut state = mock_state.lock().unwrap();
+            *state = (
+                StatusCode::OK,
+                String::from("Immutable params configured!\n"),
+            );
+        }
         let valid_owner = H160::random();
         let resp = server
             .post("/immutable-config")
@@ -154,8 +176,24 @@ pub mod serverless_executor_test {
         resp.assert_status_ok();
         resp.assert_text("Immutable params configured!\n");
         assert_eq!(*app_state.enclave_owner.lock().unwrap(), valid_owner);
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("owner_address_hex") {
+            assert_eq!(actual, &hex::encode(valid_owner));
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'owner_address_hex'"
+            );
+        }
 
         // Inject valid immutable config params again to test immutability
+        {
+            let mut state = mock_state.lock().unwrap();
+            *state = (
+                StatusCode::BAD_REQUEST,
+                String::from("Immutable params already configured!\n"),
+            );
+        }
         let valid_owner_2 = H160::random();
         let resp = server
             .post("/immutable-config")
@@ -165,7 +203,16 @@ pub mod serverless_executor_test {
             .await;
 
         resp.assert_status_bad_request();
-        resp.assert_text("Immutable params already configured!\n");
+        resp.assert_text("Failed to inject immutable config into the secret store: Immutable params already configured!\n");
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("owner_address_hex") {
+            assert_eq!(actual, &hex::encode(valid_owner_2));
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'owner_address_hex'"
+            );
+        }
     }
 
     #[tokio::test]
@@ -174,11 +221,12 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state(false).await;
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
-        // Inject invalid gas private key hex string (less than 32 bytes)
+        // Inject invalid executor gas private key hex string (less than 32 bytes)
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": "322557",
+                "executor_gas_key": "322557",
+                "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -186,11 +234,12 @@ pub mod serverless_executor_test {
         resp.assert_status_bad_request();
         resp.assert_text("Gas private key must be 32 bytes long!\n");
 
-        // Inject invalid gas private key hex string (invalid hex character)
+        // Inject invalid executor gas private key hex string (invalid hex character)
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff",
+                "executor_gas_key": "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff",
+                "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -200,11 +249,12 @@ pub mod serverless_executor_test {
             "Invalid gas private key hex string: InvalidHexCharacter { c: 'z', index: 17 }\n",
         );
 
-        // Inject invalid gas private key hex string (not ecdsa valid key)
+        // Inject invalid executor gas private key hex string (not ecdsa valid key)
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "executor_gas_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -214,14 +264,15 @@ pub mod serverless_executor_test {
             "Invalid gas private key provided: EcdsaError(signature::Error { source: None })\n",
         );
 
-        // Initialise gas wallet key
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        // Initialise executor gas wallet key
+        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
 
         // Inject invalid ws_api_key hex string with invalid character
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": "",
                 "ws_api_key": "&&&&",
             }))
             .await;
@@ -229,13 +280,98 @@ pub mod serverless_executor_test {
         resp.assert_status_bad_request();
         resp.assert_text("API key contains invalid characters!\n");
 
-        // Inject valid mutable config params
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        // Mock secret store mutable configuration endpoint
+        let (mock_params, mock_state) =
+            mock_post_endpoint(app_state.secret_store_config_port, "/mutable-config").await;
+
+        // Inject invalid secret store gas private key hex string (invalid hex character)
+        {
+            let mut state = mock_state.lock().unwrap();
+            *state = (StatusCode::BAD_REQUEST, String::from("Failed to hex decode the gas private key into 32 bytes: InvalidHexCharacter { c: 'z', index: 17 }\n"));
+        }
 
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff",
+                "ws_api_key": "ws_api_key",
+            }))
+            .await;
+
+        resp.assert_status_bad_request();
+        resp.assert_text("Failed to inject mutable config into the secret store: Failed to hex decode the gas private key into 32 bytes: InvalidHexCharacter { c: 'z', index: 17 }\n");
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("gas_key_hex") {
+            assert_eq!(
+                actual,
+                "fffffffffffffffffzffffffffffffffffffffffffffffgfffffffffffffffff"
+            );
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'gas_key_hex'"
+            );
+        }
+        if let Some(Value::String(actual)) = secret_store_param.get("ws_api_key") {
+            assert_eq!(actual, "ws_api_key");
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'ws_api_key'"
+            );
+        }
+
+        // Inject invalid secret store gas private key hex string (not ecdsa valid key)
+        {
+            let mut state = mock_state.lock().unwrap();
+            *state = (StatusCode::BAD_REQUEST, String::from("Invalid gas private key provided: EcdsaError(signature::Error { source: None })\n"));
+        }
+
+        let resp = server
+            .post("/mutable-config")
+            .json(&json!({
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "ws_api_key": "ws_api_key",
+            }))
+            .await;
+
+        resp.assert_status_bad_request();
+        resp.assert_text("Failed to inject mutable config into the secret store: Invalid gas private key provided: EcdsaError(signature::Error { source: None })\n");
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("gas_key_hex") {
+            assert_eq!(
+                actual,
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            );
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'gas_key_hex'"
+            );
+        }
+        if let Some(Value::String(actual)) = secret_store_param.get("ws_api_key") {
+            assert_eq!(actual, "ws_api_key");
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'ws_api_key'"
+            );
+        }
+
+        // Inject valid mutable config params
+        {
+            let mut state = mock_state.lock().unwrap();
+            *state = (StatusCode::OK, String::from("Mutable params configured!\n"));
+        }
+        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+
+        let resp = server
+            .post("/mutable-config")
+            .json(&json!({
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": hex::encode(secret_store_gas_wallet_key.to_bytes()),
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -250,19 +386,37 @@ pub mod serverless_executor_test {
                 .clone()
                 .unwrap()
                 .address(),
-            public_key_to_address(gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
             WS_URL.to_owned() + "ws_api_key"
         );
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("gas_key_hex") {
+            assert_eq!(actual, &hex::encode(secret_store_gas_wallet_key.to_bytes()));
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'gas_key_hex'"
+            );
+        }
+        if let Some(Value::String(actual)) = secret_store_param.get("ws_api_key") {
+            assert_eq!(actual, "ws_api_key");
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'ws_api_key'"
+            );
+        }
 
         // Inject valid mutable config params again to test mutability
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": hex::encode(secret_store_gas_wallet_key.to_bytes()),
                 "ws_api_key": "ws_api_key_2",
             }))
             .await;
@@ -277,23 +431,66 @@ pub mod serverless_executor_test {
                 .clone()
                 .unwrap()
                 .address(),
-            public_key_to_address(gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.verifying_key())
         );
-
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
             WS_URL.to_owned() + "ws_api_key_2"
         );
+        let secret_store_param = mock_params.lock().unwrap().clone();
+        if let Some(Value::String(actual)) = secret_store_param.get("gas_key_hex") {
+            assert_eq!(actual, &hex::encode(secret_store_gas_wallet_key.to_bytes()));
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'gas_key_hex'"
+            );
+        }
+        if let Some(Value::String(actual)) = secret_store_param.get("ws_api_key") {
+            assert_eq!(actual, "ws_api_key_2");
+        } else {
+            assert!(
+                false,
+                "Failed to get secret store endpoint parameter 'ws_api_key'"
+            );
+        }
     }
 
     #[tokio::test]
-    // Test the various response cases for the 'get_executor_details' endpoint
-    async fn get_executor_details_test() {
+    // Test the various response cases for the 'get_tee_details' endpoint
+    async fn get_tee_details_test() {
         let app_state = generate_app_state(false).await;
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
-        // Get the executor details without injecting any config params
-        let resp = server.get("/executor-details").await;
+        // Mock secret store details endpoint
+        let mock_state =
+            mock_get_endpoint(app_state.secret_store_config_port, "/store-details").await;
+
+        // Get the tee details without injecting any config params
+        {
+            // Mock secret store response
+            let mut state = mock_state.lock().unwrap();
+            *state = (
+                StatusCode::OK,
+                json!({
+                    "enclave_address": app_state.enclave_address,
+                    "enclave_public_key": format!(
+                        "0x{}",
+                        hex::encode(
+                            &(app_state
+                                .enclave_signer
+                                .verifying_key()
+                                .to_encoded_point(false)
+                                .as_bytes())[1..]
+                        )
+                    ),
+                    "owner_address": H160::zero(),
+                    "gas_address": H160::zero(),
+                    "ws_rpc_url": WS_URL,
+                }),
+            );
+        }
+        let resp = server.get("/tee-details").await;
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
@@ -309,7 +506,8 @@ pub mod serverless_executor_test {
                 )
             ),
             "owner_address": H160::zero(),
-            "gas_address": H160::zero(),
+            "executor_gas_address": H160::zero(),
+            "secret_store_gas_address": H160::zero(),
             "ws_rpc_url": WS_URL,
         }));
 
@@ -327,7 +525,8 @@ pub mod serverless_executor_test {
         assert_eq!(*app_state.enclave_owner.lock().unwrap(), valid_owner);
 
         // Get the executor details without injecting mutable config params
-        let resp = server.get("/executor-details").await;
+        let resp = server.get("/tee-details").await;
+
         resp.assert_status_ok();
         resp.assert_json(&json!({
             "enclave_address": app_state.enclave_address,
@@ -342,16 +541,19 @@ pub mod serverless_executor_test {
                 )
             ),
             "owner_address": valid_owner,
-            "gas_address": H160::zero(),
+            "executor_gas_address": H160::zero(),
+            "secret_store_gas_address": H160::zero(),
             "ws_rpc_url": WS_URL,
         }));
 
         // Inject valid mutable config params
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": hex::encode(secret_store_gas_wallet_key.to_bytes()),
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -366,16 +568,39 @@ pub mod serverless_executor_test {
                 .clone()
                 .unwrap()
                 .address(),
-            public_key_to_address(gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.verifying_key())
         );
-
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
             WS_URL.to_owned() + "ws_api_key"
         );
 
         // Get the executor details
-        let resp = server.get("/executor-details").await;
+        {
+            // Mock secret store response after injecting configs
+            let mut state = mock_state.lock().unwrap();
+            *state = (
+                StatusCode::OK,
+                json!({
+                    "enclave_address": app_state.enclave_address,
+                    "enclave_public_key": format!(
+                        "0x{}",
+                        hex::encode(
+                            &(app_state
+                                .enclave_signer
+                                .verifying_key()
+                                .to_encoded_point(false)
+                                .as_bytes())[1..]
+                        )
+                    ),
+                    "owner_address": valid_owner,
+                    "gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
+                    "ws_rpc_url": WS_URL,
+                }),
+            );
+        }
+        let resp = server.get("/tee-details").await;
+
         resp.assert_status_ok();
         resp.assert_json(&json!({
             "enclave_address": app_state.enclave_address,
@@ -390,7 +615,8 @@ pub mod serverless_executor_test {
                 )
             ),
             "owner_address": valid_owner,
-            "gas_address": public_key_to_address(gas_wallet_key.verifying_key()),
+            "executor_gas_address": public_key_to_address(executor_gas_wallet_key.verifying_key()),
+            "secret_store_gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
             "ws_rpc_url": WS_URL.to_owned() + "ws_api_key",
         }));
     }
@@ -398,7 +624,9 @@ pub mod serverless_executor_test {
     #[derive(Serialize, Deserialize, Debug)]
     struct ExportResponse {
         job_capacity: usize,
+        storage_capacity: usize,
         sign_timestamp: usize,
+        env: u8,
         owner: H160,
         signature: String,
     }
@@ -413,7 +641,11 @@ pub mod serverless_executor_test {
 
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
-        // Export the enclave registration details without injecting executor config params
+        // Mock secret store register details endpoint
+        let mock_state =
+            mock_get_endpoint(app_state.secret_store_config_port, "/register-details").await;
+
+        // Export the enclave registration details without injecting tee config params
         let resp = server.get("/signed-registration-message").await;
 
         resp.assert_status_bad_request();
@@ -432,17 +664,20 @@ pub mod serverless_executor_test {
         resp.assert_text("Immutable params configured!\n");
         assert_eq!(*app_state.enclave_owner.lock().unwrap(), valid_owner);
 
-        // Export the enclave registration details without injecting executor config params
+        // Export the enclave registration details without injecting mutable config params
         let resp = server.get("/signed-registration-message").await;
+
         resp.assert_status_bad_request();
         resp.assert_text("Mutable params not configured yet!\n");
 
         // Inject valid mutable config params
-        let gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "gas_key_hex": hex::encode(gas_wallet_key.to_bytes()),
+                "executor_gas_key": hex::encode(executor_gas_wallet_key.to_bytes()),
+                "secret_store_gas_key": hex::encode(secret_store_gas_wallet_key.to_bytes()),
                 "ws_api_key": "ws_api_key",
             }))
             .await;
@@ -457,31 +692,44 @@ pub mod serverless_executor_test {
                 .clone()
                 .unwrap()
                 .address(),
-            public_key_to_address(gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.verifying_key())
         );
-
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
             WS_URL.to_owned() + "ws_api_key"
         );
 
         // Export the enclave registration details
+        const STORAGE_CAPACITY: usize = 100000;
+        {
+            // Mock secret store response
+            let mut state = mock_state.lock().unwrap();
+            *state = (
+                StatusCode::OK,
+                json!({
+                    "storage_capacity": STORAGE_CAPACITY,
+                }),
+            );
+        }
         let resp = server.get("/signed-registration-message").await;
 
         resp.assert_status_ok();
+
         let response: Result<ExportResponse, serde_json::Error> =
             serde_json::from_slice(&resp.as_bytes());
-
         assert!(response.is_ok());
 
         let response = response.unwrap();
         assert_eq!(response.job_capacity, 20);
+        assert_eq!(response.storage_capacity, STORAGE_CAPACITY);
         assert_eq!(response.owner, valid_owner);
+        assert_eq!(response.env, 1);
         assert_eq!(response.signature.len(), 132);
         assert_eq!(
             recover_key(
                 response.owner,
                 response.job_capacity,
+                response.storage_capacity,
                 response.sign_timestamp,
                 response.signature
             ),
@@ -507,6 +755,7 @@ pub mod serverless_executor_test {
             recover_key(
                 response.owner,
                 response.job_capacity,
+                response.storage_capacity,
                 response.sign_timestamp,
                 response.signature
             ),
@@ -533,6 +782,7 @@ pub mod serverless_executor_test {
         let mut jobs_created_logs = vec![get_job_created_log(
             1.into(),
             0.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -549,6 +799,7 @@ pub mod serverless_executor_test {
         jobs_created_logs.push(get_job_created_log(
             1.into(),
             1.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -565,6 +816,7 @@ pub mod serverless_executor_test {
         jobs_created_logs.push(get_job_created_log(
             1.into(),
             2.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -638,6 +890,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
             0.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -692,6 +945,7 @@ pub mod serverless_executor_test {
 
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
+            0.into(),
             0.into(),
             EXECUTION_ENV_ID,
             code_hash,
@@ -757,6 +1011,7 @@ pub mod serverless_executor_test {
             get_job_created_log(
                 1.into(),
                 0.into(),
+                0.into(),
                 EXECUTION_ENV_ID,
                 "fed8ab36cc27831836f6dcb7291049158b4d8df31c0ffb05a3d36ba6555e29d7",
                 code_input_bytes.clone(),
@@ -767,6 +1022,7 @@ pub mod serverless_executor_test {
             get_job_created_log(
                 1.into(),
                 1.into(),
+                0.into(),
                 EXECUTION_ENV_ID,
                 "37b0b2d9dd58d9130781fc914da456c16ec403010e8d4c27b0ea4657a24c8546",
                 code_input_bytes,
@@ -835,6 +1091,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
             0.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -892,6 +1149,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
             0.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -948,6 +1206,7 @@ pub mod serverless_executor_test {
         // User code didn't return a response in the expected period
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
+            0.into(),
             0.into(),
             EXECUTION_ENV_ID,
             code_hash,
@@ -1007,6 +1266,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![
             get_job_created_log(
                 1.into(),
+                0.into(),
                 0.into(),
                 EXECUTION_ENV_ID,
                 code_hash,
@@ -1069,12 +1329,13 @@ pub mod serverless_executor_test {
 
         // Add log for deregistering the current executor
         let executor_deregistered_logs = vec![Log {
-            address: H160::from_str(EXECUTORS_CONTRACT_ADDR).unwrap(),
+            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
             topics: vec![
-                keccak256("ExecutorDeregistered(address)").into(),
+                keccak256(EXECUTOR_DEREGISTERED_EVENT).into(),
                 H256::from(app_state.enclave_address),
             ],
             removed: Some(false),
+            block_number: Some(1.into()),
             ..Default::default()
         }];
 
@@ -1124,6 +1385,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![
             get_job_created_log(
                 1.into(),
+                0.into(),
                 0.into(),
                 2,
                 code_hash,
@@ -1181,6 +1443,7 @@ pub mod serverless_executor_test {
 
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
+            0.into(),
             0.into(),
             EXECUTION_ENV_ID,
             code_hash,
@@ -1243,6 +1506,7 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![get_job_created_log(
             1.into(),
             0.into(),
+            0.into(),
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
@@ -1285,9 +1549,471 @@ pub mod serverless_executor_test {
         assert_response(responses[0].clone(), 0.into(), 0, expected_resp);
     }
 
+    #[tokio::test]
+    // Test job execution with secret Id
+    async fn job_execution_with_secret_test() {
+        let app_state = generate_app_state(false).await;
+
+        // Create a temporary store directory inside the parent
+        let temp_dir = Builder::new()
+            .prefix("store")
+            .rand_bytes(0)
+            .tempdir_in("./")
+            .expect("Failed to create temporary store directory");
+
+        // Create a secret file with id 1
+        let file_path = temp_dir.path().join("1.bin");
+        std::fs::write(&file_path, "Secret!").expect("Failed to write to file ./store/1.bin");
+        // Create a secret file with id 2
+        let file_path_2 = temp_dir.path().join("2.bin");
+        std::fs::write(&file_path_2, "Oyster123!").expect("Failed to write to file ./store/2.bin");
+
+        let code_hash = "5db45b92247332b2f4aaa2b6f18f91b0ad50728f9257471c56baa1d45355ac54";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // User code returning a string containing the secret data
+        let jobs_created_logs = vec![
+            get_job_created_log(
+                1.into(),
+                0.into(),
+                1.into(),
+                EXECUTION_ENV_ID,
+                code_hash,
+                code_input_bytes.clone(),
+                user_deadline,
+                app_state.enclave_address,
+            ),
+            get_job_created_log(
+                1.into(),
+                1.into(),
+                2.into(),
+                EXECUTION_ENV_ID,
+                code_hash,
+                code_input_bytes,
+                user_deadline,
+                app_state.enclave_address,
+            ),
+        ];
+
+        let jobs_responded_logs = vec![
+            get_job_responded_log(1.into(), 0.into()),
+            get_job_responded_log(1.into(), 1.into()),
+        ];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            // Introduce time interval between events to be polled
+            let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
+                |log| async move {
+                    sleep(Duration::from_millis(user_deadline)).await;
+                    log
+                }
+            ));
+
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                jobs_created_stream,
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 2);
+
+        assert_response(
+            responses[0].clone(),
+            0.into(),
+            0,
+            "Hello World my secret is Secret!\n".into(),
+        );
+        assert_response(
+            responses[1].clone(),
+            1.into(),
+            0,
+            "Hello World my secret is Oyster123!\n".into(),
+        );
+    }
+
+    #[tokio::test]
+    // Test job execution with secret Id failing user deadline
+    async fn job_execution_with_secret_timeout_test() {
+        let app_state = generate_app_state(false).await;
+
+        // Create a temporary store directory inside the parent
+        let temp_dir = Builder::new()
+            .prefix("store")
+            .rand_bytes(0)
+            .tempdir_in("./")
+            .expect("Failed to create temporary store directory");
+
+        // Create a secret file with id 1
+        let file_path = temp_dir.path().join("1.bin");
+        std::fs::write(&file_path, "Secret!").expect("Failed to write to file ./store/1.bin");
+
+        let code_hash = "b288530f1e50b61094101edb395756fc6a449973ac30eb70762337494ee77bd7";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // User code returning a string containing the secret data after 10 secs delay
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            1.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes.clone(),
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(responses[0].clone(), 0.into(), 4, "".into());
+    }
+
+    #[tokio::test]
+    // Test code execution that overflows stack size
+    async fn job_execution_stack_overflow_test() {
+        let app_state = generate_app_state(false).await;
+
+        let code_hash = "140531f7fd083d81e3b310c8ae4a4b4ee9fee8e64c7f8cec933765c881448952";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // User code invokes deep recursion
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes.clone(),
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(
+            responses[0].clone(),
+            0.into(),
+            0,
+            "Internal Server Error".into(),
+        );
+    }
+
+    #[tokio::test]
+    // Test code execution that bloats heap size
+    async fn job_execution_heap_bloat_test() {
+        let app_state = generate_app_state(false).await;
+
+        let code_hash = "09b81077b2596b065c1d7c8fe1a6bd3637919718b99c0198b3ac3532f527f87a";
+        let user_deadline = 5000;
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // User code invokes excessive heap allocation
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes.clone(),
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 1000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                pin!(tokio_stream::iter(jobs_created_logs)),
+                jobs_responded_stream,
+                pin!(tokio_stream::empty()),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(
+            responses[0].clone(),
+            0.into(),
+            0,
+            "Internal Server Error".into(),
+        );
+    }
+
+    #[tokio::test]
+    // Test the executor draining case by sending job request after draining and not sending response log
+    async fn executor_drain_test() {
+        let app_state = generate_app_state(false).await;
+
+        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let user_deadline = 5000;
+        let execution_buffer_time = app_state.execution_buffer_time;
+        let app_state_clone = app_state.clone();
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // Add drain log for the executor
+        let executor_drain_log = vec![Log {
+            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
+            topics: vec![
+                keccak256(EXECUTOR_DRAINED_EVENT).into(),
+                H256::from(app_state.enclave_address),
+            ],
+            removed: Some(false),
+            block_number: Some(1.into()),
+            ..Default::default()
+        }];
+
+        // Add log entry to relay a job but job response event is not sent
+        let jobs_created_logs = vec![
+            get_job_created_log(
+                1.into(),
+                0.into(),
+                0.into(),
+                EXECUTION_ENV_ID,
+                code_hash,
+                code_input_bytes,
+                user_deadline,
+                app_state.enclave_address,
+            ),
+            Log {
+                ..Default::default()
+            },
+        ];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
+                |log| async move {
+                    sleep(Duration::from_millis(
+                        user_deadline + execution_buffer_time * 1000 + 1000,
+                    ))
+                    .await;
+                    log
+                }
+            ));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                jobs_created_stream,
+                pin!(tokio_stream::empty()),
+                pin!(tokio_stream::iter(executor_drain_log.into_iter())),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        while rx.recv().await.is_some() {
+            assert!(false, "Response received even after draining!");
+        }
+
+        assert!(
+            app_state_clone.enclave_draining.load(Ordering::SeqCst),
+            "Executor not set to draining in the app_state!"
+        );
+    }
+
+    #[tokio::test]
+    // Test the executor reviving case by sending job request after reviving from drain
+    async fn executor_revive_test() {
+        let app_state = generate_app_state(false).await;
+        app_state.enclave_draining.store(true, Ordering::SeqCst);
+
+        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let user_deadline = 5000;
+        let app_state_clone = app_state.clone();
+
+        let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
+
+        // Add revive log for the executor
+        let executor_revive_log = vec![Log {
+            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
+            topics: vec![
+                keccak256(EXECUTOR_REVIVED_EVENT).into(),
+                H256::from(app_state.enclave_address),
+            ],
+            removed: Some(false),
+            block_number: Some(1.into()),
+            ..Default::default()
+        }];
+
+        // Add log entry to relay a job
+        let jobs_created_logs = vec![get_job_created_log(
+            1.into(),
+            0.into(),
+            0.into(),
+            EXECUTION_ENV_ID,
+            code_hash,
+            code_input_bytes,
+            user_deadline,
+            app_state.enclave_address,
+        )];
+
+        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+
+        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+
+        tokio::spawn(async move {
+            let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
+                |log| async move {
+                    sleep(Duration::from_millis(1000)).await;
+                    log
+                }
+            ));
+
+            let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
+                .then(|log| async move {
+                    sleep(Duration::from_millis(user_deadline + 2000)).await;
+                    log
+                }));
+
+            // Call the event handler for the contract logs
+            handle_event_logs(
+                jobs_created_stream,
+                jobs_responded_stream,
+                pin!(tokio_stream::iter(executor_revive_log.into_iter())),
+                State {
+                    0: app_state.clone(),
+                },
+                tx,
+            )
+            .await;
+        });
+
+        let mut responses: Vec<JobsTxnMetadata> = vec![];
+
+        // Receive and store the responses
+        while let Some(job_response) = rx.recv().await {
+            responses.push(job_response);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        assert_response(responses[0].clone(), 0.into(), 4, "".into());
+        assert!(
+            !app_state_clone.enclave_draining.load(Ordering::SeqCst),
+            "Executor still draining in the app_state!"
+        );
+    }
+
     fn get_job_created_log(
         block_number: U64,
         job_id: U256,
+        secret_id: U256,
         env_id: u8,
         code_hash: &str,
         code_inputs: Bytes,
@@ -1305,6 +2031,7 @@ pub mod serverless_executor_test {
                 H256::from(H160::random()),
             ],
             data: encode(&[
+                Token::Uint(secret_id),
                 Token::FixedBytes(hex::decode(code_hash).unwrap()),
                 Token::Bytes(code_inputs.into()),
                 Token::Uint(user_deadline.into()),
@@ -1336,25 +2063,105 @@ pub mod serverless_executor_test {
         }
     }
 
+    async fn mock_post_endpoint(
+        port: u16,
+        endpoint: &str,
+    ) -> (Arc<Mutex<Value>>, Arc<Mutex<(StatusCode, String)>>) {
+        let shared_state = Arc::new(Mutex::new((StatusCode::OK, String::new())));
+        let captured_params: Arc<Mutex<Value>> = Arc::new(Mutex::new(json!({})));
+
+        let state_clone = shared_state.clone();
+        let captured_params_clone = captured_params.clone();
+        let app = Router::new().route(
+            endpoint,
+            post(move |Json(payload): Json<Value>| {
+                let state = state_clone;
+                let handler_state = captured_params_clone;
+
+                async move {
+                    let (status_code, response_body) = &*state.lock().unwrap();
+                    *handler_state.lock().unwrap() = payload;
+
+                    (status_code.clone(), response_body.clone()).into_response()
+                }
+            }),
+        );
+
+        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let server = axum::Server::bind(&addr).serve(app.into_make_service());
+
+        tokio::spawn(async move {
+            if let Err(err) = server.await {
+                eprintln!("Server error: {}", err);
+            }
+        });
+
+        (captured_params, shared_state)
+    }
+
+    async fn mock_get_endpoint(port: u16, endpoint: &str) -> Arc<Mutex<(StatusCode, Value)>> {
+        let shared_state = Arc::new(Mutex::new((StatusCode::OK, json!({}))));
+
+        let state_clone = shared_state.clone();
+        let app = Router::new()
+            .route(
+                endpoint,
+                get(move || {
+                    let state = state_clone;
+
+                    async move {
+                        let (status_code, response_body) = &*state.lock().unwrap();
+
+                        (status_code.clone(), Json(response_body.clone())).into_response()
+                    }
+                }),
+            )
+            .route(
+                "/immutable-config",
+                post(move || async move {
+                    (StatusCode::OK, format!("Immutable params configured!\n")).into_response()
+                }),
+            )
+            .route(
+                "/mutable-config",
+                post(move || async move {
+                    (StatusCode::OK, format!("Mutable params configured!\n")).into_response()
+                }),
+            );
+
+        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let server = axum::Server::bind(&addr).serve(app.into_make_service());
+
+        tokio::spawn(async move {
+            if let Err(err) = server.await {
+                eprintln!("Server error: {}", err);
+            }
+        });
+
+        shared_state
+    }
+
     fn recover_key(
         owner: H160,
         job_capacity: usize,
+        storage_capacity: usize,
         sign_timestamp: usize,
         sign: String,
     ) -> VerifyingKey {
         // Regenerate the digest for verification
         let domain_separator = keccak256(encode(&[
             Token::FixedBytes(keccak256("EIP712Domain(string name,string version)").to_vec()),
-            Token::FixedBytes(keccak256("marlin.oyster.Executors").to_vec()),
+            Token::FixedBytes(keccak256("marlin.oyster.TeeManager").to_vec()),
             Token::FixedBytes(keccak256("1").to_vec()),
         ]));
         let register_typehash = keccak256(
-            "Register(address owner,uint256 jobCapacity,uint8 env,uint256 signTimestamp)",
+            "Register(address owner,uint256 jobCapacity,uint256 storageCapacity,uint8 env,uint256 signTimestamp)",
         );
         let hash_struct = keccak256(encode(&[
             Token::FixedBytes(register_typehash.to_vec()),
             Token::Address(owner),
             Token::Uint(job_capacity.into()),
+            Token::Uint(storage_capacity.into()),
             Token::Uint(EXECUTION_ENV_ID.into()),
             Token::Uint(sign_timestamp.into()),
         ]));

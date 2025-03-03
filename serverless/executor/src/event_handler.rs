@@ -18,15 +18,33 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use tokio_stream::Stream;
 
+use crate::constant::{
+    EXECUTION_ENV_ID, EXECUTOR_DEREGISTERED_EVENT, EXECUTOR_DRAINED_EVENT,
+    EXECUTOR_REGISTERED_EVENT, EXECUTOR_REVIVED_EVENT, GAS_LIMIT_BUFFER, HTTP_CALL_RETRY_DELAY,
+    JOB_CREATED_EVENT, JOB_RESPONDED_EVENT, RESEND_GAS_PRICE_INCREMENT_PERCENT,
+    RESEND_TXN_INTERVAL,
+};
 use crate::job_handler::handle_job;
+use crate::model::{AppState, JobsTxnMetadata, JobsTxnSendError, PendingTxnData};
 use crate::timeout_handler::handle_timeout;
-use crate::utils::*;
+use crate::utils::{estimate_gas_and_price, generate_txn, parse_send_error};
 
 // Start listening to Job requests emitted by the Jobs contract if enclave is registered else listen for Executor registered events first
 pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
     defer! {
         *app_state.events_listener_active.lock().unwrap() = false;
     }
+
+    // Create tokio mpsc channel to receive contract events and send transactions to them and initialize the pending txns queue to be monitored
+    let (tx, rx) = channel::<JobsTxnMetadata>(100);
+    let pending_txns: Arc<Mutex<VecDeque<PendingTxnData>>> = Arc::new(VecDeque::new().into());
+
+    let app_state_clone = app_state.clone();
+    let pending_txns_clone = pending_txns.clone();
+    tokio::spawn(async move {
+        send_execution_output(app_state_clone, rx, pending_txns_clone).await;
+    });
+
     loop {
         // web socket connection
         let ws_rpc_url = app_state.ws_rpc_url.read().unwrap().clone();
@@ -42,17 +60,15 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'ExecutorRegistered' event emitted by the Executors contract
+            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_executor_filter = Filter::new()
-                .address(app_state.executors_contract_addr)
-                .topic0(H256::from(keccak256(
-                    "ExecutorRegistered(address,address,uint256,uint8)",
-                )))
+                .address(app_state.tee_manager_contract_addr)
+                .topic0(H256::from(keccak256(EXECUTOR_REGISTERED_EVENT)))
                 .topic1(H256::from(app_state.enclave_address))
                 .topic2(H256::from(*app_state.enclave_owner.lock().unwrap()))
                 .from_block(starting_block);
 
-            // Subscribe to the executors filter through the rpc web socket client
+            // Subscribe to the TeeManager filter through the rpc web socket client
             let mut register_stream = match web_socket_client
                 .subscribe_logs(&register_executor_filter)
                 .await
@@ -60,8 +76,8 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
                 Ok(stream) => stream,
                 Err(err) => {
                     eprintln!(
-                        "Failed to subscribe to Executors ({:?}) contract 'ExecutorRegistered' event logs: {:?}",
-                        app_state.executors_contract_addr,
+                        "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeRegistered' event logs: {:?}",
+                        app_state.tee_manager_contract_addr,
                         err,
                     );
                     continue;
@@ -78,6 +94,16 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
                     event.block_number.unwrap_or(starting_block).as_u64(),
                     Ordering::SeqCst,
                 );
+                app_state.enclave_draining.store(false, Ordering::SeqCst);
+
+                // Spawn task for monitoring pending transactions for block confirmation and retrying when necessary
+                let app_state_clone = app_state.clone();
+                let pending_txns_clone = pending_txns.clone();
+                let tx_clone = tx.clone();
+                tokio::spawn(async move {
+                    resend_pending_transaction(app_state_clone, pending_txns_clone, tx_clone).await;
+                });
+
                 break;
             }
 
@@ -86,13 +112,11 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
             }
         }
 
-        println!("Enclave registered successfully on the common chain!");
+        println!("Executor registered successfully on the common chain!");
         // Create filter to listen to JobCreated events emitted by the Jobs contract for executor's environment
         let jobs_created_filter = Filter::new()
             .address(app_state.jobs_contract_addr)
-            .topic0(H256::from(keccak256(
-                "JobCreated(uint256,uint8,address,bytes32,bytes,uint256,address[])",
-            )))
+            .topic0(H256::from(keccak256(JOB_CREATED_EVENT)))
             .topic2(H256::from_uint(&EXECUTION_ENV_ID.into()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
         // Subscribe to the filter through the rpc web socket client
@@ -112,9 +136,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         // Create filter to listen to JobResponded events emitted by the Jobs contract
         let jobs_responded_filter = Filter::new()
             .address(app_state.jobs_contract_addr)
-            .topic0(H256::from(keccak256(
-                "JobResponded(uint256,address,bytes,uint256,uint8,uint8)",
-            )))
+            .topic0(H256::from(keccak256(JOB_RESPONDED_EVENT)))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
         // Subscribe to the filter through the rpc web socket client
         let jobs_responded_stream = match web_socket_client
@@ -132,52 +154,35 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: U64) {
         };
         let jobs_responded_stream = pin!(jobs_responded_stream);
 
-        // Create filter to listen to 'ExecutorDeregistered' event emitted by the Executors contract
-        let executor_deregistered_filter = Filter::new()
-            .address(app_state.executors_contract_addr)
-            .topic0(H256::from(keccak256("ExecutorDeregistered(address)")))
+        // Create filter to listen to relevant events emitted by the TeeManager contract
+        let executors_filter = Filter::new()
+            .address(app_state.tee_manager_contract_addr)
+            .topic0(vec![
+                H256::from(keccak256(EXECUTOR_DEREGISTERED_EVENT)),
+                H256::from(keccak256(EXECUTOR_DRAINED_EVENT)),
+                H256::from(keccak256(EXECUTOR_REVIVED_EVENT)),
+            ])
             .topic1(H256::from(app_state.enclave_address))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
-        // Subscribe to the executors filter through the rpc web socket client
-        let executor_deregistered_stream = match web_socket_client
-            .subscribe_logs(&executor_deregistered_filter)
-            .await
-        {
+        // Subscribe to the TeeManager filter through the rpc web socket client
+        let executors_stream = match web_socket_client.subscribe_logs(&executors_filter).await {
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
-                    "Failed to subscribe to Executors ({:?}) contract 'ExecutorDeregistered' event logs: {:?}",
-                    app_state.executors_contract_addr,
-                    err
+                    "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
+                    app_state.tee_manager_contract_addr, err
                 );
                 continue;
             }
         };
-        let executor_deregistered_stream = pin!(executor_deregistered_stream);
-
-        // Create tokio mpsc channel to receive contract events and send transactions to them and initialize the pending txns queue to be monitored
-        let (tx, rx) = channel::<JobsTxnMetadata>(100);
-        let pending_txns: Arc<Mutex<VecDeque<PendingTxnData>>> = Arc::new(VecDeque::new().into());
-
-        // Spawn task for monitoring pending transactions for block confirmation and retrying when necessary
-        let app_state_clone = app_state.clone();
-        let pending_txns_clone = pending_txns.clone();
-        let tx_clone = tx.clone();
-        tokio::spawn(async move {
-            resend_pending_transaction(app_state_clone, pending_txns_clone, tx_clone).await;
-        });
-
-        let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            send_execution_output(app_state_clone, rx, pending_txns).await;
-        });
+        let executors_stream = pin!(executors_stream);
 
         handle_event_logs(
             jobs_created_stream,
             jobs_responded_stream,
-            executor_deregistered_stream,
+            executors_stream,
             app_state.clone(),
-            tx,
+            tx.clone(),
         )
         .await;
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
@@ -250,7 +255,7 @@ async fn send_execution_output(
             let txn = txn
                 .set_from(http_rpc_client.address())
                 .set_nonce(current_nonce)
-                .set_gas(gas_limit)
+                .set_gas(gas_limit + GAS_LIMIT_BUFFER)
                 .set_gas_price(gas_price)
                 .to_owned();
             let pending_txn = http_rpc_client.send_transaction(txn, None).await;
@@ -310,7 +315,7 @@ async fn send_execution_output(
         }
     }
 
-    println!("Transaction sender channel stopped!");
+    println!("Executor transaction sender channel stopped!");
     return;
 }
 
@@ -318,25 +323,48 @@ async fn send_execution_output(
 pub async fn handle_event_logs(
     mut jobs_created_stream: impl Stream<Item = Log> + Unpin,
     mut jobs_responded_stream: impl Stream<Item = Log> + Unpin,
-    mut executor_deregistered_stream: impl Stream<Item = Log> + Unpin,
+    mut executors_stream: impl Stream<Item = Log> + Unpin,
     app_state: State<AppState>,
     tx: Sender<JobsTxnMetadata>,
 ) {
-    println!("Started listening to job events!");
+    println!("Started listening to 'Jobs' and 'TeeManager' events!");
 
     loop {
         select! {
-            Some(event) = executor_deregistered_stream.next() => {
+            Some(event) = executors_stream.next() => {
                 if event.removed.unwrap_or(true) {
                     continue;
                 }
 
-                // Capture the Executor deregistered event emitted by the executors contract
-                println!("Enclave deregistered from the common chain!");
-                app_state.enclave_registered.store(false, Ordering::SeqCst);
+                let Some(current_block) = event.block_number else {
+                    continue;
+                };
 
-                println!("Stopped listening to job events!");
-                return;
+                if current_block.as_u64() < app_state.last_block_seen.load(Ordering::SeqCst) {
+                    continue;
+                }
+                app_state.last_block_seen.store(current_block.as_u64(), Ordering::SeqCst);
+
+                // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
+                if event.topics[0] == keccak256(EXECUTOR_DEREGISTERED_EVENT).into() {
+                    println!("Executor deregistered from the common chain!");
+                    app_state.enclave_registered.store(false, Ordering::SeqCst);
+
+                    println!("Stopped listening to 'Jobs' events!");
+                    return;
+                }
+                // Capture the Enclave drained event emitted by the 'TeeManager' contract
+                else if event.topics[0] == keccak256(EXECUTOR_DRAINED_EVENT).into() {
+                    println!("Executor put in draining mode!");
+                    app_state.enclave_draining.store(true, Ordering::SeqCst);
+                    // Clear the pending jobs map
+                    app_state.job_requests_running.lock().unwrap().clear();
+                }
+                // Capture the Enclave revived event emitted by the 'TeeManager' contract
+                else if event.topics[0] == keccak256(EXECUTOR_REVIVED_EVENT).into() {
+                    println!("Executor revived from draining mode!");
+                    app_state.enclave_draining.store(false, Ordering::SeqCst);
+                }
             }
             // Capture the Job created event emitted by the jobs contract
             Some(event) = jobs_created_stream.next() => {
@@ -353,6 +381,10 @@ pub async fn handle_event_logs(
                 }
                 app_state.last_block_seen.store(current_block.as_u64(), Ordering::SeqCst);
 
+                if app_state.enclave_draining.load(Ordering::SeqCst) {
+                    continue;
+                }
+
                 // Extract the 'indexed' parameter of the event
                 let job_id = event.topics[1].into_uint();
 
@@ -365,6 +397,7 @@ pub async fn handle_event_logs(
                 // Decode the event parameters using the ABI information
                 let event_tokens = decode(
                     &vec![
+                        ParamType::Uint(256),
                         ParamType::FixedBytes(32),
                         ParamType::Bytes,
                         ParamType::Uint(256),
@@ -381,35 +414,44 @@ pub async fn handle_event_logs(
                     continue;
                 };
 
-                let Some(code_hash) = event_tokens[0].clone().into_fixed_bytes() else {
+                let Some(secret_id) = event_tokens[0].clone().into_uint() else {
                     eprintln!(
-                        "Failed to decode codeHash token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode secretId token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[0]
                     );
                     continue;
                 };
-                let Some(code_inputs) = event_tokens[1].clone().into_bytes() else {
+
+                let Some(code_hash) = event_tokens[1].clone().into_fixed_bytes() else {
                     eprintln!(
-                        "Failed to decode codeInputs token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode codeHash token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[1]
                     );
                     continue;
                 };
-                let Some(user_deadline) = event_tokens[2].clone().into_uint() else {
+                let Some(code_inputs) = event_tokens[2].clone().into_bytes() else {
                     eprintln!(
-                        "Failed to decode deadline token from the 'JobCreated' event data for job id {}: {:?}",
+                        "Failed to decode codeInputs token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
                         event_tokens[2]
                     );
                     continue;
                 };
-                let Some(selected_nodes) = event_tokens[3].clone().into_array() else {
+                let Some(user_deadline) = event_tokens[3].clone().into_uint() else {
+                    eprintln!(
+                        "Failed to decode deadline token from the 'JobCreated' event data for job id {}: {:?}",
+                        job_id,
+                        event_tokens[3]
+                    );
+                    continue;
+                };
+                let Some(selected_nodes) = event_tokens[4].clone().into_array() else {
                     eprintln!(
                         "Failed to decode selectedExecutors token from the 'JobCreated' event data for job id {}: {:?}",
                         job_id,
-                        event_tokens[3]
+                        event_tokens[4]
                     );
                     continue;
                 };
@@ -444,6 +486,7 @@ pub async fn handle_event_logs(
                     tokio::spawn(async move {
                         handle_job(
                             job_id,
+                            secret_id,
                             code_hash,
                             code_inputs.into(),
                             user_deadline.as_u64(),
@@ -469,6 +512,10 @@ pub async fn handle_event_logs(
                     continue;
                 }
                 app_state.last_block_seen.store(current_block.as_u64(), Ordering::SeqCst);
+
+                if app_state.enclave_draining.load(Ordering::SeqCst) {
+                    continue;
+                }
 
                 let job_id = event.topics[1].into_uint();
 
@@ -513,7 +560,7 @@ pub async fn handle_event_logs(
         }
     }
 
-    println!("Both the Jobs and Executors subscription streams have ended!");
+    println!("Both the 'Jobs' and 'TeeManager' subscription streams have ended!");
 }
 
 // Function to regularly check the pending transactions for block confirmation and resend them if not included within an interval

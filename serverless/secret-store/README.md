@@ -62,8 +62,8 @@ To run the secret store, details related to RPC like the HTTP and WebSocket URLs
 Usage: oyster-secret-store [OPTIONS]
 
 Options:
-      --port <PORT>                [default: 6002]
-        Server port
+      --external-port <PORT>                [default: 6002]
+        External port to expose outside enclave for injecting secret
       --config-file <CONFIG_FILE>  [default: ./oyster_secret_store_config.json]
         Path to the configuration parameters file
   -h, --help                       Print help
@@ -72,21 +72,22 @@ Options:
 Configuration file parameters required for running a secret store node:
 ```
 {
-    "secret_store_path": // Directory path where the secret data files will be created and stored,
-    "common_chain_id": // Common chain id,
-    "http_rpc_url": // Http url of the RPC endpoint,
-    "web_socket_url": // Websocket url of the RPC endpoint,
-    "secret_store_contract_addr": // SecretStore smart contract address on common chain,
-    "secret_manager_contract_addr": // SecretManager smart contract address on common chain,
-    "enclave_signer_file": // path to enclave secp256k1 private key file,
-    "acknowledgement_timeout": // Secret inject acknowledgement timeout as configured on common chain (in seconds),
-    "mark_alive_timeout": // Secret Store mark alive timeout as configured on common chain (in seconds),
-    "num_selected_stores": // Number of stores selected to store an user secret as configured on common chain
+  "config_port": // Secret store configuration port to inject parameters and export registration details
+  "secret_store_path": // Directory path where the secret data files will be created and stored,
+  "common_chain_id": // Common chain id,
+  "http_rpc_url": // Http url of the RPC endpoint,
+  "web_socket_url": // Websocket url of the RPC endpoint,
+  "tee_manager_contract_addr": // TeeManager smart contract address on common chain,
+  "secret_manager_contract_addr": // SecretManager smart contract address on common chain,
+  "enclave_signer_file": // path to enclave secp256k1 private key file,
+  "acknowledgement_timeout": // Secret inject acknowledgement timeout as configured on common chain (in seconds),
+  "mark_alive_timeout": // Secret Store mark alive timeout as configured on common chain (in seconds),
+  "num_selected_stores": // Number of stores selected to store an user secret as configured on common chain
 }
 ```
 Example command to run the secret store locally:
 ```
-sudo ./target/x86_64-unknown-linux-musl/release/oyster-secret-store --port 6002 --config-file ./oyster_secret_store_config.json
+sudo ./target/x86_64-unknown-linux-musl/release/oyster-secret-store --external-port 6002 --config-file ./oyster_secret_store_config.json
 ```
 
 <b> Inject immutable configuration parameters into the application: </b>
@@ -99,9 +100,9 @@ Immutable params configured!
 
 <b> Inject mutable configuration parameters into the application: </b>
 
-Currently there is only one such parameter and it is the gas private key used by the secret store enclave to send transactions to the common chain.
+Currently there are 2 such parameters - Gas private key used by the secret store enclave to send transactions to the common chain, and Alchemy API key for the web socket connection to the common chain.
 ```
-$ curl -X POST -H "Content-Type: application/json" -d '{"gas_key_hex": "{GAS_PRIVATE_KEY_HEX}"}' <secret_store_node_ip:secret_store_node_port>/mutable-config
+$ curl -X POST -H "Content-Type: application/json" -d '{"gas_key_hex": "{GAS_PRIVATE_KEY_HEX}", "ws_api_key": "{ALCHEMY_API_KEY}"}' <secret_store_node_ip:secret_store_node_port>/mutable-config
 Mutable params configured!
 ```
 
@@ -113,10 +114,10 @@ $ curl <secret_store_node_ip:secret_store_node_port>/store-details
 
 <b> Exporting registration details from the secret store node: </b>
 
-The owner can hit the below endpoint to get the registration details required to register the secret store enclave on the common chain **SecretStore** contract. The endpoint will also start the listening of such event notifications on the common chain inside the enclave node.
+The serverless executor service will request the below endpoint to get the registration details required to register the whole TEE enclave on the common chain **TeeManager** contract. This endpoint will also start the listening of such event notifications from the common chain inside the secret store service.
 ```
-$ curl <secret_store_node_ip:secret_store_node_port>/signed-registration-message
-{"storage_capacity":{SECRET_STORE_CAPACITY_BYTES},"owner":"{STORE_ENCLAVE_OWNER_ADDRESS}","sign_timestamp":{SIGN_TIMESTAMP},"signature":"{ENCLAVE_SIGNATURE_OF_REGISTRATION_DETAILS}"}
+$ curl <secret_store_node_ip:secret_store_node_port>/register-details
+{"storage_capacity":{SECRET_STORE_CAPACITY_BYTES}}
 ```
 
 **Note:** After the owner will register the secret store enclave on the common chain, the node will listen to that event and start the listening of user secret requests created by the **SecretManager** contract on the common chain and store/modify them accordingly.
@@ -131,14 +132,25 @@ $ curl -X POST -H "Content-Type: application/json" -d '{"secret_id": {ASSIGNED_S
 
 <b> Encrypting secret data and signing it: </b>
 
-User can use the following binary to encrypt their secret data bytes with the secret store enclave public key and sign it using their private key with which they requested storage on the common chain. 
+User can use the following binary to encrypt their secret data bytes with the selected secret store enclave's public key, sign it using their private key with which they requested storage on the common chain and inject the secret into the secret stores. 
 ```
-$ ./target/x86_64-unknown-linux-musl/release/oyster-secret-user-utility --secret-id {SECRET_ID} --secret-data-hex {SECRET_DATA_BYTES_HEX} --enclave-public-key {SECRET_STORE_ENCLAVE_PUBLIC_KEY_HEX} --user-private-hex {USER_PRIVATE_KEY_HEX}
-Secret data in bytes: {SECRET_DATA_DECODED_INTO_BYTES}
-Secret ID: {SECRET_ID_PROVIDED}
-Encrypted secret: {ENCRYPTED_SECRET_DATA_BYTES_HEX}
-Signature: {USER_SIGNATURE_OF_SECRET_ID_AND_ENCRYPTED_DATA}
+$ ./target/x86_64-unknown-linux-musl/release/oyster-secret-user-utility --secret-data-hex {SECRET_DATA_BYTES_HEX} --user-private-hex {USER_PRIVATE_KEY_HEX} --http-rpc-url {COMMON_CHAIN_HTTP_RPC_URL} --config-file {SECRET_STORE_ENCLAVES_INFO_JSON} --txn-hash {SECRET_CREATE_TRANSACTION_HASH}
+Secret injected successfully into enclave "{ENCLAVE_ADDRESS}" with acknowledgement: Object {"secret_id": String("{SECRET_ID}"), "sign_timestamp": Number({ENCLAVE_SIGN_TIMESTAMP}), "signature": String("{ENCLAVE_ACKNOWELDGEMENT_SIGNATURE}")}
+...
 ```
+The "SECRET_STORE_ENCLAVES_INFO_JSON" will look something like this: 
+```
+{
+    "stores": {
+        "{ENCLAVE_ADDRESS}": {
+            "public_key": "{ENCLAVE_PUBLIC_KEY}",
+            "store_external_url": "http://{ENCLAVE_PUBLIC_IP}:{EXTERNAL_PORT}"
+        },
+        ...
+    }
+}
+```
+
 
 ## License
 

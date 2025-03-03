@@ -3,20 +3,23 @@ use alloy::primitives::{keccak256, FixedBytes};
 use once_cell::sync::Lazy;
 
 // TODO: add support for automatically determining enclave storage capacity based on system config
-pub const SECRET_STORAGE_CAPACITY_BYTES: usize = 100000000; // this is roughly 95 MB
+pub const SECRET_STORAGE_CAPACITY_BYTES: usize = 100000000; // this is roughly 96 MB
+pub const INJECT_SECRET_JSON_PAYLOAD_SIZE_LIMIT: usize = 2500000; // this is roughly 2.5 MB
 
 // Deadline (in secs) for resending pending/dropped acknowledgement timeout txns
 pub const ACKNOWLEDGEMENT_TIMEOUT_TXN_RESEND_DEADLINE_SECS: u64 = 20;
 // Buffer time (in secs) for sending store alive transaction under the set timeout
 pub const SEND_TRANSACTION_BUFFER_SECS: u64 = 5;
-// Interval (in secs) for removing expired secrets
-pub const GARBAGE_CLEAN_JOB_INTERVAL_SECS: u64 = 300;
 // Buffer time (in secs) for removing an expired secret
 pub const SECRET_EXPIRATION_BUFFER_SECS: u64 = 5;
 
-// Event signatures of 'SecretStore' and 'SecretManager' contracts
-pub const SECRET_STORE_REGISTERED_EVENT: &str = "SecretStoreRegistered(address,address,uint256)";
-pub const SECRET_STORE_DEREGISTERED_EVENT: &str = "SecretStoreDeregistered(address)";
+// Event signatures of 'TeeManager' and 'SecretManager' contracts
+pub const SECRET_STORE_REGISTERED_EVENT: &str =
+    "TeeNodeRegistered(address,address,uint256,uint256,uint8)";
+pub const SECRET_STORE_DRAINED_EVENT: &str = "TeeNodeDrained(address)";
+pub const SECRET_STORE_REVIVED_EVENT: &str = "TeeNodeRevived(address)";
+pub const SECRET_STORE_DEREGISTERED_EVENT: &str = "TeeNodeDeregistered(address)";
+
 pub const SECRET_CREATED_EVENT: &str =
     "SecretCreated(uint256,address,uint256,uint256,uint256,address[])";
 pub const SECRET_STORE_ACKNOWLEDGEMENT_SUCCESS_EVENT: &str =
