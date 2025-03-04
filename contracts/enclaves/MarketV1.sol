@@ -28,9 +28,7 @@ contract MarketV1 is
     /// @custom:oz-upgrades-unsafe-allow constructor
     // initializes the logic contract without any admins
     // safeguard against takeover of the logic contract
-    constructor() initializer {
-        _disableInitializers();
-    }
+    constructor() initializer { }
 
     modifier onlyAdmin() {
         require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), "only admin");
@@ -258,7 +256,7 @@ contract MarketV1 is
         }
         _withdraw(_provider, _amount);
 
-        jobs[_job].balance = _balance;
+        jobs[_job].balance = _balance;  
         jobs[_job].paymentSettledTimestamp = block.timestamp;
 
         emit JobSettled(_job, _amount);
