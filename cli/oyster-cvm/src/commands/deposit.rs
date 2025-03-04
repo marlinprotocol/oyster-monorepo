@@ -1,4 +1,5 @@
-use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
+use crate::configs::global::{CREDIT_MANAGER_ADDRESS, MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
+use crate::utils::credit_manager::is_job_from_credits;
 use crate::utils::{
     provider::create_provider,
     usdc::{approve_usdc, format_usdc},
@@ -16,6 +17,13 @@ sol!(
     #[sol(rpc)]
     OysterMarket,
     "src/abis/oyster_market_abi.json"
+);
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    CreditManager,
+    "src/abis/credit_manager_abi.json"
 );
 
 pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str) -> Result<()> {
@@ -54,23 +62,44 @@ pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str)
     if job.owner == Address::ZERO {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
+
+    let is_job_from_credits = is_job_from_credits(job_id, provider.clone()).await?;
+
     info!("Depositing: {:.6} USDC", format_usdc(amount_u256));
 
     // First approve USDC transfer
     approve_usdc(amount_u256, provider.clone()).await?;
 
     // Call jobDeposit function
-    let tx_hash = market
-        .jobDeposit(
-            job_id.parse().context("Failed to parse job ID")?,
-            amount_u256,
-        )
-        .send()
-        .await
-        .context("Failed to send deposit transaction")?
-        .watch()
-        .await
-        .context("Failed to get transaction hash")?;
+    let tx_hash = if is_job_from_credits {
+        let credit_manager =
+            CreditManager::new(CREDIT_MANAGER_ADDRESS.parse::<Address>()?, provider.clone());
+
+        credit_manager
+            .jobDeposit(
+                job_id.parse().context("Failed to parse job ID")?,
+                U256::ZERO,
+                amount_u256,
+            )
+            .send()
+            .await
+            .context("Failed to send deposit transaction")?
+            .watch()
+            .await
+            .context("Failed to get transaction hash")?
+    } else {
+        market
+            .jobDeposit(
+                job_id.parse().context("Failed to parse job ID")?,
+                amount_u256,
+            )
+            .send()
+            .await
+            .context("Failed to send deposit transaction")?
+            .watch()
+            .await
+            .context("Failed to get transaction hash")?
+    };
 
     info!("Deposit transaction hash: {:?}", tx_hash);
 
