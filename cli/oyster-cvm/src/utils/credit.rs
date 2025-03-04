@@ -1,0 +1,66 @@
+use crate::configs::global::{CREDIT_ADDRESS, CREDIT_MANAGER_ADDRESS};
+use alloy::{
+    primitives::{Address, U256},
+    providers::WalletProvider,
+    sol,
+};
+use anyhow::{anyhow, Context, Result};
+use tracing::info;
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    CREDIT,
+    "src/abis/credit_abi.json"
+);
+
+pub async fn approve_credit(
+    amount: U256,
+    provider: crate::utils::provider::OysterProvider,
+) -> Result<()> {
+    let credit_address: Address = CREDIT_ADDRESS
+        .parse()
+        .context("Failed to parse credit address")?;
+    let credit_manager_address: Address = CREDIT_MANAGER_ADDRESS
+        .parse()
+        .context("Failed to parse credit manager address")?;
+    let signer_address = provider
+        .signer_addresses()
+        .next()
+        .ok_or_else(|| anyhow!("No signer address found"))?;
+    let credit = CREDIT::new(credit_address, provider);
+
+    // Get the current allowance
+    let current_allowance_result = credit
+        .allowance(signer_address, credit_manager_address)
+        .call()
+        .await
+        .context("Failed to get current credit allowance")?;
+
+    // Extract numeric allowance value
+    let current_allowance: U256 = current_allowance_result._0;
+
+    // Only approve if the current allowance is less than the required amount
+    if current_allowance < amount {
+        info!(
+            "Current allowance ({}) is less than required amount ({}), approving credit transfer...",
+            current_allowance, amount
+        );
+        let tx_hash = credit
+            .approve(credit_manager_address, amount)
+            .send()
+            .await
+            .context("Failed to send credit approval transaction")?
+            .watch()
+            .await
+            .context("Failed to get credit approval transaction hash")?;
+
+        info!("Credit approval transaction: {:?}", tx_hash);
+    } else {
+        info!(
+            "Current allowance ({}) is sufficient for the required amount ({}), skipping approval",
+            current_allowance, amount
+        );
+    }
+    Ok(())
+}

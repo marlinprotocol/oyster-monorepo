@@ -114,6 +114,10 @@ enum Commands {
         /// Extra init params, base64 encoded
         #[arg(long, default_value = "")]
         extra_init_params: String,
+
+        /// Use Credit contract for payment
+        #[arg(long)]
+        use_credits: bool,
     },
     /// Verify Oyster Enclave Attestation
     Verify {
@@ -289,6 +293,7 @@ async fn main() -> Result<()> {
             no_stream,
             init_params,
             extra_init_params,
+            use_credits,
         } => {
             let config = DeploymentConfig {
                 image_url,
@@ -301,6 +306,7 @@ async fn main() -> Result<()> {
                 init_params,
                 no_stream,
                 extra_init_params,
+                use_credits,
             };
             commands::deploy::deploy_oyster_instance(config, &wallet_private_key, &operator).await
         }
