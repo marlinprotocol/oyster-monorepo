@@ -28,7 +28,9 @@ contract MarketV1 is
     /// @custom:oz-upgrades-unsafe-allow constructor
     // initializes the logic contract without any admins
     // safeguard against takeover of the logic contract
-    constructor() initializer {}
+    constructor() initializer {
+        _disableInitializers();
+    }
 
     modifier onlyAdmin() {
         require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), "only admin");
@@ -163,7 +165,7 @@ contract MarketV1 is
 
     uint256[46] private __gap_3;
 
-    event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken); // TODO: is oldToken needed?
+    event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
     event ShutdownDelayUpdated(uint256 shutdownDelay);
 
     event JobOpened(
@@ -177,8 +179,8 @@ contract MarketV1 is
     );
     event JobSettled(bytes32 indexed job, uint256 amount);
     event JobClosed(bytes32 indexed job);
-    event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount); // TODO: is `from` needed?
-    event JobWithdrawn(bytes32 indexed job, address indexed to, uint256 amount); // TODO: is `to` needed?
+    event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount);
+    event JobWithdrew(bytes32 indexed job, address indexed to, uint256 amount);
     event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
 
@@ -309,7 +311,7 @@ contract MarketV1 is
         jobs[_job].balance -= _amount;
         _withdraw(_to, _amount);
 
-        emit JobWithdrawn(_job, _to, _amount);
+        emit JobWithdrew(_job, _to, _amount);
     }
 
     function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
@@ -324,9 +326,9 @@ contract MarketV1 is
 
         // update rate and paymentSettledTimestamp
         jobs[_job].rate = _newRate;
-        uint256 paymentSettledTimestampNew = block.timestamp + shutdownDelay;
-        jobs[_job].paymentSettledTimestamp = paymentSettledTimestampNew;
-        emit JobRateRevised(_job, _newRate, paymentSettledTimestampNew);
+        uint256 paymentSettledTimestampUpdated = block.timestamp + shutdownDelay;
+        jobs[_job].paymentSettledTimestamp = paymentSettledTimestampUpdated;
+        emit JobRateRevised(_job, _newRate, paymentSettledTimestampUpdated);
     }
 
     function _jobMetadataUpdate(bytes32 _job, string memory _metadata) internal {
@@ -349,7 +351,6 @@ contract MarketV1 is
     
         jobs[_job].balance -= shutdownDelayCost;
         _withdraw(jobs[_job].provider, shutdownDelayCost);
-        // TODO: emit event?
     }
 
     function _max(uint256 _a, uint256 _b) internal pure returns (uint256) {
