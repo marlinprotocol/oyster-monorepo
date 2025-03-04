@@ -17,10 +17,6 @@ export default {
       accounts: {
         count: 500
       },
-      forking: {
-        url: `https://sepolia-rollup.arbitrum.io/rpc`,
-          accounts: [process.env.ARBITRUM_DEPLOYER_KEY]
-      },
       allowBlocksWithSameTimestamp: true,
     },
     eth: {
