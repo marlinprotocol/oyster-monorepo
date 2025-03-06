@@ -2,6 +2,11 @@
 
 pragma solidity ^0.8.0;
 
+/* Libraries */
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+/* Contracts */
+import {LockUpgradeable} from "../lock/LockUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ContextUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import {ERC165Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
@@ -12,9 +17,10 @@ import {
     UUPSUpgradeable,
     ERC1967UpgradeUpgradeable
 } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+
+/* Interfaces */
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {LockUpgradeable} from "../lock/LockUpgradeable.sol";
+import {ICredit} from "./interfaces/ICredit.sol";
 
 contract MarketV1 is
     Initializable, // initializer
@@ -420,8 +426,7 @@ contract MarketV1 is
                 settleAmount = 0;
                 creditTransferAmount = settleAmount;
             }
-            // TODO: redeem from Credit contract
-            creditToken.safeTransfer(provider, creditTransferAmount);
+            ICredit(address(creditToken)).redeemAndBurn(provider, creditTransferAmount);
         }
 
         if (settleAmount > 0) {
@@ -463,6 +468,8 @@ contract MarketV1 is
 
     //----------------------------------- Admin start -----------------------------------//
 
+    bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
+
     function updateToken(IERC20 _token) external onlyAdmin {
         require(address(_token) != address(0), "invalid token address");
         _updateToken(_token);
@@ -493,5 +500,10 @@ contract MarketV1 is
         emit CreditTokenUpdated(creditToken, _creditToken);
     }
 
-    //----------------------------------- Admin start -----------------------------------//
+    function emergencyWithdraw(address _token, address _to, uint256 _amount) external onlyAdmin {
+        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _msgSender()), "only to emergency withdraw role");
+        IERC20(_token).safeTransfer(_to, _amount);
+    }
+
+    //----------------------------------- Admin end -----------------------------------//
 }
