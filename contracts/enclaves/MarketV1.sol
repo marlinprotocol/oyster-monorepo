@@ -167,9 +167,10 @@ contract MarketV1 is
     uint256[46] private __gap_3;
 
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
+    event CreditTokenUpdated(IERC20 indexed oldCreditToken, IERC20 indexed newCreditToken);
     event ShutdownWindowUpdated(uint256 shutdownWindow);
 
-    event JobOpened( // TODO: remove
+    event JobOpened(
         bytes32 indexed job,
         string metadata,
         address indexed owner,
@@ -182,7 +183,7 @@ contract MarketV1 is
     event JobClosed(bytes32 indexed job);
     event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount);
     event JobWithdrew(bytes32 indexed job, address indexed to, uint256 amount);
-    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp); // TODO: remove paymentSettledTimestamp
+    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
 
     modifier onlyExistingJob(bytes32 _job) {
@@ -321,24 +322,23 @@ contract MarketV1 is
      * @dev     block.timestamp > paymentSettleds should be checked before calling this function
      */
     function _jobSettle(bytes32 _job) internal {
-        uint256 _rate = jobs[_job].rate;
-        uint256 _balance = jobs[_job].balance;
-        uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
+        uint256 usageDuration = block.timestamp - jobs[_job].paymentSettledTimestamp;
+        uint256 amountUsed = _calcAmountUsed(jobs[_job].rate, usageDuration);
+        uint256 settleAmount = _min(amountUsed, jobs[_job].balance);
+        _settle(_job, settleAmount);
 
-        uint256 _usageDuration = block.timestamp - _paymentSettled;
-        uint256 _amount = _calcAmountUsed(_rate, _usageDuration);
-        if (_amount > _balance) {
-            _amount = _balance; // withdraw all if balance is insufficient
-            _balance = 0;
-            // TODO: delete job if _amount >= balance?
-        } else {
-            _balance -= _amount;
-        }
-        _settle(_job, _amount);
-
-        jobs[_job].balance = _balance;
         jobs[_job].paymentSettledTimestamp = block.timestamp;
+
+        emit JobSettled(_job, settleAmount);
     }
+
+    function _deductShutdownWindowCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
+        uint256 timeDelta = _calcTimeDelta(_paymentSettled);
+        uint256 shutdownWindowCost = _calcAmountUsed(_rate, timeDelta);
+        require(jobs[_job].balance >= shutdownWindowCost, "balance below shutdown delay cost");
+        _settle(_job, shutdownWindowCost);
+    }
+
 
     function _calcTimeDelta(uint256 _paymentSettledTimestamp) internal view returns (uint256) {
         return block.timestamp < _paymentSettledTimestamp
@@ -354,9 +354,19 @@ contract MarketV1 is
         return _a > _b ? _a : _b;
     }
 
+    function _min(uint256 _a, uint256 _b) internal pure returns (uint256) {
+        return _a < _b ? _a : _b;
+    }
+
     //-------------------------------- Jobs end --------------------------------//
 
     //-------------------------------- Payment Module start --------------------------------//
+    
+    mapping(bytes32 => uint256) public jobCreditBalance;
+    IERC20 public creditToken;
+
+    // TODO: gap?
+
     /**
      * @notice  Deposits the specified amount into the job balance.
      * @param   _job  The job to deposit to.
@@ -364,22 +374,59 @@ contract MarketV1 is
      * @param   _amount  The amount to deposit.
      */
     function _deposit(bytes32 _job, address _from, uint256 _amount) internal {
-        token.safeTransferFrom(_from, address(this), _amount);
+        // total amount to deposit
+        uint256 depositAmount = _amount;
+
+        // amount to transfer from credit token
+        uint256 creditBalanceTransferable = _min(
+            creditToken.balanceOf(_from), 
+            creditToken.allowance(_from, address(this))
+        );
+
+        if (creditBalanceTransferable > 0) {
+            uint256 creditTransferAmount;
+            if (depositAmount > creditBalanceTransferable) {
+                depositAmount -= creditBalanceTransferable;
+                creditTransferAmount = creditBalanceTransferable;
+            } else {
+                depositAmount = 0;
+                creditTransferAmount = depositAmount;
+            }
+            creditToken.safeTransferFrom(_from, address(this), creditTransferAmount);
+        }
+
+        if (depositAmount > 0) {
+            token.safeTransferFrom(_from, address(this), depositAmount);
+        }
+        
         jobs[_job].balance += _amount;
     }
 
     function _settle(bytes32 _job, uint256 _amount) internal {
-        jobs[_job].balance -= _amount;
         address provider = jobs[_job].provider;
-        token.safeTransfer(provider, _amount);
-        emit JobSettled(_job, _amount);
-    }
+        uint256 settleAmount = _amount;
+        uint256 creditBalance = jobCreditBalance[_job];
 
-    function _deductShutdownWindowCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
-        uint256 timeDelta = _calcTimeDelta(_paymentSettled);
-        uint256 shutdownWindowCost = _calcAmountUsed(_rate, timeDelta);
-        require(jobs[_job].balance >= shutdownWindowCost, "balance below shutdown delay cost");
-        _settle(_job, shutdownWindowCost);
+        jobs[_job].balance -= settleAmount;
+
+        if (creditBalance > 0) {
+            uint256 creditTransferAmount;
+            if (settleAmount > creditBalance) {
+                jobCreditBalance[_job] = 0;
+                settleAmount -= creditBalance;
+                creditTransferAmount = creditBalance;
+            } else {
+                jobCreditBalance[_job] -= settleAmount;
+                settleAmount = 0;
+                creditTransferAmount = settleAmount;
+            }
+            // TODO: redeem from Credit contract
+            creditToken.safeTransfer(provider, creditTransferAmount);
+        }
+
+        if (settleAmount > 0) {
+            token.safeTransfer(provider, settleAmount);
+        }
     }
 
     /**
@@ -390,8 +437,26 @@ contract MarketV1 is
      * @param   _amount  The amount to withdraw.
      */
     function _withdraw(bytes32 _job, address _to, uint256 _amount) internal {
-        jobs[_job].balance -= _amount;
-        token.safeTransfer(_to, _amount);
+        uint256 withdrawAmount = _amount;
+        uint256 creditBalance = jobCreditBalance[_job];
+
+        if (creditBalance > 0) {    
+            uint256 creditTransferAmount;
+            if (withdrawAmount > creditBalance) {
+                jobCreditBalance[_job] = 0;
+                withdrawAmount -= creditBalance;
+                creditTransferAmount = creditBalance;
+            } else {
+                jobCreditBalance[_job] -= withdrawAmount;
+                withdrawAmount = 0; 
+                creditTransferAmount = withdrawAmount;
+            }
+            creditToken.safeTransfer(_to, creditTransferAmount);
+        }
+
+        if (withdrawAmount > 0) {
+            token.safeTransfer(_to, withdrawAmount);
+        }
     }
 
     //--------------------------------- Payment Module end ---------------------------------//
@@ -399,12 +464,13 @@ contract MarketV1 is
     //----------------------------------- Admin start -----------------------------------//
 
     function updateToken(IERC20 _token) external onlyAdmin {
+        require(address(_token) != address(0), "invalid token address");
         _updateToken(_token);
     }
 
     function _updateToken(IERC20 _token) internal {
-        emit TokenUpdated(token, _token);
         token = _token;
+        emit TokenUpdated(token, _token);
     }
 
     function updateShutdownWindow(uint256 _shutdownWindow) external onlyAdmin {
@@ -415,6 +481,16 @@ contract MarketV1 is
     function _updateShutdownWindow(uint256 _shutdownWindow) internal {
         shutdownWindow = _shutdownWindow;
         emit ShutdownWindowUpdated(_shutdownWindow);
+    }
+
+    function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
+        require(address(_creditToken) != address(0), "invalid credit token address");
+        _updateCreditToken(_creditToken);
+    }
+
+    function _updateCreditToken(IERC20 _creditToken) internal {
+        creditToken = _creditToken;
+        emit CreditTokenUpdated(creditToken, _creditToken);
     }
 
     //----------------------------------- Admin start -----------------------------------//
