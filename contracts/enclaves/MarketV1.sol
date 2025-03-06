@@ -2,15 +2,18 @@
 
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "../lock/LockUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ContextUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
+import {ERC165Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {AccessControlEnumerableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
+import {
+    UUPSUpgradeable,
+    ERC1967UpgradeUpgradeable
+} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {LockUpgradeable} from "../lock/LockUpgradeable.sol";
 
 contract MarketV1 is
     Initializable, // initializer
@@ -37,30 +40,36 @@ contract MarketV1 is
 
     //-------------------------------- Overrides start --------------------------------//
 
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view virtual override(ERC165Upgradeable, AccessControlUpgradeable, AccessControlEnumerableUpgradeable) returns (bool) {
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        virtual
+        override(ERC165Upgradeable, AccessControlUpgradeable, AccessControlEnumerableUpgradeable)
+        returns (bool)
+    {
         return super.supportsInterface(interfaceId);
     }
 
-    function _grantRole(
-        bytes32 role,
-        address account
-    ) internal virtual override(AccessControlUpgradeable, AccessControlEnumerableUpgradeable) {
+    function _grantRole(bytes32 role, address account)
+        internal
+        virtual
+        override(AccessControlUpgradeable, AccessControlEnumerableUpgradeable)
+    {
         super._grantRole(role, account);
     }
 
-    function _revokeRole(
-        bytes32 role,
-        address account
-    ) internal virtual override(AccessControlUpgradeable, AccessControlEnumerableUpgradeable) {
+    function _revokeRole(bytes32 role, address account)
+        internal
+        virtual
+        override(AccessControlUpgradeable, AccessControlEnumerableUpgradeable)
+    {
         super._revokeRole(role, account);
 
         // protect against accidentally removing all admins
         require(getRoleMemberCount(DEFAULT_ADMIN_ROLE) != 0);
     }
 
-    function _authorizeUpgrade(address /*account*/) internal view override onlyAdmin {}
+    function _authorizeUpgrade(address /*account*/ ) internal view override onlyAdmin {}
 
     //-------------------------------- Overrides end --------------------------------//
 
@@ -68,7 +77,10 @@ contract MarketV1 is
 
     uint256[50] private __gap_1;
 
-    function initialize(address _admin, IERC20 _token, bytes32[] memory _selectors, uint256[] memory _lockWaitTimes) public initializer {
+    function initialize(address _admin, IERC20 _token, bytes32[] memory _selectors, uint256[] memory _lockWaitTimes)
+        public
+        initializer
+    {
         require(_selectors.length == _lockWaitTimes.length);
 
         __Context_init_unchained();
@@ -219,12 +231,14 @@ contract MarketV1 is
         token.transfer(_to, _amount);
     }
 
-    function _jobOpen(string memory _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance) internal {
-        uint256 shutdownDelayCost = _calcAmountUsed(_rate, shutdownDelay);        
+    function _jobOpen(string memory _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance)
+        internal
+    {
+        uint256 shutdownDelayCost = _calcAmountUsed(_rate, shutdownDelay);
         require(_balance > shutdownDelayCost, "not enough balance"); // TODO: maybe force shutdownDelayCost + 1min?
 
         _deposit(_owner, _balance);
-        
+
         _balance -= shutdownDelayCost;
         _withdraw(_provider, shutdownDelayCost); // shutdown delay is paid upfront
 
@@ -256,7 +270,7 @@ contract MarketV1 is
         }
         _withdraw(_provider, _amount);
 
-        jobs[_job].balance = _balance;  
+        jobs[_job].balance = _balance;
         jobs[_job].paymentSettledTimestamp = block.timestamp;
 
         emit JobSettled(_job, _amount);
@@ -264,7 +278,7 @@ contract MarketV1 is
 
     function _jobClose(bytes32 _job) internal {
         uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > paymentSettledTimestamp) {
+        if (block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
         }
 
@@ -292,7 +306,7 @@ contract MarketV1 is
 
     function _jobWithdraw(bytes32 _job, address _to, uint256 _amount) internal {
         uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
-        if(block.timestamp > paymentSettledTimestamp) {
+        if (block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
         }
 
@@ -304,7 +318,7 @@ contract MarketV1 is
         // calculate max withdrawable amount
         uint256 maxWithdrawableAmount = jobs[_job].balance - shutdownDelayCost;
         require(_amount <= maxWithdrawableAmount, "amount exceeds max withdrawable amount");
-        
+
         // withdraw
         jobs[_job].balance -= _amount;
         _withdraw(_to, _amount);
@@ -335,7 +349,9 @@ contract MarketV1 is
     }
 
     function _calcTimeDelta(uint256 _paymentSettledTimestamp) internal view returns (uint256) {
-        return block.timestamp < _paymentSettledTimestamp ? (block.timestamp + shutdownDelay) - _paymentSettledTimestamp : shutdownDelay;
+        return block.timestamp < _paymentSettledTimestamp
+            ? (block.timestamp + shutdownDelay) - _paymentSettledTimestamp
+            : shutdownDelay;
     }
 
     function _calcAmountUsed(uint256 _rate, uint256 _usageDuration) internal pure returns (uint256) {
@@ -346,7 +362,7 @@ contract MarketV1 is
         uint256 timeDelta = _calcTimeDelta(_paymentSettled);
         uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
         require(jobs[_job].balance >= shutdownDelayCost, "balance below shutdown delay cost");
-    
+
         jobs[_job].balance -= shutdownDelayCost;
         _withdraw(jobs[_job].provider, shutdownDelayCost);
     }
@@ -361,7 +377,9 @@ contract MarketV1 is
 
     function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
         require(jobs[_job].owner != address(0), "job not found");
-        require(block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle before paymentSettledTimestamp");
+        require(
+            block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle before paymentSettledTimestamp"
+        );
         _jobSettle(_job);
     }
 
@@ -387,6 +405,6 @@ contract MarketV1 is
     function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
         _jobMetadataUpdate(_job, _metadata);
     }
-    
+
     //-------------------------------- Jobs end --------------------------------//
 }
