@@ -1098,22 +1098,66 @@ describe("MarketV1", function () {
       });
     });
 
-    // describe("Scenario Test", function () {
-    //   const initialDeposit = usdc(50);
+    describe.skip("Complex Scenario Test", function () {
+      const initialDeposit = usdc(50);
 
-    //   takeSnapshotBeforeAndAfterEveryTest(async () => { });
+      takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
-    //   beforeEach(async () => {
-    //     await pond.connect(user).approve(marketv1.address, initialDeposit);
-    //     await marketv1
-    //       .connect(user)
-    //       .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-    //   });
+      beforeEach(async () => {
+        await pond.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      });
 
-    //   it("should do something", function () {
-    //     // 테스트 내용
-    //   });
-    // });
+      describe("Scenario1", function () {
+        const JOB_RATE_2 = BN.from(9).e15(); // 9e15
+        const JOB_RATE_3 = BN.from(1).e16(); // 1e16
+        const JOB_RATE_4 = BN.from(12).e15(); // 12e15
+        const JOB_RATE_5 = BN.from(9).e15(); // 9e15
+
+        const initialDeposit = usdc(50);
+        
+        it("[0min] should open a job with 50 USDC and have the correct initial balance", async function () {
+          // user opens job
+          await pond.connect(user).approve(marketv1.address, initialDeposit);
+          await marketv1
+            .connect(user)
+            .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+          
+          const shutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
+          const initialBalanceExpected = initialDeposit.sub(shutdownDelayCost);
+
+          const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+          expect(jobInfo.balance).to.equal(initialBalanceExpected); // initialDeposit(50USDC) - shutdownDelayCost(3USDC) = 47USDCs
+        });
+
+        it("[4min] should revise rate lower and pay 4min*previousRate", async function () {
+          const FOUR_MINUTES = 60 * 4;
+          const previousRate = JOB_RATE_1;
+          const revisedRate = JOB_RATE_2;
+
+          await time.increaseTo(INITIAL_TIMESTAMP + FOUR_MINUTES);
+          
+          await marketv1
+            .connect(user)
+            .jobReviseRate(ethers.constants.HashZero, revisedRate);
+
+          const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
+          expect(jobInfo.rate).to.equal(revisedRate);
+
+          const amountPaidExpected = calcAmountToPay(previousRate, FOUR_MINUTES);
+          expect(jobInfo.balance).to.equal(initialBalanceExpected.sub(amountPaidExpected));
+
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
+          expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+
+          const providerBalanceExpected = shutdownDelayCost.add(amountPaidExpected);
+          expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+          
+        })
+      });
+    });
   });
   
   
