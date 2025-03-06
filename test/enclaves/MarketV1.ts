@@ -56,7 +56,7 @@ const INITIAL_TIMESTAMP = Math.floor(Date.now() / 1000) + 86400;
 
 const JOB_RATE_1 = BN.from(1).e16();
 
-const calcShutdownDelayCost = (rate: BN) => {
+const calcShutdownWindowCost = (rate: BN) => {
 	return calcAmountToPay(rate, SHUTDOWN_DELAY);
 };
 
@@ -136,7 +136,7 @@ describe("MarketV1", function () {
     marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
     await pond.connect(user).approve(marketv1.address, usdc(100));
 
-    await marketv1.updateShutdownDelay(FIVE_MINUTES);
+    await marketv1.updateShutdownWindow(FIVE_MINUTES);
 
     await time.increaseTo(INITIAL_TIMESTAMP);
   });
@@ -307,7 +307,7 @@ describe("MarketV1", function () {
   
     it("should open job", async () => {
       const initialBalance = usdc(50);
-      const shutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
+      const shutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
 
       await marketv1
         .connect(user)
@@ -318,11 +318,11 @@ describe("MarketV1", function () {
       expect(jobInfo.owner).to.equal(await user.getAddress());
       expect(jobInfo.provider).to.equal(await provider.getAddress());
       expect(jobInfo.rate).to.equal(JOB_RATE_1);
-      expect(jobInfo.balance).to.equal(initialBalance.sub(shutdownDelayCost));
+      expect(jobInfo.balance).to.equal(initialBalance.sub(shutdownWindowCost));
       expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES, INITIAL_TIMESTAMP + FIVE_MINUTES + 1);
   
       expect(await pond.balanceOf(addrs[1])).to.equal(SIGNER1_INITIAL_FUND.sub(initialBalance));
-      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(shutdownDelayCost));
+      expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(shutdownWindowCost));
     });
   
     it("should revert when opening job without enough approved", async () => {
@@ -341,7 +341,7 @@ describe("MarketV1", function () {
 
   describe("Job Settle", function () {
     const initialDeposit = usdc(50);
-    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+    const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
 
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
@@ -400,7 +400,7 @@ describe("MarketV1", function () {
         expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
         // Provider balance
-        const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcShutdownDelayCost(JOB_RATE_1));
+        const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcShutdownWindowCost(JOB_RATE_1));
         expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
         // MarketV1 balance
@@ -415,7 +415,7 @@ describe("MarketV1", function () {
   
     it("should deposit to job", async () => {
       const initialDeposit = usdc(50);
-      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
       const additionalDepositAmount = usdc(25);
 
       await marketv1
@@ -445,7 +445,7 @@ describe("MarketV1", function () {
   
     it("should revert when depositing to job without enough approved", async () => {
       const initialDeposit = usdc(50);
-      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
       const additionalDepositAmount = usdc(25);
 
       await pond.connect(user).approve(marketv1.address, initialDeposit);
@@ -461,7 +461,7 @@ describe("MarketV1", function () {
   
     it("should revert when depositing to job without enough balance", async () => {
       const initialDeposit = SIGNER1_INITIAL_FUND;
-      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
       const additionalDepositAmount = usdc(25);
 
       // Open Job
@@ -503,7 +503,7 @@ describe("MarketV1", function () {
 
   describe("Job Withdraw", function () {
     const initialDeposit = usdc(50);
-    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+    const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
 
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
@@ -531,7 +531,7 @@ describe("MarketV1", function () {
       expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + 2);
     
       expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
-      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownWindowCost(JOB_RATE_1));
       expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(withdrawAmount));
     });
   
@@ -558,7 +558,7 @@ describe("MarketV1", function () {
       expect(jobInfo.paymentSettledTimestamp).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + 2);
   
       expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
-      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownWindowCost(JOB_RATE_1));
       expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance.sub(withdrawAmount));
     });
   
@@ -574,7 +574,7 @@ describe("MarketV1", function () {
       
       expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
 
-      const providerBalanceExpected = calcShutdownDelayCost(JOB_RATE_1).add(settledAmountExpected);
+      const providerBalanceExpected = calcShutdownWindowCost(JOB_RATE_1).add(settledAmountExpected);
       expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
       const marketv1BalanceExpected = initialBalance.sub(withdrawAmount).sub(settledAmountExpected);
@@ -622,7 +622,7 @@ describe("MarketV1", function () {
     const JOB_HIGHER_RATE = BN.from(2).e16();
 
     const initialDeposit = usdc(50);
-    const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+    const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
 
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
@@ -646,7 +646,7 @@ describe("MarketV1", function () {
 
       expect(jobInfo.paymentSettledTimestamp).to.equal(currentTimestamp + FIVE_MINUTES);
       expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit));
-      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownWindowCost(JOB_RATE_1));
       expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance);
     });
 
@@ -662,7 +662,7 @@ describe("MarketV1", function () {
       expect(jobInfo.balance).to.equal(initialBalance);
       expect(jobInfo.paymentSettledTimestamp).to.equal(currentTimestamp + FIVE_MINUTES);
       expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit));
-      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownDelayCost(JOB_RATE_1));
+      expect(await pond.balanceOf(await provider.getAddress())).to.equal(calcShutdownWindowCost(JOB_RATE_1));
       expect(await pond.balanceOf(marketv1.address)).to.equal(initialBalance);
     });
 
@@ -686,7 +686,7 @@ describe("MarketV1", function () {
       describe("when rate is higher", function () {
 
         it("should spend shutdown delay cost only", async () => {
-          const shutdownDelayCostExpected = calcShutdownDelayCost(JOB_RATE_1);
+          const shutdownWindowCostExpected = calcShutdownWindowCost(JOB_RATE_1);
 
           await marketv1
             .connect(user)
@@ -695,13 +695,13 @@ describe("MarketV1", function () {
           // Job info after Rate Revision
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(HIGHER_RATE);
-          const jobBalanceExpected = initialBalance.sub(shutdownDelayCostExpected);
+          const jobBalanceExpected = initialBalance.sub(shutdownWindowCostExpected);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(shutdownDelayCostExpected);
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(shutdownWindowCostExpected);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = shutdownDelayCostExpected;
+          const providerBalanceExpected = shutdownWindowCostExpected;
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -711,7 +711,7 @@ describe("MarketV1", function () {
 
       describe("when rate is lower", function () {
         it("should spend shutdown delay cost only", async () => {
-          const shutdownDelayCostExpected = calcShutdownDelayCost(JOB_RATE_1);
+          const shutdownWindowCostExpected = calcShutdownWindowCost(JOB_RATE_1);
   
           await marketv1
             .connect(user)
@@ -720,13 +720,13 @@ describe("MarketV1", function () {
           // Job info after Rate Revision
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(LOWER_RATE);
-          const jobBalanceExpected = initialDeposit.sub(shutdownDelayCostExpected);
+          const jobBalanceExpected = initialDeposit.sub(shutdownWindowCostExpected);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
   
-          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(shutdownDelayCostExpected);
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(shutdownWindowCostExpected);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = shutdownDelayCostExpected;
+          const providerBalanceExpected = shutdownWindowCostExpected;
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -741,7 +741,7 @@ describe("MarketV1", function () {
       describe("when rate is higher", function () {
         it("should spend shutdown delay cost + 2 minutes worth tokens with higher rate", async () => {
           // 5 min * initial rate + 2 min * higher rate
-          const usdcSpentExpected = calcShutdownDelayCost(JOB_RATE_1).add(calcAmountToPay(HIGHER_RATE, TWO_MINUTES));
+          const usdcSpentExpected = calcShutdownWindowCost(JOB_RATE_1).add(calcAmountToPay(HIGHER_RATE, TWO_MINUTES));
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
 
           await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
@@ -773,7 +773,7 @@ describe("MarketV1", function () {
       describe("when rate is lower", function () {
         it("should spend shutdown delay cost + 2 minutes worth tokens with initial rate", async () => {
           // 5 min * initial rate + 2 min * initial rate
-          const usdcSpentExpected = calcShutdownDelayCost(JOB_RATE_1).add(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          const usdcSpentExpected = calcShutdownWindowCost(JOB_RATE_1).add(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
 
           await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
@@ -809,8 +809,8 @@ describe("MarketV1", function () {
       describe("when rate is higher", function () {
         it("should spend 5 minutes worth tokens with initial rate and 5 minutes worth tokens with higher rate", async () => {
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
-          const firstShutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
-          const secondShutdownDelayCost = calcShutdownDelayCost(HIGHER_RATE);
+          const firstShutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
+          const secondShutdownWindowCost = calcShutdownWindowCost(HIGHER_RATE);
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY);
 
@@ -821,7 +821,7 @@ describe("MarketV1", function () {
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(HIGHER_RATE);
 
-          const jobBalanceExpected = initialDeposit.sub(firstShutdownDelayCost).sub(secondShutdownDelayCost);
+          const jobBalanceExpected = initialDeposit.sub(firstShutdownWindowCost).sub(secondShutdownWindowCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
           const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
@@ -830,7 +830,7 @@ describe("MarketV1", function () {
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = firstShutdownDelayCost.add(secondShutdownDelayCost);
+          const providerBalanceExpected = firstShutdownWindowCost.add(secondShutdownWindowCost);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -841,8 +841,8 @@ describe("MarketV1", function () {
       describe("when rate is lower", function () {
         it("should spend 5 minutes worth tokens with initial rate and 5 minutes worth tokens with initial rate", async () => {
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
-          const firstShutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
-          const secondShutdownDelayCost = calcShutdownDelayCost(LOWER_RATE);
+          const firstShutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
+          const secondShutdownWindowCost = calcShutdownWindowCost(LOWER_RATE);
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY);
 
@@ -853,7 +853,7 @@ describe("MarketV1", function () {
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(LOWER_RATE);
 
-          const jobBalanceExpected = initialDeposit.sub(firstShutdownDelayCost).sub(secondShutdownDelayCost);
+          const jobBalanceExpected = initialDeposit.sub(firstShutdownWindowCost).sub(secondShutdownWindowCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
           const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
@@ -862,7 +862,7 @@ describe("MarketV1", function () {
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = firstShutdownDelayCost.add(secondShutdownDelayCost);
+          const providerBalanceExpected = firstShutdownWindowCost.add(secondShutdownWindowCost);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -878,8 +878,8 @@ describe("MarketV1", function () {
       describe("when rate is higher", function () {
         it("should spend 7 minutes worth tokens with initial rate and 5 minutes worth tokens with higher rate", async () => {
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
-          const firstShutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
-          const secondShutdownDelayCost = calcShutdownDelayCost(HIGHER_RATE);
+          const firstShutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
+          const secondShutdownWindowCost = calcShutdownWindowCost(HIGHER_RATE);
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY + TWO_MINUTES);
 
@@ -890,7 +890,7 @@ describe("MarketV1", function () {
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(HIGHER_RATE);
 
-          const jobBalanceExpected = initialDeposit.sub(firstShutdownDelayCost).sub(secondShutdownDelayCost);
+          const jobBalanceExpected = initialDeposit.sub(firstShutdownWindowCost).sub(secondShutdownWindowCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
           const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
@@ -899,7 +899,7 @@ describe("MarketV1", function () {
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = firstShutdownDelayCost.add(secondShutdownDelayCost);
+          const providerBalanceExpected = firstShutdownWindowCost.add(secondShutdownWindowCost);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -910,8 +910,8 @@ describe("MarketV1", function () {
       describe("when rate is lower", function () {
         it("should spend 7 minutes worth tokens with initial rate and 5 minutes worth tokens with initial rate", async () => {
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
-          const firstShutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
-          const secondShutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
+          const firstShutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
+          const secondShutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY + TWO_MINUTES);
 
@@ -922,7 +922,7 @@ describe("MarketV1", function () {
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
           expect(jobInfo.rate).to.equal(LOWER_RATE);
 
-          const jobBalanceExpected = initialDeposit.sub(firstShutdownDelayCost).sub(secondShutdownDelayCost);
+          const jobBalanceExpected = initialDeposit.sub(firstShutdownWindowCost).sub(secondShutdownWindowCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
           const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
@@ -931,7 +931,7 @@ describe("MarketV1", function () {
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = firstShutdownDelayCost.add(secondShutdownDelayCost);
+          const providerBalanceExpected = firstShutdownWindowCost.add(secondShutdownWindowCost);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           const marketv1BalanceExpected = jobBalanceExpected;
@@ -943,7 +943,7 @@ describe("MarketV1", function () {
 
     describe("Job Close", function () {
       const initialDeposit = usdc(50);
-      const initialBalance = initialDeposit.sub(calcShutdownDelayCost(JOB_RATE_1));
+      const initialBalance = initialDeposit.sub(calcShutdownWindowCost(JOB_RATE_1));
 
       takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
@@ -968,7 +968,7 @@ describe("MarketV1", function () {
         expect(jobInfo.balance).to.equal(0);
         expect(jobInfo.paymentSettledTimestamp).to.equal(0);
       
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcShutdownDelayCost(JOB_RATE_1));
+        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcShutdownWindowCost(JOB_RATE_1));
         expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
       });
   
@@ -990,12 +990,12 @@ describe("MarketV1", function () {
             .connect(user)
             .jobClose(ethers.constants.HashZero);
 
-          const shutdownDelayCostExpected = calcShutdownDelayCost(JOB_RATE_1);
+          const shutdownWindowCostExpected = calcShutdownWindowCost(JOB_RATE_1);
 
           // user balance after = initial fund - shutdown delay cost
-          expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(shutdownDelayCostExpected));
+          expect(await pond.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(shutdownWindowCostExpected));
           // provider balance after = shutdown delay cost
-          expect(await pond.balanceOf(await provider.getAddress())).to.equal(shutdownDelayCostExpected);
+          expect(await pond.balanceOf(await provider.getAddress())).to.equal(shutdownWindowCostExpected);
           // marketv1 balance after = 0
           expect(await pond.balanceOf(marketv1.address)).to.equal(0);
         });
@@ -1011,14 +1011,14 @@ describe("MarketV1", function () {
             .connect(user)
             .jobClose(ethers.constants.HashZero);
         
-          const shutdownDelayCostExpected = calcShutdownDelayCost(JOB_RATE_1);
+          const shutdownWindowCostExpected = calcShutdownWindowCost(JOB_RATE_1);
 
           // user balance after = initial fund - 2 minutes worth tokens - shutdown delay cost
-          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdc(TWO_MINUTES)).sub(shutdownDelayCostExpected);
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdc(TWO_MINUTES)).sub(shutdownWindowCostExpected);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
         
           // provider balance after = 2 minutes worth tokens + shutdown delay cost
-          const providerBalanceExpected = usdc(TWO_MINUTES).add(shutdownDelayCostExpected);
+          const providerBalanceExpected = usdc(TWO_MINUTES).add(shutdownWindowCostExpected);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
 
           // marketv1 balance after = 0
@@ -1028,7 +1028,7 @@ describe("MarketV1", function () {
 
       describe("Scenario 3: Closing Job exactly after shutdown delay", function () {
         it("should spend 10 minutes worth tokens", async () => {
-          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, FIVE_MINUTES).add(calcShutdownDelayCost(JOB_RATE_1));
+          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, FIVE_MINUTES).add(calcShutdownWindowCost(JOB_RATE_1));
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY);
 
@@ -1051,7 +1051,7 @@ describe("MarketV1", function () {
       describe("Scenario 4: Closing Job 2 minutes after shutdown delay", function () {
         it("should spend 12 minutes worth tokens", async () => {
           const SEVEN_MINUTES = 60 * 7;
-          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, SEVEN_MINUTES).add(calcShutdownDelayCost(JOB_RATE_1));
+          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, SEVEN_MINUTES).add(calcShutdownWindowCost(JOB_RATE_1));
 
           await time.increaseTo(INITIAL_TIMESTAMP + SHUTDOWN_DELAY + SEVEN_MINUTES);
 
@@ -1125,11 +1125,11 @@ describe("MarketV1", function () {
             .connect(user)
             .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
           
-          const shutdownDelayCost = calcShutdownDelayCost(JOB_RATE_1);
-          const initialBalanceExpected = initialDeposit.sub(shutdownDelayCost);
+          const shutdownWindowCost = calcShutdownWindowCost(JOB_RATE_1);
+          const initialBalanceExpected = initialDeposit.sub(shutdownWindowCost);
 
           const jobInfo = await marketv1.jobs(ethers.constants.HashZero);
-          expect(jobInfo.balance).to.equal(initialBalanceExpected); // initialDeposit(50USDC) - shutdownDelayCost(3USDC) = 47USDCs
+          expect(jobInfo.balance).to.equal(initialBalanceExpected); // initialDeposit(50USDC) - shutdownWindowCost(3USDC) = 47USDCs
         });
 
         it("[4min] should revise rate lower and pay 4min*previousRate", async function () {
@@ -1152,7 +1152,7 @@ describe("MarketV1", function () {
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await pond.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
 
-          const providerBalanceExpected = shutdownDelayCost.add(amountPaidExpected);
+          const providerBalanceExpected = shutdownWindowCost.add(amountPaidExpected);
           expect(await pond.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
           
         })

@@ -6,7 +6,8 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {ContextUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import {ERC165Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AccessControlEnumerableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
+import {AccessControlEnumerableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
 import {
     UUPSUpgradeable,
     ERC1967UpgradeUpgradeable
@@ -168,7 +169,7 @@ contract MarketV1 is
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
     event ShutdownWindowUpdated(uint256 shutdownWindow);
 
-    event JobOpened(
+    event JobOpened( // TODO: remove
         bytes32 indexed job,
         string metadata,
         address indexed owner,
@@ -181,7 +182,7 @@ contract MarketV1 is
     event JobClosed(bytes32 indexed job);
     event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount);
     event JobWithdrew(bytes32 indexed job, address indexed to, uint256 amount);
-    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp);
+    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 paymentSettledTimestamp); // TODO: remove paymentSettledTimestamp
     event JobMetadataUpdated(bytes32 indexed job, string metadata);
 
     modifier onlyExistingJob(bytes32 _job) {
@@ -195,9 +196,9 @@ contract MarketV1 is
     }
 
     /**
-     * @notice  Opens a new job. 
-     *          To ensure the provider is paid for the shutdown window, if the deposit amount is exactly equal to 
-     *          the shutdownWindowCost, the provider is incentivized to shut down the job immediately after opening. 
+     * @notice  Opens a new job.
+     *          To ensure the provider is paid for the shutdown window, if the deposit amount is exactly equal to
+     *          the shutdownWindowCost, the provider is incentivized to shut down the job immediately after opening.
      *          Therefore, it should be noted that `(deposit amount) - shutdownWindowCost` is the actual amount to be
      *          used for running the job.
      * @dev     `shutdownWindowCost` is paid upfront.
@@ -212,16 +213,19 @@ contract MarketV1 is
 
         uint256 _jobIndex = jobIndex;
         jobIndex = _jobIndex + 1;
-        bytes32 _job = bytes32(_jobIndex);
+        bytes32 job = bytes32(_jobIndex);
 
-        _deposit(_job, _msgSender(), _balance);
+        // create job with initial balance 0
+        jobs[job] =
+            Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp + shutdownWindow);
+
+        // deposit initial balance
+        _deposit(job, _msgSender(), _balance);
 
         // shutdown delay is paid upfront
-        _settle(_job, shutdownWindowCost); 
-
-        jobs[_job] = Job(_metadata, _msgSender(), _provider, _rate, jobs[_job].balance, block.timestamp + shutdownWindow);
-
-        emit JobOpened(_job, _metadata, _msgSender(), _provider, _rate, _balance, block.timestamp + shutdownWindow);
+        _settle(job, shutdownWindowCost);
+        
+        emit JobOpened(job, _metadata, _msgSender(), _provider, _rate, jobs[job].balance, block.timestamp + shutdownWindow);
     }
 
     function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
@@ -244,7 +248,7 @@ contract MarketV1 is
         // refund leftover balance
         uint256 _balance = jobs[_job].balance;
         if (_balance > 0) {
-            _settle(_job, _balance);
+            _withdraw(_job, _msgSender(), _balance);
         }
 
         delete jobs[_job];
@@ -282,7 +286,7 @@ contract MarketV1 is
 
     function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
         require(jobs[_job].rate != _newRate, "rate has not changed");
-        
+
         uint256 paymentSettledTimestamp = jobs[_job].paymentSettledTimestamp;
         if (block.timestamp > paymentSettledTimestamp) {
             _jobSettle(_job);
@@ -299,9 +303,16 @@ contract MarketV1 is
         emit JobRateRevised(_job, _newRate, paymentSettledTimestampUpdated);
     }
 
-    function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyExistingJob(_job) onlyJobOwner(_job) {
+    function jobMetadataUpdate(bytes32 _job, string calldata _metadata)
+        external
+        onlyExistingJob(_job)
+        onlyJobOwner(_job)
+    {
         string memory oldMetadata = jobs[_job].metadata;
-        require(keccak256(abi.encodePacked(oldMetadata)) != keccak256(abi.encodePacked(_metadata)), "metadata has not changed");
+        require(
+            keccak256(abi.encodePacked(oldMetadata)) != keccak256(abi.encodePacked(_metadata)),
+            "metadata has not changed"
+        );
         jobs[_job].metadata = _metadata;
         emit JobMetadataUpdated(_job, _metadata);
     }
@@ -352,7 +363,7 @@ contract MarketV1 is
      * @param   _from  The address to deposit from.
      * @param   _amount  The amount to deposit.
      */
-    function _deposit(bytes32 _job,address _from, uint256 _amount) internal {
+    function _deposit(bytes32 _job, address _from, uint256 _amount) internal {
         token.safeTransferFrom(_from, address(this), _amount);
         jobs[_job].balance += _amount;
     }
