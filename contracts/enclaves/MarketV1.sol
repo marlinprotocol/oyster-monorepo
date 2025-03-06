@@ -204,31 +204,39 @@ contract MarketV1 is
         _;
     }
 
-    function _updateToken(IERC20 _token) internal {
-        emit TokenUpdated(token, _token);
-        token = _token;
+    function jobOpen(string calldata _metadata, address _provider, uint256 _rate, uint256 _balance) external {
+        return _jobOpen(_metadata, _msgSender(), _provider, _rate, _balance);
     }
 
-    function updateToken(IERC20 _token) external onlyAdmin {
-        _updateToken(_token);
+    function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
+        require(jobs[_job].owner != address(0), "job not found");
+        require(
+            block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle before paymentSettledTimestamp"
+        );
+        _jobSettle(_job);
     }
 
-    function _updateShutdownDelay(uint256 _shutdownDelay) internal {
-        shutdownDelay = _shutdownDelay;
-        emit ShutdownDelayUpdated(_shutdownDelay);
+    function jobClose(bytes32 _job) external onlyExistingJob(_job) onlyJobOwner(_job) {
+        _jobClose(_job);
     }
 
-    function updateShutdownDelay(uint256 _shutdownDelay) external onlyAdmin {
-        require(_shutdownDelay > 0, "invalid shutdown delay");
-        _updateShutdownDelay(_shutdownDelay);
+    function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
+        require(_amount > 0, "invalid amount");
+        _jobDeposit(_job, _msgSender(), _amount);
     }
 
-    function _deposit(address _from, uint256 _amount) internal {
-        token.transferFrom(_from, address(this), _amount);
+    function jobWithdraw(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) onlyJobOwner(_job) {
+        require(_amount > 0, "invalid amount");
+        _jobWithdraw(_job, _msgSender(), _amount);
     }
 
-    function _withdraw(address _to, uint256 _amount) internal {
-        token.transfer(_to, _amount);
+    function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
+        require(jobs[_job].rate != _newRate, "no rate change");
+        _jobReviseRate(_job, _newRate);
+    }
+
+    function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
+        _jobMetadataUpdate(_job, _metadata);
     }
 
     function _jobOpen(string memory _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance)
@@ -371,40 +379,40 @@ contract MarketV1 is
         return _a > _b ? _a : _b;
     }
 
-    function jobOpen(string calldata _metadata, address _provider, uint256 _rate, uint256 _balance) external {
-        return _jobOpen(_metadata, _msgSender(), _provider, _rate, _balance);
-    }
-
-    function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
-        require(jobs[_job].owner != address(0), "job not found");
-        require(
-            block.timestamp > jobs[_job].paymentSettledTimestamp, "nothing to settle before paymentSettledTimestamp"
-        );
-        _jobSettle(_job);
-    }
-
-    function jobClose(bytes32 _job) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        _jobClose(_job);
-    }
-
-    function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
-        require(_amount > 0, "invalid amount");
-        _jobDeposit(_job, _msgSender(), _amount);
-    }
-
-    function jobWithdraw(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        require(_amount > 0, "invalid amount");
-        _jobWithdraw(_job, _msgSender(), _amount);
-    }
-
-    function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        require(jobs[_job].rate != _newRate, "no rate change");
-        _jobReviseRate(_job, _newRate);
-    }
-
-    function jobMetadataUpdate(bytes32 _job, string calldata _metadata) external onlyJobOwner(_job) {
-        _jobMetadataUpdate(_job, _metadata);
-    }
-
     //-------------------------------- Jobs end --------------------------------//
+
+    //-------------------------------- Payment Module start --------------------------------//
+
+    function _deposit(address _from, uint256 _amount) internal {
+        token.transferFrom(_from, address(this), _amount);
+    }
+
+    function _withdraw(address _to, uint256 _amount) internal {
+        token.transfer(_to, _amount);
+    }
+
+    //--------------------------------- Payment Module end ---------------------------------//
+
+    //----------------------------------- Admin start -----------------------------------//
+
+    function updateToken(IERC20 _token) external onlyAdmin {
+        _updateToken(_token);
+    }
+
+    function _updateToken(IERC20 _token) internal {
+        emit TokenUpdated(token, _token);
+        token = _token;
+    }
+
+    function updateShutdownDelay(uint256 _shutdownDelay) external onlyAdmin {
+        require(_shutdownDelay > 0, "invalid shutdown delay");
+        _updateShutdownDelay(_shutdownDelay);
+    }
+
+    function _updateShutdownDelay(uint256 _shutdownDelay) internal {
+        shutdownDelay = _shutdownDelay;
+        emit ShutdownDelayUpdated(_shutdownDelay);
+    }
+
+    //----------------------------------- Admin start -----------------------------------//
 }
