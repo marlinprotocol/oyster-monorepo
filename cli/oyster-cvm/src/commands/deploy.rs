@@ -1,6 +1,6 @@
 use crate::commands::log::stream_logs;
 use crate::configs::global::{CREDIT_MANAGER_ADDRESS, OYSTER_MARKET_ADDRESS};
-use crate::utils::credit::approve_credit;
+use crate::utils::credit::{approve_credit, get_credit_balance};
 use crate::utils::{
     bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
     provider::{create_provider, OysterProvider},
@@ -52,7 +52,6 @@ pub struct DeploymentConfig {
     pub no_stream: bool,
     pub init_params: String,
     pub extra_init_params: String,
-    pub use_credits: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,16 +127,10 @@ pub async fn deploy_oyster_instance(
     )
     .await?;
 
-    let token = if config.use_credits {
-        "Credits"
-    } else {
-        "USDC"
-    };
-    info!("Total cost: {:.6} {}", format_usdc(total_cost), token);
+    info!("Total cost: {:.6} USDC", format_usdc(total_cost));
     info!(
-        "Total rate: {:.6} {}/hour",
+        "Total rate: {:.6} USDC/hour",
         (total_rate.to::<u128>() * 3600) as f64 / 1e18,
-        token
     );
 
     // Create metadata
@@ -153,11 +146,24 @@ pub async fn deploy_oyster_instance(
         &config.extra_init_params,
     );
 
-    if config.use_credits {
-        approve_credit(total_cost, provider.clone()).await?;
-    } else {
-        // Approve USDC and create job
-        approve_usdc(total_cost, provider.clone()).await?;
+    let credit_balance = match get_credit_balance(provider.clone()).await {
+        Ok(balance) => balance,
+        Err(_) => {
+            return Err(anyhow!("Failed to get balance from Contract"));
+        }
+    };
+
+    // Simplify payment logic - use min to determine credit amount and remainder for tokens
+    let credit_amount = std::cmp::min(credit_balance, total_cost);
+    let token_amount = total_cost - credit_amount;
+
+    if credit_amount > U256::from(0) {
+        info!("Using {} credits for payment", format_usdc(credit_amount));
+        approve_credit(credit_amount, provider.clone()).await?;
+    }
+    if token_amount > U256::from(0) {
+        info!("Using {} USDC for payment", format_usdc(token_amount));
+        approve_usdc(token_amount, provider.clone()).await?;
     }
 
     // Create job
@@ -165,9 +171,9 @@ pub async fn deploy_oyster_instance(
         metadata,
         operator.parse()?,
         total_rate,
-        total_cost,
+        credit_amount,
+        token_amount,
         provider.clone(),
-        config.use_credits,
     )
     .await?;
     info!("Job created with ID: {:?}", job_id);
@@ -196,51 +202,32 @@ async fn create_new_oyster_job(
     metadata: String,
     provider_addr: Address,
     rate: U256,
-    balance: U256,
+    credit_amount: U256,
+    token_amount: U256,
     provider: OysterProvider,
-    use_credits: bool,
 ) -> Result<H256> {
     let tx_hash;
-    if use_credits {
-        let credit_manager_address = CREDIT_MANAGER_ADDRESS.parse::<Address>()?;
+    let credit_manager_address = CREDIT_MANAGER_ADDRESS.parse::<Address>()?;
 
-        // Load CreditManager contract using Alloy
-        let provider_clone = provider.clone();
-        let credit_manager = CreditManager::new(credit_manager_address, provider_clone);
+    // Load CreditManager contract using Alloy
+    let provider_clone = provider.clone();
+    let credit_manager = CreditManager::new(credit_manager_address, provider_clone);
 
-        tx_hash = credit_manager
-            .jobOpen(metadata, provider_addr, rate, balance, U256::ZERO)
-            .send()
-            .await?
-            .watch()
-            .await?;
-    } else {
-        let market_address = OYSTER_MARKET_ADDRESS.parse::<Address>()?;
+    tx_hash = credit_manager
+        .jobOpen(metadata, provider_addr, rate, credit_amount, token_amount)
+        .send()
+        .await?
+        .watch()
+        .await?;
 
-        // Load OysterMarket contract using Alloy
-        let provider_clone = provider.clone();
-        let market = OysterMarket::new(market_address, provider_clone);
-
-        // Create job_open call
-        tx_hash = market
-            .jobOpen(metadata, provider_addr, rate, balance)
-            .send()
-            .await?
-            .watch()
-            .await?;
-    }
     info!("Job creation transaction: {:?}", tx_hash);
 
-    let job_id = get_receipt_and_job_id(tx_hash, provider, use_credits).await?;
+    let job_id = get_receipt_and_job_id(tx_hash, provider).await?;
 
     Ok(job_id)
 }
 
-async fn get_receipt_and_job_id(
-    tx_hash: H256,
-    provider: OysterProvider,
-    use_credits: bool,
-) -> Result<H256> {
+async fn get_receipt_and_job_id(tx_hash: H256, provider: OysterProvider) -> Result<H256> {
     let receipt = provider
         .get_transaction_receipt(tx_hash)
         .await?
@@ -251,37 +238,15 @@ async fn get_receipt_and_job_id(
         return Err(anyhow!("Transaction failed - check contract interaction"));
     }
 
-    // Calculate event signature hash
-    let oyster_market_job_opened_signature =
-        "JobOpened(bytes32,string,address,address,uint256,uint256,uint256)";
-    let oyster_market_job_opened_topic = keccak256(oyster_market_job_opened_signature.as_bytes());
-
     let credit_manager_job_opened_signature = "JobOpened(bytes32,address,uint256,uint256)";
     let credit_manager_job_opened_topic = keccak256(credit_manager_job_opened_signature.as_bytes());
 
-    let mut found_oyster_market_job_opened = false;
-    let mut found_credit_manager_job_opened = if use_credits { false } else { true };
-
-    let mut job_id = H256::ZERO;
-
     // Look for JobOpened event
     for log in receipt.inner.logs().iter() {
-        if log.topics()[0] == oyster_market_job_opened_topic {
-            info!("Found JobOpened event");
-            found_oyster_market_job_opened = true;
-            job_id = log.topics()[1];
-        }
         if log.topics()[0] == credit_manager_job_opened_topic {
-            if use_credits {
-                info!("Found JobOpened event");
-                found_credit_manager_job_opened = true;
-                job_id = log.topics()[1];
-            }
+            info!("Found JobOpened event");
+            return Ok(log.topics()[1]);
         }
-    }
-
-    if found_oyster_market_job_opened && found_credit_manager_job_opened {
-        return Ok(job_id);
     }
 
     // If we can't find the JobOpened event

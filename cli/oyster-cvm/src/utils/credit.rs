@@ -14,6 +14,26 @@ sol!(
     "src/abis/credit_abi.json"
 );
 
+pub async fn get_credit_balance(provider: crate::utils::provider::OysterProvider) -> Result<U256> {
+    let credit_address: Address = CREDIT_ADDRESS
+        .parse()
+        .context("Failed to parse credit address")?;
+
+    let credit = CREDIT::new(credit_address, provider.clone());
+    let signer_address = provider
+        .signer_addresses()
+        .next()
+        .ok_or_else(|| anyhow!("No signer address found"))?;
+
+    let balance = credit
+        .balanceOf(signer_address)
+        .call()
+        .await
+        .context("Failed to get credit balance")?;
+
+    Ok(balance._0)
+}
+
 pub async fn approve_credit(
     amount: U256,
     provider: crate::utils::provider::OysterProvider,

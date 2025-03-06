@@ -1,5 +1,5 @@
-use crate::configs::global::{CREDIT_MANAGER_ADDRESS, MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
-use crate::utils::credit_manager::is_job_from_credits;
+use crate::configs::global::{CREDIT_MANAGER_ADDRESS, MIN_DEPOSIT_AMOUNT};
+use crate::utils::credit::{approve_credit, get_credit_balance};
 use crate::utils::{
     provider::create_provider,
     usdc::{approve_usdc, format_usdc},
@@ -46,60 +46,46 @@ pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str)
         .context("Failed to create provider")?;
 
     // Create contract instance
-    let market = OysterMarket::new(
-        OYSTER_MARKET_ADDRESS
-            .parse()
-            .context("Failed to parse market address")?,
-        provider.clone(),
-    );
+    let credit_manager =
+        CreditManager::new(CREDIT_MANAGER_ADDRESS.parse::<Address>()?, provider.clone());
 
     // Check if job exists and get current balance
-    let job = market
+    let job = credit_manager
         .jobs(job_id.parse().context("Failed to parse job ID")?)
         .call()
         .await
         .context("Failed to fetch job details")?;
-    if job.owner == Address::ZERO {
+    if job.user == Address::ZERO {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
 
-    let is_job_from_credits = is_job_from_credits(job_id, provider.clone()).await?;
+    let credit_balance = get_credit_balance(provider.clone()).await?;
 
-    info!("Depositing: {:.6} USDC", format_usdc(amount_u256));
+    let credit_amount = std::cmp::min(credit_balance, amount_u256);
+    let token_amount = amount_u256 - credit_amount;
 
-    // First approve USDC transfer
-    approve_usdc(amount_u256, provider.clone()).await?;
+    if credit_amount > U256::from(0) {
+        info!("Depositing {} credits", format_usdc(credit_amount));
+        approve_credit(credit_amount, provider.clone()).await?;
+    }
+    if token_amount > U256::from(0) {
+        info!("Depositing {} USDC", format_usdc(token_amount));
+        approve_usdc(token_amount, provider.clone()).await?;
+    }
 
     // Call jobDeposit function
-    let tx_hash = if is_job_from_credits {
-        let credit_manager =
-            CreditManager::new(CREDIT_MANAGER_ADDRESS.parse::<Address>()?, provider.clone());
-
-        credit_manager
-            .jobDeposit(
-                job_id.parse().context("Failed to parse job ID")?,
-                U256::ZERO,
-                amount_u256,
-            )
-            .send()
-            .await
-            .context("Failed to send deposit transaction")?
-            .watch()
-            .await
-            .context("Failed to get transaction hash")?
-    } else {
-        market
-            .jobDeposit(
-                job_id.parse().context("Failed to parse job ID")?,
-                amount_u256,
-            )
-            .send()
-            .await
-            .context("Failed to send deposit transaction")?
-            .watch()
-            .await
-            .context("Failed to get transaction hash")?
-    };
+    let tx_hash = credit_manager
+        .jobDeposit(
+            job_id.parse().context("Failed to parse job ID")?,
+            credit_amount,
+            token_amount,
+        )
+        .send()
+        .await
+        .context("Failed to send deposit transaction")?
+        .watch()
+        .await
+        .context("Failed to get transaction hash")?;
 
     info!("Deposit transaction hash: {:?}", tx_hash);
 
