@@ -173,12 +173,12 @@ contract MarketV1 is
     IERC20 public token;
     uint256 public constant EXTRA_DECIMALS = 12;
 
-    uint256 public shutdownDelay;
+    uint256 public shutdownWindow;
 
     uint256[46] private __gap_3;
 
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
-    event ShutdownDelayUpdated(uint256 shutdownDelay);
+    event ShutdownWindowUpdated(uint256 shutdownWindow);
 
     event JobOpened(
         bytes32 indexed job,
@@ -212,7 +212,7 @@ contract MarketV1 is
      *          the shutdownWindowCost, the provider is incentivized to shut down the job immediately after opening. 
      *          Therefore, it should be noted that `(deposit amount) - shutdownWindowCost` is the actual amount to be
      *          used for running the job.
-     * @dev     `shutdownDelayCost` is paid upfront.
+     * @dev     `shutdownWindowCost` is paid upfront.
      * @param   _metadata  The metadata of the job.
      * @param   _provider  The provider of the job.
      * @param   _rate      The rate of the job.
@@ -256,8 +256,8 @@ contract MarketV1 is
     function _jobOpen(string memory _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance)
         internal
     {
-        uint256 shutdownDelayCost = _calcAmountUsed(_rate, shutdownDelay);
-        require(_balance > shutdownDelayCost, "not enough balance");
+        uint256 shutdownWindowCost = _calcAmountUsed(_rate, shutdownWindow);
+        require(_balance > shutdownWindowCost, "not enough balance");
 
         uint256 _jobIndex = jobIndex;
         jobIndex = _jobIndex + 1;
@@ -266,11 +266,11 @@ contract MarketV1 is
         _deposit(_job, _owner, _balance);
 
         // shutdown delay is paid upfront
-        _settle(_job, shutdownDelayCost); 
+        _settle(_job, shutdownWindowCost); 
 
-        jobs[_job] = Job(_metadata, _owner, _provider, _rate, jobs[_job].balance, block.timestamp + shutdownDelay);
+        jobs[_job] = Job(_metadata, _owner, _provider, _rate, jobs[_job].balance, block.timestamp + shutdownWindow);
 
-        emit JobOpened(_job, _metadata, _owner, _provider, _rate, _balance, block.timestamp + shutdownDelay);
+        emit JobOpened(_job, _metadata, _owner, _provider, _rate, _balance, block.timestamp + shutdownWindow);
     }
 
     /**
@@ -303,7 +303,7 @@ contract MarketV1 is
         }
 
         // deduct shutdown delay cost
-        _deductShutdownDelayCost(_job, jobs[_job].rate, paymentSettledTimestamp);
+        _deductShutdownWindowCost(_job, jobs[_job].rate, paymentSettledTimestamp);
 
         // refund leftover balance
         uint256 _balance = jobs[_job].balance;
@@ -329,11 +329,11 @@ contract MarketV1 is
 
         // calculate shutdown delay cost
         uint256 timeDelta = _calcTimeDelta(paymentSettledTimestamp);
-        uint256 shutdownDelayCost = _calcAmountUsed(jobs[_job].rate, timeDelta);
-        require(jobs[_job].balance > shutdownDelayCost, "balance below shutdown delay cost");
+        uint256 shutdownWindowCost = _calcAmountUsed(jobs[_job].rate, timeDelta);
+        require(jobs[_job].balance > shutdownWindowCost, "balance below shutdown delay cost");
 
         // calculate max withdrawable amount
-        uint256 maxWithdrawableAmount = jobs[_job].balance - shutdownDelayCost;
+        uint256 maxWithdrawableAmount = jobs[_job].balance - shutdownWindowCost;
         require(_amount <= maxWithdrawableAmount, "amount exceeds max withdrawable amount");
 
         // withdraw
@@ -350,11 +350,11 @@ contract MarketV1 is
 
         // deduct shutdown delay cost
         uint256 rate = _max(jobs[_job].rate, _newRate);
-        _deductShutdownDelayCost(_job, rate, paymentSettledTimestamp);
+        _deductShutdownWindowCost(_job, rate, paymentSettledTimestamp);
 
         // update rate and paymentSettledTimestamp
         jobs[_job].rate = _newRate;
-        uint256 paymentSettledTimestampUpdated = block.timestamp + shutdownDelay;
+        uint256 paymentSettledTimestampUpdated = block.timestamp + shutdownWindow;
         jobs[_job].paymentSettledTimestamp = paymentSettledTimestampUpdated;
         emit JobRateRevised(_job, _newRate, paymentSettledTimestampUpdated);
     }
@@ -366,8 +366,8 @@ contract MarketV1 is
 
     function _calcTimeDelta(uint256 _paymentSettledTimestamp) internal view returns (uint256) {
         return block.timestamp < _paymentSettledTimestamp
-            ? (block.timestamp + shutdownDelay) - _paymentSettledTimestamp
-            : shutdownDelay;
+            ? (block.timestamp + shutdownWindow) - _paymentSettledTimestamp
+            : shutdownWindow;
     }
 
     function _calcAmountUsed(uint256 _rate, uint256 _usageDuration) internal pure returns (uint256) {
@@ -399,11 +399,11 @@ contract MarketV1 is
         emit JobSettled(_job, _amount);
     }
 
-    function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
+    function _deductShutdownWindowCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
         uint256 timeDelta = _calcTimeDelta(_paymentSettled);
-        uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
-        require(jobs[_job].balance >= shutdownDelayCost, "balance below shutdown delay cost");
-        _settle(_job, shutdownDelayCost);
+        uint256 shutdownWindowCost = _calcAmountUsed(_rate, timeDelta);
+        require(jobs[_job].balance >= shutdownWindowCost, "balance below shutdown delay cost");
+        _settle(_job, shutdownWindowCost);
     }
 
     /**
@@ -431,14 +431,14 @@ contract MarketV1 is
         token = _token;
     }
 
-    function updateShutdownDelay(uint256 _shutdownDelay) external onlyAdmin {
-        require(_shutdownDelay > 0, "invalid shutdown delay");
-        _updateShutdownDelay(_shutdownDelay);
+    function updateShutdownWindow(uint256 _shutdownWindow) external onlyAdmin {
+        require(_shutdownWindow > 0, "invalid shutdown delay");
+        _updateShutdownWindow(_shutdownWindow);
     }
 
-    function _updateShutdownDelay(uint256 _shutdownDelay) internal {
-        shutdownDelay = _shutdownDelay;
-        emit ShutdownDelayUpdated(_shutdownDelay);
+    function _updateShutdownWindow(uint256 _shutdownWindow) internal {
+        shutdownWindow = _shutdownWindow;
+        emit ShutdownWindowUpdated(_shutdownWindow);
     }
 
     //----------------------------------- Admin start -----------------------------------//
