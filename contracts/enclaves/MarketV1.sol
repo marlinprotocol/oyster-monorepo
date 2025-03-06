@@ -11,8 +11,8 @@ import {
     UUPSUpgradeable,
     ERC1967UpgradeUpgradeable
 } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {IERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {LockUpgradeable} from "../lock/LockUpgradeable.sol";
 
 contract MarketV1 is
@@ -25,6 +25,8 @@ contract MarketV1 is
     UUPSUpgradeable, // public upgrade
     LockUpgradeable // time locks
 {
+    using SafeERC20 for IERC20;
+
     // in case we add more contracts in the inheritance chain
     uint256[500] private __gap_0;
 
@@ -204,6 +206,18 @@ contract MarketV1 is
         _;
     }
 
+    /**
+     * @notice  Opens a new job. 
+     *          To ensure the provider is paid for the shutdown window, if the deposit amount is exactly equal to 
+     *          the shutdownWindowCost, the provider is incentivized to shut down the job immediately after opening. 
+     *          Therefore, it should be noted that `(deposit amount) - shutdownWindowCost` is the actual amount to be
+     *          used for running the job.
+     * @dev     `shutdownDelayCost` is paid upfront.
+     * @param   _metadata  The metadata of the job.
+     * @param   _provider  The provider of the job.
+     * @param   _rate      The rate of the job.
+     * @param   _balance   The balance of the job.
+     */
     function jobOpen(string calldata _metadata, address _provider, uint256 _rate, uint256 _balance) external {
         return _jobOpen(_metadata, _msgSender(), _provider, _rate, _balance);
     }
@@ -243,17 +257,18 @@ contract MarketV1 is
         internal
     {
         uint256 shutdownDelayCost = _calcAmountUsed(_rate, shutdownDelay);
-        require(_balance > shutdownDelayCost, "not enough balance"); // TODO: maybe force shutdownDelayCost + 1min?
-
-        _deposit(_owner, _balance);
-
-        _balance -= shutdownDelayCost;
-        _withdraw(_provider, shutdownDelayCost); // shutdown delay is paid upfront
+        require(_balance > shutdownDelayCost, "not enough balance");
 
         uint256 _jobIndex = jobIndex;
         jobIndex = _jobIndex + 1;
         bytes32 _job = bytes32(_jobIndex);
-        jobs[_job] = Job(_metadata, _owner, _provider, _rate, _balance, block.timestamp + shutdownDelay);
+
+        _deposit(_job, _owner, _balance);
+
+        // shutdown delay is paid upfront
+        _settle(_job, shutdownDelayCost); 
+
+        jobs[_job] = Job(_metadata, _owner, _provider, _rate, jobs[_job].balance, block.timestamp + shutdownDelay);
 
         emit JobOpened(_job, _metadata, _owner, _provider, _rate, _balance, block.timestamp + shutdownDelay);
     }
@@ -262,7 +277,6 @@ contract MarketV1 is
      * @dev     block.timestamp > paymentSettleds should be checked before calling this function
      */
     function _jobSettle(bytes32 _job) internal {
-        address _provider = jobs[_job].provider;
         uint256 _rate = jobs[_job].rate;
         uint256 _balance = jobs[_job].balance;
         uint256 _paymentSettled = jobs[_job].paymentSettledTimestamp;
@@ -276,12 +290,10 @@ contract MarketV1 is
         } else {
             _balance -= _amount;
         }
-        _withdraw(_provider, _amount);
+        _settle(_job, _amount);
 
         jobs[_job].balance = _balance;
         jobs[_job].paymentSettledTimestamp = block.timestamp;
-
-        emit JobSettled(_job, _amount);
     }
 
     function _jobClose(bytes32 _job) internal {
@@ -296,9 +308,7 @@ contract MarketV1 is
         // refund leftover balance
         uint256 _balance = jobs[_job].balance;
         if (_balance > 0) {
-            address _owner = jobs[_job].owner;
-            jobs[_job].balance = 0;
-            _withdraw(_owner, _balance);
+            _settle(_job, _balance);
         }
 
         delete jobs[_job];
@@ -306,8 +316,7 @@ contract MarketV1 is
     }
 
     function _jobDeposit(bytes32 _job, address _from, uint256 _amount) internal {
-        _deposit(_from, _amount);
-        jobs[_job].balance += _amount;
+        _deposit(_job, _from, _amount);
 
         emit JobDeposited(_job, _from, _amount);
     }
@@ -328,8 +337,7 @@ contract MarketV1 is
         require(_amount <= maxWithdrawableAmount, "amount exceeds max withdrawable amount");
 
         // withdraw
-        jobs[_job].balance -= _amount;
-        _withdraw(_to, _amount);
+        _withdraw(_job, _to, _amount);
 
         emit JobWithdrew(_job, _to, _amount);
     }
@@ -366,15 +374,6 @@ contract MarketV1 is
         return (_rate * _usageDuration + 10 ** EXTRA_DECIMALS - 1) / 10 ** EXTRA_DECIMALS;
     }
 
-    function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
-        uint256 timeDelta = _calcTimeDelta(_paymentSettled);
-        uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
-        require(jobs[_job].balance >= shutdownDelayCost, "balance below shutdown delay cost");
-
-        jobs[_job].balance -= shutdownDelayCost;
-        _withdraw(jobs[_job].provider, shutdownDelayCost);
-    }
-
     function _max(uint256 _a, uint256 _b) internal pure returns (uint256) {
         return _a > _b ? _a : _b;
     }
@@ -382,13 +381,41 @@ contract MarketV1 is
     //-------------------------------- Jobs end --------------------------------//
 
     //-------------------------------- Payment Module start --------------------------------//
-
-    function _deposit(address _from, uint256 _amount) internal {
-        token.transferFrom(_from, address(this), _amount);
+    /**
+     * @notice  Deposits the specified amount into the job balance.
+     * @param   _job  The job to deposit to.
+     * @param   _from  The address to deposit from.
+     * @param   _amount  The amount to deposit.
+     */
+    function _deposit(bytes32 _job,address _from, uint256 _amount) internal {
+        token.safeTransferFrom(_from, address(this), _amount);
+        jobs[_job].balance += _amount;
     }
 
-    function _withdraw(address _to, uint256 _amount) internal {
-        token.transfer(_to, _amount);
+    function _settle(bytes32 _job, uint256 _amount) internal {
+        jobs[_job].balance -= _amount;
+        address provider = jobs[_job].provider;
+        token.safeTransfer(provider, _amount);
+        emit JobSettled(_job, _amount);
+    }
+
+    function _deductShutdownDelayCost(bytes32 _job, uint256 _rate, uint256 _paymentSettled) internal {
+        uint256 timeDelta = _calcTimeDelta(_paymentSettled);
+        uint256 shutdownDelayCost = _calcAmountUsed(_rate, timeDelta);
+        require(jobs[_job].balance >= shutdownDelayCost, "balance below shutdown delay cost");
+        _settle(_job, shutdownDelayCost);
+    }
+
+    /**
+     * @notice  Withdraws the specified amount from the job balance.
+     * @dev     Use `_settle()` when settling a job and sending the amount settled to the job's provider.
+     * @param   _job  The job to withdraw from.
+     * @param   _to  The address to withdraw to.
+     * @param   _amount  The amount to withdraw.
+     */
+    function _withdraw(bytes32 _job, address _to, uint256 _amount) internal {
+        jobs[_job].balance -= _amount;
+        token.safeTransfer(_to, _amount);
     }
 
     //--------------------------------- Payment Module end ---------------------------------//
