@@ -12,6 +12,7 @@ pub async fn fetch_seed(
     auth_store: AuthStore,
     secret: [u8; 32],
     kms_enpdoint: String,
+    contract_address: Option<String>,
 ) -> Result<[u8; 64]> {
     // oh how I wish I could use reqwest
 
@@ -39,9 +40,13 @@ pub async fn fetch_seed(
         }
     });
 
+    let uri = match contract_address {
+        Some(contract_address) => format!("/derive?address={}", contract_address),
+        None => "/derive".to_string(),
+    };
     let request = Request::builder()
         .method("GET")
-        .uri("/derive")
+        .uri(uri)
         .body("".to_string())
         .context("failed to build request")?;
     let response = request_sender
