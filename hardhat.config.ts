@@ -6,6 +6,8 @@ import 'solidity-coverage';
 import "hardhat-gas-reporter";
 import "@nomicfoundation/hardhat-chai-matchers";
 import "hardhat-tracer";
+// import * as tdly from "@tenderly/hardhat-tenderly";
+// tdly.setup();
 
 import dotenv from 'dotenv';
 
