@@ -223,16 +223,17 @@ contract MarketV1 is
         bytes32 job = bytes32(_jobIndex);
 
         // create job with initial balance 0
-        jobs[job] =
-            Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp + shutdownWindow);
+        jobs[job] = Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp + shutdownWindow);
 
         // deposit initial balance
         _deposit(job, _msgSender(), _balance);
 
         // shutdown delay is paid upfront
         _settle(job, shutdownWindowCost);
-        
-        emit JobOpened(job, _metadata, _msgSender(), _provider, _rate, jobs[job].balance, block.timestamp + shutdownWindow);
+
+        emit JobOpened(
+            job, _metadata, _msgSender(), _provider, _rate, jobs[job].balance, block.timestamp + shutdownWindow
+        );
     }
 
     function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
@@ -345,7 +346,6 @@ contract MarketV1 is
         _settle(_job, shutdownWindowCost);
     }
 
-
     function _calcTimeDelta(uint256 _paymentSettledTimestamp) internal view returns (uint256) {
         return block.timestamp < _paymentSettledTimestamp
             ? (block.timestamp + shutdownWindow) - _paymentSettledTimestamp
@@ -367,7 +367,7 @@ contract MarketV1 is
     //-------------------------------- Jobs end --------------------------------//
 
     //-------------------------------- Payment Module start --------------------------------//
-    
+
     mapping(bytes32 => uint256) public jobCreditBalance;
     IERC20 public creditToken;
 
@@ -383,50 +383,52 @@ contract MarketV1 is
         // total amount to deposit
         uint256 depositAmount = _amount;
 
-        // amount to transfer from credit token
-        uint256 creditBalanceTransferable = _min(
-            creditToken.balanceOf(_from), 
-            creditToken.allowance(_from, address(this))
-        );
+        if (address(creditToken) != address(0)) {
+            // amount to transfer from credit token
+            uint256 creditBalanceTransferable =
+                _min(creditToken.balanceOf(_from), creditToken.allowance(_from, address(this)));
 
-        if (creditBalanceTransferable > 0) {
-            uint256 creditTransferAmount;
-            if (depositAmount > creditBalanceTransferable) {
-                depositAmount -= creditBalanceTransferable;
-                creditTransferAmount = creditBalanceTransferable;
-            } else {
-                depositAmount = 0;
-                creditTransferAmount = depositAmount;
+            if (creditBalanceTransferable > 0) {
+                uint256 creditTransferAmount;
+                if (depositAmount > creditBalanceTransferable) {
+                    depositAmount -= creditBalanceTransferable;
+                    creditTransferAmount = creditBalanceTransferable;
+                } else {
+                    depositAmount = 0;
+                    creditTransferAmount = depositAmount;
+                }
+                creditToken.safeTransferFrom(_from, address(this), creditTransferAmount);
             }
-            creditToken.safeTransferFrom(_from, address(this), creditTransferAmount);
         }
 
         if (depositAmount > 0) {
             token.safeTransferFrom(_from, address(this), depositAmount);
         }
-        
+
         jobs[_job].balance += _amount;
     }
 
     function _settle(bytes32 _job, uint256 _amount) internal {
         address provider = jobs[_job].provider;
         uint256 settleAmount = _amount;
-        uint256 creditBalance = jobCreditBalance[_job];
 
         jobs[_job].balance -= settleAmount;
 
-        if (creditBalance > 0) {
-            uint256 creditTransferAmount;
-            if (settleAmount > creditBalance) {
-                jobCreditBalance[_job] = 0;
-                settleAmount -= creditBalance;
-                creditTransferAmount = creditBalance;
-            } else {
-                jobCreditBalance[_job] -= settleAmount;
-                settleAmount = 0;
-                creditTransferAmount = settleAmount;
+        if (address(creditToken) != address(0)) {
+            uint256 creditBalance = jobCreditBalance[_job];
+            if (creditBalance > 0) {
+                uint256 creditTransferAmount;
+                if (settleAmount > creditBalance) {
+                    jobCreditBalance[_job] = 0;
+                    settleAmount -= creditBalance;
+                    creditTransferAmount = creditBalance;
+                } else {
+                    jobCreditBalance[_job] -= settleAmount;
+                    settleAmount = 0;
+                    creditTransferAmount = settleAmount;
+                }
+                ICredit(address(creditToken)).redeemAndBurn(provider, creditTransferAmount);
             }
-            ICredit(address(creditToken)).redeemAndBurn(provider, creditTransferAmount);
         }
 
         if (settleAmount > 0) {
@@ -443,23 +445,26 @@ contract MarketV1 is
      */
     function _withdraw(bytes32 _job, address _to, uint256 _amount) internal {
         uint256 withdrawAmount = _amount;
-        uint256 creditBalance = jobCreditBalance[_job];
 
-        if (creditBalance > 0) {    
-            uint256 creditTransferAmount;
-            if (withdrawAmount > creditBalance) {
-                jobCreditBalance[_job] = 0;
-                withdrawAmount -= creditBalance;
-                creditTransferAmount = creditBalance;
-            } else {
-                jobCreditBalance[_job] -= withdrawAmount;
-                withdrawAmount = 0; 
-                creditTransferAmount = withdrawAmount;
+        if (address(creditToken) != address(0)) {
+            uint256 creditBalance = jobCreditBalance[_job];
+            if (creditBalance > 0) {
+                uint256 creditTransferAmount;
+                if (withdrawAmount > creditBalance) {
+                    jobCreditBalance[_job] = 0;
+                    withdrawAmount -= creditBalance;
+                    creditTransferAmount = creditBalance;
+                } else {
+                    jobCreditBalance[_job] -= withdrawAmount;
+                    withdrawAmount = 0;
+                    creditTransferAmount = withdrawAmount;
+                }
+                creditToken.safeTransfer(_to, creditTransferAmount);
             }
-            creditToken.safeTransfer(_to, creditTransferAmount);
         }
 
         if (withdrawAmount > 0) {
+            jobs[_job].balance -= withdrawAmount;
             token.safeTransfer(_to, withdrawAmount);
         }
     }
