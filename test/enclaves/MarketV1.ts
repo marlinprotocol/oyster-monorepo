@@ -11,9 +11,15 @@ import {
 
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 
-import { MarketV1 } from "../../typechain-types";
+import {
+  Credit,
+  MarketV1,
+} from "../../typechain-types";
 import { takeSnapshotBeforeAndAfterEveryTest } from "../../utils/testSuite";
-import { getMarketV1 } from "../../utils/typechainConvertor";
+import {
+  getCredit,
+  getMarketV1,
+} from "../../utils/typechainConvertor";
 import { testERC165 } from "../helpers/erc165";
 import { testAdminRole } from "../helpers/rbac";
 
@@ -108,6 +114,7 @@ describe("MarketV1", function () {
   let signers: Signer[];
   let addrs: string[];
   let marketv1: MarketV1;
+  let creditToken: Credit;
   let pond: Contract;
 
   let user: Signer;
@@ -120,6 +127,7 @@ describe("MarketV1", function () {
     user = signers[1];
     provider = signers[2];
     
+    // Deploy USDC
     const Pond = await ethers.getContractFactory("Pond");
     pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], {
       kind: "uups",
@@ -127,6 +135,7 @@ describe("MarketV1", function () {
     });
     await pond.transfer(addrs[1], SIGNER1_INITIAL_FUND);
     
+    // Deploy MarketV1
     const MarketV1 = await ethers.getContractFactory("MarketV1");
     const marketv1Contract = await upgrades.deployProxy(
       MarketV1,
@@ -136,8 +145,20 @@ describe("MarketV1", function () {
     marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
     await pond.connect(user).approve(marketv1.address, usdc(100));
 
+    // Deploy Credit
+    const Credit = await ethers.getContractFactory("Credit");
+    const creditTokenContract = await upgrades.deployProxy(Credit, [], {
+      kind: "uups",
+      unsafeAllow: ["missing-initializer-call"],
+      constructorArgs: [marketv1.address, pond.address],
+      initializer: false
+    });
+    creditToken = getCredit(creditTokenContract.address, signers[0]);
+    await creditToken.initialize(addrs[0]);
+
     await marketv1.updateShutdownWindow(FIVE_MINUTES);
 
+    // Set initial timestamp
     await time.increaseTo(INITIAL_TIMESTAMP);
   });
 

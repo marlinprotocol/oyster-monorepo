@@ -30,6 +30,8 @@ import {
   AttestationAutherUpgradeable,
   AttestationAutherSample__factory,
   AttestationAutherSample,
+  Credit__factory,
+  Credit,
 } from "../typechain-types";
 
 export function getMpond(contractAddress: string, signer: Signer): MPond {
@@ -74,6 +76,10 @@ export function getClusterSelector(contractAddress: string, signer: Signer): Clu
 
 export function getClusterRewards(contractAddress: string, signer: Signer): ClusterRewards {
   return new ClusterRewards__factory(signer).attach(contractAddress);
+}
+
+export function getCredit(contractAddress: string, signer: Signer): Credit {
+  return new Credit__factory(signer).attach(contractAddress);
 }
 
 export function getMarketV1(contractAddress: string, signer: Signer): MarketV1 {

@@ -77,7 +77,9 @@ contract Credit is
 
     //-------------------------------- Overrides end --------------------------------//
 
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     address immutable i_oysterMarket;
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     address immutable i_usdc;
 
     uint256[500] private __gap1;
@@ -94,7 +96,7 @@ contract Credit is
         __Context_init_unchained();
         __ERC165_init_unchained();
         __AccessControlEnumerable_init_unchained();
-        __ERC20_init_unchained("Marlin Credit", "CREDIT");
+        __ERC20_init_unchained("Oyster Credit", "CREDIT");
         __UUPSUpgradeable_init_unchained();
         
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
