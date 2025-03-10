@@ -141,10 +141,7 @@ async fn execute_job(
                 total_time: execution_timer_start.elapsed().as_millis().into(),
                 ..Default::default()
             }),
-            InvalidTxCalldata
-            | InvalidTxCalldataType
-            | InvalidTxCalldataLength
-            | BadCalldata(_) => Some(JobOutput {
+            InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => Some(JobOutput {
                 output: Bytes::new(),
                 error_code: 2,
                 total_time: execution_timer_start.elapsed().as_millis().into(),
