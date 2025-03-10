@@ -6,10 +6,10 @@ use crate::{
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
         provider::create_provider,
-        usdc::{approve_usdc, format_usdc},
+        token::approve_total_cost,
+        usdc::format_usdc,
     },
 };
-
 use alloy::{
     network::Ethereum,
     primitives::{keccak256, Address, B256 as H256, U256},
@@ -33,13 +33,6 @@ const ATTESTATION_RETRIES: u32 = 20;
 const ATTESTATION_INTERVAL: u64 = 15;
 const TCP_CHECK_RETRIES: u32 = 20;
 const TCP_CHECK_INTERVAL: u64 = 15;
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    USDC,
-    "src/abis/token_abi.json"
-);
 
 sol!(
     #[allow(missing_docs)]
@@ -182,7 +175,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     info!("Total cost: {:.6} USDC", format_usdc(total_cost));
     info!(
         "Total rate: {:.6} USDC/hour",
-        (total_rate.to::<u128>() * 3600) as f64 / 1e18
+        (total_rate.to::<u128>() * 3600) as f64 / 1e18,
     );
 
     let image_url = args
@@ -218,8 +211,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .unwrap_or("".into()),
     );
 
-    // Approve USDC and create job
-    approve_usdc(total_cost, provider.clone()).await?;
+    approve_total_cost(total_cost, provider.clone()).await?;
 
     // Create job
     let job_id = create_new_oyster_job(
@@ -278,8 +270,18 @@ async fn create_new_oyster_job(
         .await?
         .watch()
         .await?;
+
     info!("Job creation transaction: {:?}", tx_hash);
 
+    let job_id = get_receipt_and_job_id(tx_hash, provider).await?;
+
+    Ok(job_id)
+}
+
+async fn get_receipt_and_job_id(
+    tx_hash: H256,
+    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider + Clone,
+) -> Result<H256> {
     let receipt = provider
         .get_transaction_receipt(tx_hash)
         .await?
@@ -290,13 +292,13 @@ async fn create_new_oyster_job(
         return Err(anyhow!("Transaction failed - check contract interaction"));
     }
 
-    // Calculate event signature hash
-    let job_opened_signature = "JobOpened(bytes32,string,address,address,uint256,uint256,uint256)";
-    let job_opened_topic = keccak256(job_opened_signature.as_bytes());
+    let oyster_job_opened_signature =
+        "JobOpened(bytes32,bytes,address,address,uint256,uint256,uint256)";
+    let oyster_job_opened_topic = keccak256(oyster_job_opened_signature.as_bytes());
 
     // Look for JobOpened event
     for log in receipt.inner.logs().iter() {
-        if log.topics()[0] == job_opened_topic {
+        if log.topics()[0] == oyster_job_opened_topic {
             info!("Found JobOpened event");
             return Ok(log.topics()[1]);
         }
