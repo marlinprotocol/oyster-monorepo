@@ -1,10 +1,13 @@
 use crate::configs::global::{CREDIT_ADDRESS, OYSTER_MARKET_ADDRESS};
 use alloy::{
+    network::Ethereum,
     primitives::{Address, U256},
-    providers::WalletProvider,
+    providers::{Provider, WalletProvider},
     sol,
+    transports::http::Http,
 };
 use anyhow::{anyhow, Context, Result};
+use reqwest::Client;
 use tracing::info;
 
 sol!(
@@ -14,7 +17,9 @@ sol!(
     "src/abis/credit_abi.json"
 );
 
-pub async fn get_credit_balance(provider: crate::utils::provider::OysterProvider) -> Result<U256> {
+pub async fn get_credit_balance(
+    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider + Clone,
+) -> Result<U256> {
     let credit_address: Address = CREDIT_ADDRESS
         .parse()
         .context("Failed to parse credit address")?;
@@ -36,7 +41,7 @@ pub async fn get_credit_balance(provider: crate::utils::provider::OysterProvider
 
 pub async fn approve_credit(
     amount: U256,
-    provider: crate::utils::provider::OysterProvider,
+    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider + Clone,
 ) -> Result<()> {
     let credit_address: Address = CREDIT_ADDRESS
         .parse()
