@@ -276,15 +276,20 @@ contract MarketV1 is
         uint256 _jobIndex = jobIndex;
         jobIndex = _jobIndex + 1;
         bytes32 job = bytes32(_jobIndex);
+        
+        // set the first 8 bytes of the job as a prefix with the chainId
+        bytes8 chainIdBytes = bytes8(uint64(block.chainid));
+        job = (bytes32(chainIdBytes) << 224) | (job & 0x0000000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF);
 
         // create job with initial balance 0
-        jobs[job] = Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp + shutdownWindow);
+        uint256 lastSettled = block.timestamp + shutdownWindow;
+        jobs[job] = Job(_metadata, _msgSender(), _provider, _rate, 0, lastSettled);
 
         // deposit initial balance
         _deposit(job, _msgSender(), _balance);
 
         // shutdown delay is paid upfront
-        _settle(job, shutdownWindowCost);
+        _settle(job, shutdownWindowCost, lastSettled);
 
         emit JobOpened(
             job, _metadata, _msgSender(), _provider, _rate, jobs[job].balance, block.timestamp + shutdownWindow
@@ -299,14 +304,14 @@ contract MarketV1 is
         require(
             block.timestamp > jobs[_job].lastSettled, "nothing to settle before lastSettled"
         );
+
         uint256 usageDuration = block.timestamp - jobs[_job].lastSettled;
         uint256 amountUsed = _calcAmountUsed(jobs[_job].rate, usageDuration);
         uint256 settleAmount = _min(amountUsed, jobs[_job].balance);
-        _settle(_job, settleAmount);
+        _settle(_job, settleAmount, block.timestamp);
 
         jobs[_job].lastSettled = block.timestamp;
 
-        // TODO: fix
         emit JobSettled(_job, settleAmount, block.timestamp);
     }
 
@@ -373,7 +378,6 @@ contract MarketV1 is
         // update rate and lastSettled
         jobs[_job].rate = _newRate;
         uint256 lastSettledUpdated = block.timestamp + shutdownWindow;
-        jobs[_job].lastSettled = lastSettledUpdated;
         emit JobRateRevised(_job, _newRate, lastSettledUpdated);
     }
 
@@ -411,12 +415,11 @@ contract MarketV1 is
         _jobClose(_job);
     }
 
-
     function _deductShutdownWindowCost(bytes32 _job, uint256 _rate, uint256 _lastSettled) internal {
         uint256 timeDelta = _calcTimeDelta(_lastSettled);
         uint256 shutdownWindowCost = _calcAmountUsed(_rate, timeDelta);
         require(jobs[_job].balance >= shutdownWindowCost, "balance below shutdown delay cost");
-        _settle(_job, shutdownWindowCost);
+        _settle(_job, shutdownWindowCost, block.timestamp + shutdownWindow);
     }
 
     function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
@@ -467,7 +470,7 @@ contract MarketV1 is
 
     // TODO: gap?
 
-    function _settle(bytes32 _job, uint256 _amount) internal {
+    function _settle(bytes32 _job, uint256 _amount, uint256 _lastSettledUpdated) internal {
         address provider = jobs[_job].provider;
         uint256 settleAmount = _amount;
 
@@ -493,6 +496,10 @@ contract MarketV1 is
         if (settleAmount > 0) {
             token.safeTransfer(provider, settleAmount);
         }
+
+        jobs[_job].lastSettled = _lastSettledUpdated;
+
+        emit JobSettled(_job, settleAmount, _lastSettledUpdated);
     }
 
     /**
