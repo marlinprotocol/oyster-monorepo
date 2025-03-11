@@ -78,7 +78,7 @@ contract MarketV1 is
         require(getRoleMemberCount(DEFAULT_ADMIN_ROLE) != 0);
     }
 
-    function _authorizeUpgrade(address /*account*/) internal view override onlyAdmin {}
+    function _authorizeUpgrade(address /*account*/ ) internal view override onlyAdmin {}
 
     //-------------------------------- Overrides end --------------------------------//
 
@@ -103,6 +103,12 @@ contract MarketV1 is
         _setupRole(DEFAULT_ADMIN_ROLE, _admin);
 
         _updateToken(_token);
+    }
+    
+    function reinitialize() public onlyAdmin reinitializer(2) {
+        // set the first 8 bytes of the job as a prefix with the chainId
+        bytes8 chainIdBytes = bytes8(uint64(block.chainid));
+        jobIndex = (bytes32(chainIdBytes) << 224);  
     }
 
     //-------------------------------- Initializer end --------------------------------//
@@ -164,6 +170,7 @@ contract MarketV1 is
     //-------------------------------- Jobs start --------------------------------//
 
     bytes32 public constant RATE_LOCK_SELECTOR = keccak256("RATE_LOCK");
+    bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
 
     struct Job {
         string metadata;
@@ -175,7 +182,7 @@ contract MarketV1 is
     }
 
     mapping(bytes32 => Job) public jobs;
-    uint256 public jobIndex;
+    bytes32 public jobIndex;
 
     IERC20 public token;
     uint256 public constant EXTRA_DECIMALS = 12;
@@ -188,34 +195,25 @@ contract MarketV1 is
     event CreditTokenUpdated(IERC20 indexed oldCreditToken, IERC20 indexed newCreditToken);
     event ShutdownWindowUpdated(uint256 shutdownWindow);
 
-    event JobOpened(
-        bytes32 indexed job,
-        string metadata,
-        address indexed owner,
-        address indexed provider,
-        uint256 rate,
-        uint256 balance,
-        uint256 lastSettled
-    );
-    event JobSettled(bytes32 indexed job, uint256 amount, uint256 lastSettled);
-    event JobClosed(bytes32 indexed job);
-    event JobDeposited(bytes32 indexed job, address indexed from, uint256 amount);
-    event JobWithdrew(bytes32 indexed job, address indexed to, uint256 amount);
-    event JobRateRevised(bytes32 indexed job, uint256 newRate, uint256 lastSettled);
-    event JobMetadataUpdated(bytes32 indexed job, string metadata);
+    event JobOpened(bytes32 indexed jobId, string metadata, address indexed owner, address indexed provider);
+    event JobSettled(bytes32 indexed jobId, address indexed token, uint256 amount, uint256 lastSettled);
+    event JobClosed(bytes32 indexed jobId);
+    event JobDeposited(bytes32 indexed jobId, address indexed token, address indexed from, uint256 amount);
+    event JobWithdrawn(bytes32 indexed jobId, address indexed token, address indexed to, uint256 amount);
+    event JobRateRevised(bytes32 indexed jobId, uint256 newRate);
+    event JobMetadataUpdated(bytes32 indexed jobId, string metadata);
 
-    modifier onlyExistingJob(bytes32 _job) {
-        require(jobs[_job].owner != address(0), "job not found");
+    modifier onlyExistingJob(bytes32 _jobId) {
+        require(jobs[_jobId].owner != address(0), "job not found");
         _;
     }
 
-    modifier onlyJobOwner(bytes32 _job) {
-        require(jobs[_job].owner == _msgSender(), "only job owner");
+    modifier onlyJobOwner(bytes32 _jobId) {
+        require(jobs[_jobId].owner == _msgSender(), "only job owner");
         _;
     }
 
     function _updateToken(IERC20 _token) internal {
-        require(address(_token) != address(0), "invalid token address");
         token = _token;
         emit TokenUpdated(token, _token);
     }
@@ -225,7 +223,6 @@ contract MarketV1 is
     }
 
     function _updateShutdownWindow(uint256 _shutdownWindow) internal {
-        require(_shutdownWindow > 0, "invalid shutdown delay");
         shutdownWindow = _shutdownWindow;
         emit ShutdownWindowUpdated(_shutdownWindow);
     }
@@ -234,161 +231,121 @@ contract MarketV1 is
         _updateShutdownWindow(_shutdownWindow);
     }
 
-    /**
-     * @notice  Deposits the specified amount into the job balance.
-     * @param   _job  The job to deposit to.
-     * @param   _from  The address to deposit from.
-     * @param   _amount  The amount to deposit.
-     */
-    function _deposit(bytes32 _job, address _from, uint256 _amount) internal {
-        // total amount to deposit
-        uint256 depositAmount = _amount;
+    function _updateCreditToken(IERC20 _creditToken) internal {
+        creditToken = _creditToken;
+        emit CreditTokenUpdated(creditToken, _creditToken);
+    }
 
-        if (address(creditToken) != address(0)) {
-            // amount to transfer from credit token
-            uint256 creditBalanceTransferable =
-                _min(creditToken.balanceOf(_from), creditToken.allowance(_from, address(this)));
+    function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
+        _updateCreditToken(_creditToken);
+    }
 
-            if (creditBalanceTransferable > 0) {
-                uint256 creditTransferAmount;
-                if (depositAmount > creditBalanceTransferable) {
-                    depositAmount -= creditBalanceTransferable;
-                    creditTransferAmount = creditBalanceTransferable;
-                } else {
-                    depositAmount = 0;
-                    creditTransferAmount = depositAmount;
-                }
-                creditToken.safeTransferFrom(_from, address(this), creditTransferAmount);
-            }
-        }
-
-        if (depositAmount > 0) {
-            token.safeTransferFrom(_from, address(this), depositAmount);
-        }
-
-        jobs[_job].balance += _amount;
+    function emergencyWithdraw(address _token, address _to, uint256 _amount) external onlyAdmin {
+        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _msgSender()), "only to emergency withdraw role");
+        IERC20(_token).safeTransfer(_to, _amount);
     }
 
     function _jobOpen(string calldata _metadata, address _provider, uint256 _rate, uint256 _balance) internal {
-        uint256 shutdownWindowCost = _calcAmountUsed(_rate, shutdownWindow);
-        require(_balance > shutdownWindowCost, "not enough balance");
-
-        uint256 _jobIndex = jobIndex;
-        jobIndex = _jobIndex + 1;
-        bytes32 job = bytes32(_jobIndex);
-        
-        // set the first 8 bytes of the job as a prefix with the chainId
-        bytes8 chainIdBytes = bytes8(uint64(block.chainid));
-        job = (bytes32(chainIdBytes) << 224) | (job & 0x0000000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF);
+        uint256 _jobIndex = uint256(jobIndex);
+        jobIndex = bytes32(_jobIndex + 1);
+        bytes32 jobId = bytes32(_jobIndex);
 
         // create job with initial balance 0
-        uint256 lastSettled = block.timestamp + shutdownWindow;
-        jobs[job] = Job(_metadata, _msgSender(), _provider, _rate, 0, lastSettled);
+        jobs[jobId] = Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp);
+        emit JobOpened(jobId, _metadata, _msgSender(), _provider);
+        emit JobRateRevised(jobId, _rate); // TODO
 
         // deposit initial balance
-        _deposit(job, _msgSender(), _balance);
+        _deposit(jobId, _msgSender(), _balance);
 
         // shutdown delay is paid upfront
-        _settle(job, shutdownWindowCost, lastSettled);
-
-        emit JobOpened(
-            job, _metadata, _msgSender(), _provider, _rate, jobs[job].balance, block.timestamp + shutdownWindow
-        );
+        uint256 shutdownWindowCost = _calcAmountUsed(_rate, shutdownWindow);
+        uint256 lastSettled = block.timestamp + shutdownWindow;
+        _settle(jobId, shutdownWindowCost, lastSettled);
     }
 
     /**
      * @dev     block.timestamp > paymentSettleds should be checked before calling this function
      */
-    function _jobSettle(bytes32 _job) internal {
-        require(jobs[_job].owner != address(0), "job not found");
-        require(
-            block.timestamp > jobs[_job].lastSettled, "nothing to settle before lastSettled"
-        );
+    function _jobSettle(bytes32 _jobId) internal {
+        require(block.timestamp > jobs[_jobId].lastSettled, "nothing to settle before lastSettled");
 
-        uint256 usageDuration = block.timestamp - jobs[_job].lastSettled;
-        uint256 amountUsed = _calcAmountUsed(jobs[_job].rate, usageDuration);
-        uint256 settleAmount = _min(amountUsed, jobs[_job].balance);
-        _settle(_job, settleAmount, block.timestamp);
-
-        jobs[_job].lastSettled = block.timestamp;
-
-        emit JobSettled(_job, settleAmount, block.timestamp);
+        uint256 usageDuration = block.timestamp - jobs[_jobId].lastSettled;
+        uint256 amountUsed = _calcAmountUsed(jobs[_jobId].rate, usageDuration);
+        uint256 settleAmount = _min(amountUsed, jobs[_jobId].balance);
+        _settle(_jobId, settleAmount, block.timestamp);
     }
 
-    function _jobClose(bytes32 _job) internal {
-        uint256 lastSettled = jobs[_job].lastSettled;
+    function _jobClose(bytes32 _jobId) internal {
+        uint256 lastSettled = jobs[_jobId].lastSettled;
         if (block.timestamp > lastSettled) {
-            _jobSettle(_job);
+            _jobSettle(_jobId);
         }
 
         // deduct shutdown delay cost
-        _deductShutdownWindowCost(_job, jobs[_job].rate, lastSettled);
+        _deductShutdownWindowCost(_jobId, jobs[_jobId].rate, lastSettled);
 
         // refund leftover balance
-        uint256 _balance = jobs[_job].balance;
+        uint256 _balance = jobs[_jobId].balance;
         if (_balance > 0) {
-            _withdraw(_job, _msgSender(), _balance);
+            _withdraw(_jobId, _msgSender(), _balance);
         }
 
-        delete jobs[_job];
-        emit JobClosed(_job);
+        delete jobs[_jobId];
+        emit JobClosed(_jobId);
     }
 
-    function _jobDeposit(bytes32 _job, uint256 _amount) internal {
+    function _jobDeposit(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
-        _deposit(_job, _msgSender(), _amount);
-        emit JobDeposited(_job, _msgSender(), _amount);
+        _deposit(_jobId, _msgSender(), _amount);
     }
 
-    function _jobWithdraw(bytes32 _job, uint256 _amount) internal {
+    function _jobWithdraw(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
-        uint256 lastSettled = jobs[_job].lastSettled;
+        uint256 lastSettled = jobs[_jobId].lastSettled;
 
         if (block.timestamp > lastSettled) {
-            _jobSettle(_job);
+            _jobSettle(_jobId);
         }
 
         // calculate shutdown delay cost
         uint256 timeDelta = _calcTimeDelta(lastSettled);
-        uint256 shutdownWindowCost = _calcAmountUsed(jobs[_job].rate, timeDelta);
-        require(jobs[_job].balance > shutdownWindowCost, "balance below shutdown delay cost");
+        uint256 shutdownWindowCost = _calcAmountUsed(jobs[_jobId].rate, timeDelta);
+        require(jobs[_jobId].balance > shutdownWindowCost, "balance below shutdown delay cost");
 
         // calculate max withdrawable amount
-        uint256 maxWithdrawableAmount = jobs[_job].balance - shutdownWindowCost;
+        uint256 maxWithdrawableAmount = jobs[_jobId].balance - shutdownWindowCost;
         require(_amount <= maxWithdrawableAmount, "amount exceeds max withdrawable amount");
 
         // withdraw
-        _withdraw(_job, _msgSender(), _amount);
-
-        emit JobWithdrew(_job, _msgSender(), _amount);
+        _withdraw(_jobId, _msgSender(), _amount);
     }
 
-    function _jobReviseRate(bytes32 _job, uint256 _newRate) internal {
-        require(jobs[_job].rate != _newRate, "rate has not changed");
+    function _jobReviseRate(bytes32 _jobId, uint256 _newRate) internal {
+        require(jobs[_jobId].rate != _newRate, "rate has not changed");
 
-        uint256 lastSettled = jobs[_job].lastSettled;
+        uint256 lastSettled = jobs[_jobId].lastSettled;
         if (block.timestamp > lastSettled) {
-            _jobSettle(_job);
+            _jobSettle(_jobId);
         }
 
         // deduct shutdown delay cost
-        uint256 rate = _max(jobs[_job].rate, _newRate);
-        _deductShutdownWindowCost(_job, rate, lastSettled);
+        uint256 higherRate = _max(jobs[_jobId].rate, _newRate);
+        _deductShutdownWindowCost(_jobId, higherRate, lastSettled);
 
         // update rate and lastSettled
-        jobs[_job].rate = _newRate;
-        uint256 lastSettledUpdated = block.timestamp + shutdownWindow;
-        emit JobRateRevised(_job, _newRate, lastSettledUpdated);
+        jobs[_jobId].rate = _newRate;
+        emit JobRateRevised(_jobId, _newRate);
     }
 
-    function _jobMetadataUpdate(bytes32 _job, string calldata _metadata) internal {
-        string memory oldMetadata = jobs[_job].metadata;
+    function _jobMetadataUpdate(bytes32 _jobId, string calldata _metadata) internal {
+        string memory oldMetadata = jobs[_jobId].metadata;
         require(
             keccak256(abi.encodePacked(oldMetadata)) != keccak256(abi.encodePacked(_metadata)),
             "metadata has not changed"
         );
-        jobs[_job].metadata = _metadata;
-        emit JobMetadataUpdated(_job, _metadata);
+        jobs[_jobId].metadata = _metadata;
+        emit JobMetadataUpdated(_jobId, _metadata);
     }
 
     /**
@@ -407,47 +364,44 @@ contract MarketV1 is
         _jobOpen(_metadata, _provider, _rate, _balance);
     }
 
-    function jobSettle(bytes32 _job) external onlyExistingJob(_job) {
-        _jobSettle(_job);
+    function jobSettle(bytes32 _jobId) external onlyExistingJob(_jobId) {
+        _jobSettle(_jobId);
     }
 
-    function jobClose(bytes32 _job) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        _jobClose(_job);
+    function jobClose(bytes32 _jobId) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+        _jobClose(_jobId);
     }
 
-    function _deductShutdownWindowCost(bytes32 _job, uint256 _rate, uint256 _lastSettled) internal {
+    function _deductShutdownWindowCost(bytes32 _jobId, uint256 _rate, uint256 _lastSettled) internal {
         uint256 timeDelta = _calcTimeDelta(_lastSettled);
         uint256 shutdownWindowCost = _calcAmountUsed(_rate, timeDelta);
-        require(jobs[_job].balance >= shutdownWindowCost, "balance below shutdown delay cost");
-        _settle(_job, shutdownWindowCost, block.timestamp + shutdownWindow);
+        require(jobs[_jobId].balance >= shutdownWindowCost, "balance below shutdown delay cost");
+        _settle(_jobId, shutdownWindowCost, block.timestamp + shutdownWindow);
     }
 
-    function jobDeposit(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) {
-        _jobDeposit(_job, _amount);
+    function jobDeposit(bytes32 _jobId, uint256 _amount) external onlyExistingJob(_jobId) {
+        _jobDeposit(_jobId, _amount);
     }
 
-    function jobWithdraw(bytes32 _job, uint256 _amount) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        _jobWithdraw(_job, _amount);
+    function jobWithdraw(bytes32 _jobId, uint256 _amount) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+        _jobWithdraw(_jobId, _amount);
     }
 
     function _calcTimeDelta(uint256 _lastSettled) internal view returns (uint256) {
-        return block.timestamp < _lastSettled
-            ? (block.timestamp + shutdownWindow) - _lastSettled
-            : shutdownWindow;
+        return block.timestamp < _lastSettled ? (block.timestamp + shutdownWindow) - _lastSettled : shutdownWindow;
     }
 
-    function jobReviseRate(bytes32 _job, uint256 _newRate) external onlyExistingJob(_job) onlyJobOwner(_job) {
-        _jobReviseRate(_job, _newRate);
+    function jobReviseRate(bytes32 _jobId, uint256 _newRate) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+        _jobReviseRate(_jobId, _newRate);
     }
 
-    function jobMetadataUpdate(bytes32 _job, string calldata _metadata)
+    function jobMetadataUpdate(bytes32 _jobId, string calldata _metadata)
         external
-        onlyExistingJob(_job)
-        onlyJobOwner(_job)
+        onlyExistingJob(_jobId)
+        onlyJobOwner(_jobId)
     {
-        _jobMetadataUpdate(_job, _metadata);
+        _jobMetadataUpdate(_jobId, _metadata);
     }
-
 
     function _calcAmountUsed(uint256 _rate, uint256 _usageDuration) internal pure returns (uint256) {
         return (_rate * _usageDuration + 10 ** EXTRA_DECIMALS - 1) / 10 ** EXTRA_DECIMALS;
@@ -470,91 +424,108 @@ contract MarketV1 is
 
     // TODO: gap?
 
-    function _settle(bytes32 _job, uint256 _amount, uint256 _lastSettledUpdated) internal {
-        address provider = jobs[_job].provider;
-        uint256 settleAmount = _amount;
-
-        jobs[_job].balance -= settleAmount;
+    /**
+     * @notice  Deposits the specified amount into the job balance.
+     * @param   _jobId  The job to deposit to.
+     * @param   _from  The address to deposit from.
+     * @param   _amount  The amount to deposit.
+     */
+    function _deposit(bytes32 _jobId, address _from, uint256 _amount) internal {
+        // total amount to deposit
+        uint256 depositAmount = _amount;
 
         if (address(creditToken) != address(0)) {
-            uint256 creditBalance = jobCreditBalance[_job];
+            // amount to transfer from credit token
+            uint256 creditBalanceTransferable =
+                _min(creditToken.balanceOf(_from), creditToken.allowance(_from, address(this)));
+
+            if (creditBalanceTransferable > 0) {
+                uint256 creditTransferAmount;
+                if (depositAmount > creditBalanceTransferable) {
+                    depositAmount -= creditBalanceTransferable;
+                    creditTransferAmount = creditBalanceTransferable;
+                } else {
+                    depositAmount = 0;
+                    creditTransferAmount = depositAmount;
+                }
+                creditToken.safeTransferFrom(_from, address(this), creditTransferAmount);
+                emit JobDeposited(_jobId, address(creditToken), _from, creditTransferAmount);
+            }
+        }
+
+        if (depositAmount > 0) {
+            token.safeTransferFrom(_from, address(this), depositAmount);
+            emit JobDeposited(_jobId, address(token), _from, depositAmount);
+        }
+
+        jobs[_jobId].balance += _amount;
+    }
+
+    function _settle(bytes32 _jobId, uint256 _amount, uint256 _lastSettledUpdated) internal {
+        address provider = jobs[_jobId].provider;
+        uint256 settleAmount = _amount;
+
+        jobs[_jobId].balance -= settleAmount;
+
+        if (address(creditToken) != address(0)) {
+            uint256 creditBalance = jobCreditBalance[_jobId];
             if (creditBalance > 0) {
                 uint256 creditTransferAmount;
                 if (settleAmount > creditBalance) {
-                    jobCreditBalance[_job] = 0;
+                    jobCreditBalance[_jobId] = 0;
                     settleAmount -= creditBalance;
                     creditTransferAmount = creditBalance;
                 } else {
-                    jobCreditBalance[_job] -= settleAmount;
+                    jobCreditBalance[_jobId] -= settleAmount;
                     settleAmount = 0;
                     creditTransferAmount = settleAmount;
                 }
                 ICredit(address(creditToken)).redeemAndBurn(provider, creditTransferAmount);
+                emit JobSettled(_jobId, address(creditToken), creditTransferAmount, _lastSettledUpdated);
             }
         }
 
         if (settleAmount > 0) {
             token.safeTransfer(provider, settleAmount);
+            emit JobSettled(_jobId, address(token), settleAmount, _lastSettledUpdated);
         }
 
-        jobs[_job].lastSettled = _lastSettledUpdated;
-
-        emit JobSettled(_job, settleAmount, _lastSettledUpdated);
+        jobs[_jobId].lastSettled = _lastSettledUpdated;
     }
 
     /**
      * @notice  Withdraws the specified amount from the job balance.
      * @dev     Use `_settle()` when settling a job and sending the amount settled to the job's provider.
-     * @param   _job  The job to withdraw from.
+     * @param   _jobId  The job to withdraw from.
      * @param   _to  The address to withdraw to.
      * @param   _amount  The amount to withdraw.
      */
-    function _withdraw(bytes32 _job, address _to, uint256 _amount) internal {
+    function _withdraw(bytes32 _jobId, address _to, uint256 _amount) internal {
         uint256 withdrawAmount = _amount;
 
-        if (address(creditToken) != address(0)) {
-            uint256 creditBalance = jobCreditBalance[_job];
-            if (creditBalance > 0) {
-                uint256 creditTransferAmount;
-                if (withdrawAmount > creditBalance) {
-                    jobCreditBalance[_job] = 0;
-                    withdrawAmount -= creditBalance;
-                    creditTransferAmount = creditBalance;
-                } else {
-                    jobCreditBalance[_job] -= withdrawAmount;
-                    withdrawAmount = 0;
-                    creditTransferAmount = withdrawAmount;
-                }
-                creditToken.safeTransfer(_to, creditTransferAmount);
-            }
+        uint256 tokenBalance = jobs[_jobId].balance - jobCreditBalance[_jobId];
+        jobs[_jobId].balance -= withdrawAmount;
+
+        uint256 tokenAmountToTransfer;
+        if(tokenBalance < withdrawAmount) {
+            tokenAmountToTransfer = tokenBalance;
+            withdrawAmount -= tokenBalance;
+        } else {
+            tokenAmountToTransfer = withdrawAmount;
+            withdrawAmount = 0;
+        }
+        
+        if(tokenAmountToTransfer > 0) {
+            token.safeTransfer(_to, tokenAmountToTransfer);
+            emit JobWithdrawn(_jobId, address(token), _to, tokenAmountToTransfer);
         }
 
-        if (withdrawAmount > 0) {
-            jobs[_job].balance -= withdrawAmount;
-            token.safeTransfer(_to, withdrawAmount);
+        if(withdrawAmount > 0) {
+            creditToken.safeTransfer(_to, withdrawAmount);
+            jobCreditBalance[_jobId] -= withdrawAmount;
+            emit JobWithdrawn(_jobId, address(creditToken), _to, withdrawAmount);
         }
     }
 
     //--------------------------------- Payment Module end ---------------------------------//
-
-    //----------------------------------- Admin start -----------------------------------//
-
-    bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
-
-    function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
-        require(address(_creditToken) != address(0), "invalid credit token address");
-        _updateCreditToken(_creditToken);
-    }
-
-    function _updateCreditToken(IERC20 _creditToken) internal {
-        creditToken = _creditToken;
-        emit CreditTokenUpdated(creditToken, _creditToken);
-    }
-
-    function emergencyWithdraw(address _token, address _to, uint256 _amount) external onlyAdmin {
-        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _msgSender()), "only to emergency withdraw role");
-        IERC20(_token).safeTransfer(_to, _amount);
-    }
-
-    //----------------------------------- Admin end -----------------------------------//
 }
