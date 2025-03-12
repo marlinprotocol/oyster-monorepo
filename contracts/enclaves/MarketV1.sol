@@ -197,13 +197,14 @@ contract MarketV1 is
 
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
     event CreditTokenUpdated(IERC20 indexed oldCreditToken, IERC20 indexed newCreditToken);
-    event noticePeriodUpdated(uint256 noticePeriod);
+    event NoticePeriodUpdated(uint256 noticePeriod);
 
     event JobOpened(bytes32 indexed jobId, string metadata, address indexed owner, address indexed provider);
     event JobSettled(bytes32 indexed jobId, uint256 lastSettled);
     event JobClosed(bytes32 indexed jobId);
     event JobDeposited(bytes32 indexed jobId, address indexed token, address indexed from, uint256 amount);
     event JobWithdrawn(bytes32 indexed jobId, address indexed token, address indexed to, uint256 amount);
+    event JobSettlementWithdrawn(bytes32 indexed jobId, address indexed token, address indexed provider, uint256 amount);
     event JobRateRevised(bytes32 indexed jobId, uint256 newRate);
     event JobMetadataUpdated(bytes32 indexed jobId, string metadata);
 
@@ -224,7 +225,7 @@ contract MarketV1 is
 
     function _updatenoticePeriod(uint256 _noticePeriod) internal {
         noticePeriod = _noticePeriod;
-        emit noticePeriodUpdated(_noticePeriod);
+        emit NoticePeriodUpdated(_noticePeriod);
     }
 
     function _updateCreditToken(IERC20 _creditToken) internal {
@@ -314,6 +315,7 @@ contract MarketV1 is
     }
 
     function _jobReviseRate(bytes32 _jobId, uint256 _newRate) internal {
+        require(_newRate > 0, "invalid rate");
         require(jobs[_jobId].rate != _newRate, "rate has not changed");
 
         uint256 lastSettled = jobs[_jobId].lastSettled;
@@ -501,13 +503,13 @@ contract MarketV1 is
                 (creditAmount, tokenAmount) = _calculateTokenSplit(_amount, creditBalance);
                 jobCreditBalance[_jobId] -= creditAmount;
                 ICredit(address(creditToken)).redeemAndBurn(provider, creditAmount);
-                emit JobWithdrawn(_jobId, address(creditToken), provider, creditAmount);
+                emit JobSettlementWithdrawn(_jobId, address(creditToken), provider, creditAmount);
             }
         }
 
         if (tokenAmount > 0) {
             token.safeTransfer(provider, tokenAmount);
-            emit JobWithdrawn(_jobId, address(token), provider, tokenAmount);
+            emit JobSettlementWithdrawn(_jobId, address(token), provider, tokenAmount);
         }
     }
 
