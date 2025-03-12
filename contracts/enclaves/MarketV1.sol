@@ -253,15 +253,12 @@ contract MarketV1 is
         // create job with initial balance 0
         jobs[jobId] = Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp);
         emit JobOpened(jobId, _metadata, _msgSender(), _provider);
-        emit JobRateRevised(jobId, _rate); // TODO
 
         // deposit initial balance
         _deposit(jobId, _msgSender(), _balance);
 
-        // shutdown delay is paid upfront
-        uint256 shutdownWindowCost = _calcAmountUsed(_rate, shutdownWindow);
-        uint256 lastSettled = block.timestamp + shutdownWindow;
-        _settle(jobId, shutdownWindowCost, lastSettled);
+        // set rate and pay shutdown delay cost upfront
+        _jobReviseRate(jobId, _rate);
     }
 
     /**
@@ -329,13 +326,15 @@ contract MarketV1 is
             _jobSettle(_jobId);
         }
 
-        // deduct shutdown delay cost
-        uint256 higherRate = _max(jobs[_jobId].rate, _newRate);
-        _deductShutdownWindowCost(_jobId, higherRate, lastSettled);
-
         // update rate and lastSettled
+        uint256 oldRate = jobs[_jobId].rate;
         jobs[_jobId].rate = _newRate;
         emit JobRateRevised(_jobId, _newRate);
+
+        // deduct shutdown delay cost
+        // higher rate is used to calculate shutdown delay cost
+        uint256 higherRate = _max(oldRate, _newRate);
+        _deductShutdownWindowCost(_jobId, higherRate, lastSettled);
     }
 
     function _jobMetadataUpdate(bytes32 _jobId, string calldata _metadata) internal {
@@ -526,6 +525,6 @@ contract MarketV1 is
             emit JobWithdrawn(_jobId, address(creditToken), _to, withdrawAmount);
         }
     }
-
-    //--------------------------------- Payment Module end ---------------------------------//
 }
+
+//--------------------------------- Payment Module end ---------------------------------//
