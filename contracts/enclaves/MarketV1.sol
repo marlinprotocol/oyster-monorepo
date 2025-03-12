@@ -22,6 +22,8 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ICredit} from "./interfaces/ICredit.sol";
 
+import "hardhat/console.sol";
+
 contract MarketV1 is
     Initializable, // initializer
     ContextUpgradeable, // _msgSender, _msgData
@@ -105,10 +107,12 @@ contract MarketV1 is
         _updateToken(_token);
     }
     
-    function reinitialize() public onlyAdmin reinitializer(2) {
+    function reinitialize(uint256 _shutdownWindow, IERC20 _creditToken) public onlyAdmin reinitializer(2) {
         // set the first 8 bytes of the job as a prefix with the chainId
-        bytes8 chainIdBytes = bytes8(uint64(block.chainid));
-        jobIndex = (bytes32(chainIdBytes) << 224);  
+        jobIndex = (bytes32(block.chainid) << 224);  
+
+        _updateShutdownWindow(_shutdownWindow);
+        _updateCreditToken(_creditToken);
     }
 
     //-------------------------------- Initializer end --------------------------------//
