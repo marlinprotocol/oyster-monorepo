@@ -107,11 +107,11 @@ contract MarketV1 is
         _updateToken(_token);
     }
     
-    function reinitialize(uint256 _shutdownWindow, IERC20 _creditToken) public onlyAdmin reinitializer(2) {
+    function reinitialize(uint256 _noticePeriod, IERC20 _creditToken) public onlyAdmin reinitializer(2) {
         // set the first 8 bytes of the job as a prefix with the chainId
         jobIndex = (bytes32(block.chainid) << 224) | jobIndex;  
 
-        _updateShutdownWindow(_shutdownWindow);
+        _updatenoticePeriod(_noticePeriod);
         _updateCreditToken(_creditToken);
     }
 
@@ -191,13 +191,13 @@ contract MarketV1 is
     IERC20 public token;
     uint256 public constant EXTRA_DECIMALS = 12;
 
-    uint256 public shutdownWindow;
+    uint256 public noticePeriod;
 
     uint256[46] private __gap_3;
 
     event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
     event CreditTokenUpdated(IERC20 indexed oldCreditToken, IERC20 indexed newCreditToken);
-    event ShutdownWindowUpdated(uint256 shutdownWindow);
+    event noticePeriodUpdated(uint256 noticePeriod);
 
     event JobOpened(bytes32 indexed jobId, string metadata, address indexed owner, address indexed provider);
     event JobSettled(bytes32 indexed jobId, uint256 lastSettled);
@@ -222,22 +222,22 @@ contract MarketV1 is
         emit TokenUpdated(token, _token);
     }
 
-    function updateToken(IERC20 _token) external onlyAdmin {
-        _updateToken(_token);
-    }
-
-    function _updateShutdownWindow(uint256 _shutdownWindow) internal {
-        shutdownWindow = _shutdownWindow;
-        emit ShutdownWindowUpdated(_shutdownWindow);
-    }
-
-    function updateShutdownWindow(uint256 _shutdownWindow) external onlyAdmin {
-        _updateShutdownWindow(_shutdownWindow);
+    function _updatenoticePeriod(uint256 _noticePeriod) internal {
+        noticePeriod = _noticePeriod;
+        emit noticePeriodUpdated(_noticePeriod);
     }
 
     function _updateCreditToken(IERC20 _creditToken) internal {
         creditToken = _creditToken;
         emit CreditTokenUpdated(creditToken, _creditToken);
+    }
+
+    function updateToken(IERC20 _token) external onlyAdmin {
+        _updateToken(_token);
+    }
+
+    function updatenoticePeriod(uint256 _noticePeriod) external onlyAdmin {
+        _updatenoticePeriod(_noticePeriod);
     }
 
     function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
@@ -266,7 +266,6 @@ contract MarketV1 is
     }
 
     function _jobSettle(bytes32 _jobId) internal {
-        require(block.timestamp > jobs[_jobId].lastSettled, "nothing to settle before lastSettled");
         _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp);
     }
 
@@ -285,7 +284,7 @@ contract MarketV1 is
 
     function _jobClose(bytes32 _jobId) internal {
         // deduct shutdown delay cost
-        _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + shutdownWindow);
+        _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod);
 
         // refund leftover balance
         uint256 _balance = jobs[_jobId].balance;
@@ -306,7 +305,7 @@ contract MarketV1 is
         require(_amount > 0, "invalid amount");
 
         require(
-            _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + shutdownWindow),
+            _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod),
             "insufficient funds to withdraw"
         );
 
@@ -334,7 +333,7 @@ contract MarketV1 is
         // higher rate is used to calculate shutdown delay cost
         uint256 higherRate = _max(oldRate, _newRate);
         require(
-            _jobSettle(_jobId, higherRate, block.timestamp + shutdownWindow),
+            _jobSettle(_jobId, higherRate, block.timestamp + noticePeriod),
             "insufficient funds to revise rate"
         );
     }
@@ -352,10 +351,10 @@ contract MarketV1 is
     /**
      * @notice  Opens a new job.
      *          To ensure the provider is paid for the shutdown window, if the deposit amount is exactly equal to
-     *          the shutdownWindowCost, the provider is incentivized to shut down the job immediately after opening.
-     *          Therefore, it should be noted that `(deposit amount) - shutdownWindowCost` is the actual amount to be
+     *          the noticePeriodCost, the provider is incentivized to shut down the job immediately after opening.
+     *          Therefore, it should be noted that `(deposit amount) - noticePeriodCost` is the actual amount to be
      *          used for running the job.
-     * @dev     `shutdownWindowCost` is paid upfront.
+     * @dev     `noticePeriodCost` is paid upfront.
      *          min(_balance, creditAllowance, creditBalance) amount of Credit tokens will be transferred from the caller to the job.
      * @param   _metadata  The metadata of the job.
      * @param   _provider  The provider of the job.
@@ -536,7 +535,6 @@ contract MarketV1 is
 
     /**
      * @notice  Withdraws the specified amount from the job balance.
-     * @dev     Use `_settle()` when settling a job and sending the amount settled to the job's provider.
      * @param   _jobId  The job to withdraw from.
      * @param   _to  The address to withdraw to.
      * @param   _amount  The amount to withdraw.
