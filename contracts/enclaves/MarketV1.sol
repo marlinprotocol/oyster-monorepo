@@ -261,9 +261,6 @@ contract MarketV1 is
         _jobReviseRate(jobId, _rate);
     }
 
-    /**
-     * @dev     block.timestamp > paymentSettleds should be checked before calling this function
-     */
     function _jobSettle(bytes32 _jobId) internal {
         require(block.timestamp > jobs[_jobId].lastSettled, "nothing to settle before lastSettled");
 
@@ -354,19 +351,34 @@ contract MarketV1 is
      *          Therefore, it should be noted that `(deposit amount) - shutdownWindowCost` is the actual amount to be
      *          used for running the job.
      * @dev     `shutdownWindowCost` is paid upfront.
+     *          min(_balance, creditAllowance, creditBalance) amount of Credit tokens will be transferred from the caller to the job.
      * @param   _metadata  The metadata of the job.
      * @param   _provider  The provider of the job.
      * @param   _rate      The rate of the job.
-     * @param   _balance   The balance of the job.
+     * @param   _balance   Amount of tokens to deposit into the job.
      */
     function jobOpen(string calldata _metadata, address _provider, uint256 _rate, uint256 _balance) external {
         _jobOpen(_metadata, _provider, _rate, _balance);
     }
 
+    /**
+     * @notice  Settles the job and sends the amount settled to the job's provider.
+     *          If the job has Credit balance, the credit balance will be deducted first. 
+     * @dev     Reverts if block.timestamp is before `lastSettled` of given jobId.
+     *          If settled with Credit tokens the Credit tokens will be burned and redeemed to USDC when transfering
+     *          to the job's provider.
+     * @param   _jobId  The job to settle.
+     */
     function jobSettle(bytes32 _jobId) external onlyExistingJob(_jobId) {
         _jobSettle(_jobId);
     }
 
+    /**
+     * @notice  Closes the job and sends the remaining balance to the job's owner.
+     *          The shutdown delay cost is deducted from the job's balance before refunding the remaining balance.
+     * @dev     Settles the job before closing it.
+     * @param   _jobId  The job to close.
+     */
     function jobClose(bytes32 _jobId) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
         _jobClose(_jobId);
     }
@@ -378,10 +390,24 @@ contract MarketV1 is
         _settle(_jobId, shutdownWindowCost, block.timestamp + shutdownWindow);
     }
 
+    /**
+     * @notice  Deposits the specified amount into the job balance.
+     *          min(_amount, creditAllowance, creditBalance) amount of Credit tokens will be transferred from the caller to the job.
+     * @param   _jobId  The job to deposit to.
+     * @param   _amount  The amount to deposit.
+     */
     function jobDeposit(bytes32 _jobId, uint256 _amount) external onlyExistingJob(_jobId) {
         _jobDeposit(_jobId, _amount);
     }
 
+    /**
+     * @notice  Withdraws the specified amount from the job balance.
+     *          If the amount required to be withdrawn is greater than the job's balance, the remaining balance will be
+     *          transferred from the job to the caller as Credit tokens.
+     * @dev     Reverts if block.timestamp is before `lastSettled` of given jobId.
+     * @param   _jobId  The job to withdraw from.
+     * @param   _amount  The amount to withdraw.
+     */
     function jobWithdraw(bytes32 _jobId, uint256 _amount) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
         _jobWithdraw(_jobId, _amount);
     }
@@ -390,10 +416,23 @@ contract MarketV1 is
         return block.timestamp < _lastSettled ? (block.timestamp + shutdownWindow) - _lastSettled : shutdownWindow;
     }
 
+    /**
+     * @notice  Revises the rate of the job.
+     *          Deducts the shutdown delay cost from the job's balance before updating the rate.
+     * @dev     Reverts if the rate has not changed.
+     * @param   _jobId  The job to revise the rate of.
+     * @param   _newRate  The new rate of the job.
+     */
     function jobReviseRate(bytes32 _jobId, uint256 _newRate) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
         _jobReviseRate(_jobId, _newRate);
     }
 
+    /**
+     * @notice  Updates the metadata of the job.
+     * @dev     Reverts if the metadata has not changed.
+     * @param   _jobId  The job to update the metadata of.
+     * @param   _metadata  The new metadata of the job.
+     */
     function jobMetadataUpdate(bytes32 _jobId, string calldata _metadata)
         external
         onlyExistingJob(_jobId)
