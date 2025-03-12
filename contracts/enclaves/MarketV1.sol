@@ -251,7 +251,7 @@ contract MarketV1 is
         bytes32 jobId = bytes32(_jobIndex);
 
         // create job with initial balance 0
-        jobs[jobId] = Job(_metadata, _msgSender(), _provider, _rate, 0, block.timestamp);
+        jobs[jobId] = Job(_metadata, _msgSender(), _provider, 0, 0, block.timestamp);
         emit JobOpened(jobId, _metadata, _msgSender(), _provider);
 
         // deposit initial balance
