@@ -109,7 +109,7 @@ contract MarketV1 is
     
     function reinitialize(uint256 _noticePeriod, IERC20 _creditToken) public onlyAdmin reinitializer(2) {
         // set the first 8 bytes of the job as a prefix with the chainId
-        jobIndex = (bytes32(block.chainid) << 224) | jobIndex;  
+        jobIndex = (bytes32(block.chainid) << 192) | jobIndex;
 
         _updatenoticePeriod(_noticePeriod);
         _updateCreditToken(_creditToken);
