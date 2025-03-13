@@ -237,7 +237,7 @@ async fn main() -> Result<()> {
     };
 
     if let Err(e) = result {
-        tracing::error!("Error: {}", e);
+        tracing::error!("Error: {:#}", e);
         std::process::exit(1);
     }
 

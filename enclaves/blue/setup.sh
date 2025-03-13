@@ -92,11 +92,15 @@ sleep 2
 
 # start derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
-
 sleep 10
 
 # process init params into their constituent files
 /app/init-params-decoder
+
+# start derive server contract if contract address and root server config are present
+if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.json ]; then
+    /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
+fi
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
