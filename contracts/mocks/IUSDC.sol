@@ -6,7 +6,7 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 
-interface IUSDC {
+interface IUSDCMock {
     function mint(address to, uint256 amount) external;
     function decimals() external pure returns (uint8);
     function grantRole(bytes32 role, address account) external;

@@ -121,7 +121,7 @@ contract Credit is
     function redeemAndBurn(address _to, uint256 _amount) external whenNotPaused onlyOysterMarket {
         require(IERC20(i_usdc).balanceOf(address(this)) >= _amount, NotEnoughUSDC());
         IERC20(i_usdc).safeTransfer(_to, _amount);
-        _burn(_msgSender(), _amount);
+        _burn(_msgSender(), _amount); // TODO: move above
     }
 
     //-------------------------------- Oyster Market end --------------------------------//
