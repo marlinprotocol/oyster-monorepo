@@ -305,7 +305,6 @@ contract MarketV1 is
 
     function _jobWithdraw(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
-
         require(
             _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod),
             "insufficient funds to withdraw"
@@ -543,17 +542,21 @@ contract MarketV1 is
      * @param   _amount  The amount to withdraw.
      */
     function _withdraw(bytes32 _jobId, address _to, uint256 _amount) internal {
+        uint256 jobBalance = jobs[_jobId].balance;
+        require(jobBalance >= _amount, "withdrawal amount exceeds job balance");
+
         uint256 withdrawAmount = _amount;
 
         // shouldn't be possible
-        require(jobs[_jobId].balance >= jobCreditBalance[_jobId], "credit balance exceeds job balance");
-        uint256 tokenBalance = jobs[_jobId].balance - jobCreditBalance[_jobId];
+        uint256 jobCreditBalance_ = jobCreditBalance[_jobId];
+        require(jobBalance >= jobCreditBalance_, "credit balance exceeds job balance");
+        uint256 jobTokenBalance = jobBalance - jobCreditBalance_;
         jobs[_jobId].balance -= withdrawAmount;
 
         uint256 tokenAmountToTransfer;
-        if(tokenBalance < withdrawAmount) {
-            tokenAmountToTransfer = tokenBalance;
-            withdrawAmount -= tokenBalance;
+        if(jobTokenBalance < withdrawAmount) {
+            tokenAmountToTransfer = jobTokenBalance;
+            withdrawAmount -= jobTokenBalance;
         } else {
             tokenAmountToTransfer = withdrawAmount;
             withdrawAmount = 0;
@@ -563,7 +566,6 @@ contract MarketV1 is
             token.safeTransfer(_to, tokenAmountToTransfer);
             emit JobWithdrawn(_jobId, address(token), _to, tokenAmountToTransfer);
         }
-
 
         if(withdrawAmount > 0) {
             require(address(creditToken) != address(0), "credit token not set");
