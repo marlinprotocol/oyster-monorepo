@@ -88,7 +88,7 @@ contract MarketV1 is
 
     uint256[50] private __gap_1;
 
-    function initialize(address _admin, IERC20 _token, bytes32[] memory _selectors, uint256[] memory _lockWaitTimes)
+    function initialize(address _admin, address _token, bytes32[] memory _selectors, uint256[] memory _lockWaitTimes)
         public
         initializer
     {
@@ -107,7 +107,7 @@ contract MarketV1 is
         _updateToken(_token);
     }
     
-    function reinitialize(uint256 _noticePeriod, IERC20 _creditToken) public onlyAdmin reinitializer(2) {
+    function reinitialize(uint256 _noticePeriod, address _creditToken) public onlyAdmin reinitializer(2) {
         // set the first 8 bytes of the job as a prefix with the chainId
         jobIndex = (bytes32(block.chainid) << 192) | jobIndex;
 
@@ -195,8 +195,8 @@ contract MarketV1 is
 
     uint256[46] private __gap_3;
 
-    event TokenUpdated(IERC20 indexed oldToken, IERC20 indexed newToken);
-    event CreditTokenUpdated(IERC20 indexed oldCreditToken, IERC20 indexed newCreditToken);
+    event TokenUpdated(address indexed oldToken, address indexed newToken);
+    event CreditTokenUpdated(address indexed oldCreditToken, address indexed newCreditToken);
     event NoticePeriodUpdated(uint256 noticePeriod);
 
     event JobOpened(bytes32 indexed jobId, string metadata, address indexed owner, address indexed provider);
@@ -218,9 +218,10 @@ contract MarketV1 is
         _;
     }
 
-    function _updateToken(IERC20 _token) internal {
-        token = _token;
-        emit TokenUpdated(token, _token);
+    function _updateToken(address _token) internal {
+        address oldToken = address(token);
+        token = IERC20(_token);
+        emit TokenUpdated(oldToken, _token);
     }
 
     function _updateNoticePeriod(uint256 _noticePeriod) internal {
@@ -228,12 +229,13 @@ contract MarketV1 is
         emit NoticePeriodUpdated(_noticePeriod);
     }
 
-    function _updateCreditToken(IERC20 _creditToken) internal {
-        creditToken = _creditToken;
-        emit CreditTokenUpdated(creditToken, _creditToken);
+    function _updateCreditToken(address _creditToken) internal {
+        address oldCreditToken = address(creditToken);
+        creditToken = IERC20(_creditToken);
+        emit CreditTokenUpdated(oldCreditToken, _creditToken);
     }
 
-    function updateToken(IERC20 _token) external onlyAdmin {
+    function updateToken(address _token) external onlyAdmin {
         _updateToken(_token);
     }
 
@@ -241,7 +243,7 @@ contract MarketV1 is
         _updateNoticePeriod(_noticePeriod);
     }
 
-    function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
+    function updateCreditToken(address _creditToken) external onlyAdmin {
         _updateCreditToken(_creditToken);
     }
 
@@ -300,6 +302,11 @@ contract MarketV1 is
 
     function _jobDeposit(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
+        require(
+            _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod),
+            "insufficient funds to deposit"
+        );
+
         _deposit(_jobId, _msgSender(), _amount);
     }
 

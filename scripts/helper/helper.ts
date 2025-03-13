@@ -50,28 +50,22 @@ export const verifyContract = async (contractName: string, contractType: Contrac
   
   // Verify in Explorer
   try {
-    const verificationResult = await run("verify:verify", {
-      address: addresses[type][contractName],
+    console.log(`Verifying ${contractName} ${type}...`);
+    console.log("constructor args: ", constructorArguments);
+
+    // if first character is Upper case, then convert to lower case
+    let contractNameLowerCase = contractName;
+    if (contractName.charAt(0) === contractName.charAt(0).toUpperCase()) {
+      contractNameLowerCase = contractName.charAt(0).toLowerCase() + contractName.slice(1);
+    }
+
+    // verify
+    await run("verify:verify", {
+      address: addresses[type][contractNameLowerCase],
       constructorArguments: constructorArguments,
     });
-    console.log({ verificationResult });
+    console.log(`(${type}) ${contractName} verified\n`);
   } catch (error) {
-    if (error) {
-      console.log(`${contractName} ${type} already verified, continuing...`);
-    } else {
-      console.error(`Error verifying ${contractName} ${type}:`, error);
-    }
+    console.log(`[${contractName}]: `, error);
   }
-
-  // Verify in Tenderly
-  // try {
-  //   await tenderly.verify({
-  //     address: addresses[type][contractName],
-  //     name: isProxy ? "ERC1967ProxyFlatten.sol:ERC1967Proxy" : contractName,
-  //   });
-  // } catch (error) {
-  //   console.error(`Error verifying ${contractName} ${type} on Tenderly:`, error);
-  // }
-
-  console.log(`(${type}) ${contractName} verified\n`);
-}
+};
