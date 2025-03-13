@@ -111,11 +111,11 @@ contract MarketV1 is
         // set the first 8 bytes of the job as a prefix with the chainId
         jobIndex = (bytes32(block.chainid) << 192) | jobIndex;
 
-        _updatenoticePeriod(_noticePeriod);
+        _updateNoticePeriod(_noticePeriod);
         _updateCreditToken(_creditToken);
     }
 
-    //-------------------------------- Initializer end --------------------------------//
+    //------------- ------------------- Initializer end --------------------------------//
 
     //-------------------------------- Providers start --------------------------------//
 
@@ -223,7 +223,7 @@ contract MarketV1 is
         emit TokenUpdated(token, _token);
     }
 
-    function _updatenoticePeriod(uint256 _noticePeriod) internal {
+    function _updateNoticePeriod(uint256 _noticePeriod) internal {
         noticePeriod = _noticePeriod;
         emit NoticePeriodUpdated(_noticePeriod);
     }
@@ -237,8 +237,8 @@ contract MarketV1 is
         _updateToken(_token);
     }
 
-    function updatenoticePeriod(uint256 _noticePeriod) external onlyAdmin {
-        _updatenoticePeriod(_noticePeriod);
+    function updateNoticePeriod(uint256 _noticePeriod) external onlyAdmin {
+        _updateNoticePeriod(_noticePeriod);
     }
 
     function updateCreditToken(IERC20 _creditToken) external onlyAdmin {
@@ -270,7 +270,7 @@ contract MarketV1 is
         _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp);
     }
 
-    function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns(bool insufficientFunds) {
+    function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns(bool isBalanceEnough) {
         uint256 lastSettled = jobs[_jobId].lastSettled;
         require(_settleTill >= lastSettled, "cannot settle before lastSettled");
 
@@ -280,7 +280,8 @@ contract MarketV1 is
         _settle(_jobId, settleAmount);
         jobs[_jobId].lastSettled = _settleTill;
         emit JobSettled(_jobId, _settleTill);
-        insufficientFunds = amountUsed > settleAmount;
+        
+        isBalanceEnough = amountUsed <= settleAmount;
     }
 
     function _jobClose(bytes32 _jobId) internal {
