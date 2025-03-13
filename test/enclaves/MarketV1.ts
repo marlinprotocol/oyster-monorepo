@@ -110,6 +110,168 @@ testAdminRole("MarketV1 Admin Role", async function(_signers: Signer[], addrs: s
 	return marketv1;
 });
 
+describe("MarketV1 Initialization", function () {
+  let signers: Signer[];
+  let addrs: string[];
+  let marketv1: MarketV1;
+  let creditToken: Credit;
+  let token: Contract;
+
+  let user: Signer;
+  let provider: Signer;
+  let admin: Signer;
+  
+  beforeEach(async function () {
+    signers = await ethers.getSigners();
+    addrs = await Promise.all(signers.map(async (a) => await a.getAddress()));
+
+    admin = signers[0];
+    user = signers[1];
+    provider = signers[2];
+    
+    // Deploy USDC
+    const Token = await ethers.getContractFactory("Pond");
+    token = await upgrades.deployProxy(Token, ["USDC", "USDC"], {
+      kind: "uups",
+      unsafeAllow: ["missing-initializer-call"],
+    });
+    await token.transfer(await user.getAddress(), SIGNER1_INITIAL_FUND);
+    
+    // Deploy MarketV1
+    const MarketV1 = await ethers.getContractFactory("MarketV1");
+    const marketv1Contract = await upgrades.deployProxy(
+      MarketV1,
+      [addrs[0], token.address, SELECTORS, WAIT_TIMES],
+      { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+    );
+    marketv1 = getMarketV1(marketv1Contract.address, signers[0]);
+    await token.connect(user).approve(marketv1.address, usdc(100));
+
+    // Deploy Credit
+    const Credit = await ethers.getContractFactory("Credit");
+    const creditTokenContract = await upgrades.deployProxy(Credit, [], {
+      kind: "uups",
+      unsafeAllow: ["missing-initializer-call"],
+      constructorArgs: [marketv1.address, token.address],
+      initializer: false
+    });
+    creditToken = getCredit(creditTokenContract.address, signers[0]);
+
+    // Initialize Credit
+    await creditToken.initialize(addrs[0]);
+  });
+
+  describe("Initialize", function () {
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+  
+    it("should deploy with initialization disabled", async function () {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await MarketV1.deploy();
+
+      await expect(
+        marketv1.initialize(addrs[0], addrs[11], SELECTORS, WAIT_TIMES),
+      ).to.be.revertedWith("Initializable: contract is already initialized");
+    });
+  
+    it("should deploy as proxy and initializes", async function () {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+  
+      await Promise.all(
+        SELECTORS.map(async (s, idx) => {
+          expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
+        }),
+      );
+      expect(
+        await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
+      ).to.be.true;
+      expect(await marketv1.token()).to.equal(addrs[11]);
+    });
+  
+    it("should revert when initializing with mismatched lengths", async function () {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      await expect(
+        upgrades.deployProxy(
+          MarketV1,
+          [addrs[0], addrs[11], SELECTORS, [...WAIT_TIMES, 0]],
+          { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+        ),
+      ).to.be.reverted;
+    });
+  
+    it("should upgrade", async function () {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+      await upgrades.upgradeProxy(marketv1.address, MarketV1, { kind: "uups", unsafeAllow: ["missing-initializer-call"] });
+  
+      await Promise.all(
+        SELECTORS.map(async (s, idx) => {
+          expect(await marketv1.lockWaitTime(s)).to.equal(WAIT_TIMES[idx]);
+        }),
+      );
+      expect(
+        await marketv1.hasRole(await marketv1.DEFAULT_ADMIN_ROLE(), addrs[0]),
+      ).to.be.true;
+      expect(await marketv1.token()).to.equal(addrs[11]);
+    });
+  
+    it("should revert when upgrading without admin", async function () {
+      const MarketV1 = await ethers.getContractFactory("MarketV1");
+      const marketv1 = await upgrades.deployProxy(
+        MarketV1,
+        [addrs[0], addrs[11], SELECTORS, WAIT_TIMES],
+        { kind: "uups", unsafeAllow: ["missing-initializer-call"] },
+      );
+  
+      await expect(
+        upgrades.upgradeProxy(marketv1.address, MarketV1.connect(signers[1]), {
+          kind: "uups",
+          unsafeAllow: ["missing-initializer-call"],
+        }),
+      ).to.be.revertedWith("only admin");
+    });
+  });
+
+  describe("Reinitialize", function () {
+    it("should revert when not admin", async () => {
+      await expect(marketv1.connect(user).reinitialize(FIVE_MINUTES, creditToken.address)).to.be.revertedWith("only admin");
+    });
+
+    it("should revert when reinitialized twice", async () => {
+      await marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address);
+      await expect(marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address)).to.be.revertedWith("Initializable: contract is already initialized");
+    });
+
+    it("should set correct shutdown window", async () => {
+      await marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address);
+      expect(await marketv1.noticePeriod()).to.equal(FIVE_MINUTES);
+    });
+
+    it("should set correct credit token address", async () => {
+      await marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address);
+      expect(await marketv1.creditToken()).to.equal(creditToken.address);
+    });
+
+    it("should set correct job index", async () => {
+      await marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address);
+
+      const chainId = (await ethers.provider.getNetwork()).chainId;
+      const chainIdHex = chainId.toString(16).padStart(16, '0'); // 16 = 8 bytes * 2
+      const jobIndex = '0x' + chainIdHex + '0'.repeat(48); // 48 = 64 (bytes32) - 16 (8 bytes)
+      
+      expect(await marketv1.jobIndex()).to.equal(jobIndex);
+    });
+  });
+});
+
 describe("MarketV1", function () {
   let signers: Signer[];
   let addrs: string[];
