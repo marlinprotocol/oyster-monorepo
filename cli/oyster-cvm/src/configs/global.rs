@@ -1,11 +1,11 @@
 // Oyster Market Contract Addresses
-pub const OYSTER_MARKET_ADDRESS: &str = "0x9d95D61eA056721E358BC49fE995caBF3B86A34B";
+pub const OYSTER_MARKET_ADDRESS: &str = "0x01257EB1d6EBfDdf85ABB463d0bafD219D32ede3";
 
 // USDC Contract Address
-pub const USDC_ADDRESS: &str = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+pub const USDC_ADDRESS: &str = "0x2e6566bBcE6F3400427849A26e273847f1D7Ed2C";
 
 // Credit Contract Address
-pub const CREDIT_ADDRESS: &str = "0x972e62BE92e1b29c20a85A47042DaBC556Aa5474";
+pub const CREDIT_ADDRESS: &str = "0x1343d88885eE888CEe79FEb3DfD0C5fC8fd65Af1";
 
 // RPC URLs
 pub const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
