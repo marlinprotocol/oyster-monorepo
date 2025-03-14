@@ -14,7 +14,7 @@ sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
     USDC,
-    "src/abis/token_abi.json"
+    "src/abis/usdc_abi.json"
 );
 
 /// Approves USDC transfer to the Oyster Market contract if the current allowance is insufficient
