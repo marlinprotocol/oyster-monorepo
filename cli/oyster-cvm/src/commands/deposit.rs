@@ -1,8 +1,7 @@
 use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
-use crate::utils::{
-    provider::create_provider,
-    usdc::{approve_usdc, format_usdc},
-};
+use crate::utils::provider::create_provider;
+use crate::utils::token::approve_total_cost;
+use crate::utils::usdc::format_usdc;
 use alloy::{
     primitives::{Address, U256},
     providers::Provider,
@@ -38,15 +37,15 @@ pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str)
         .context("Failed to create provider")?;
 
     // Create contract instance
-    let market = OysterMarket::new(
+    let oyster_market = OysterMarket::new(
         OYSTER_MARKET_ADDRESS
-            .parse()
-            .context("Failed to parse market address")?,
+            .parse::<Address>()
+            .context("Failed to parse Oyster Market address")?,
         provider.clone(),
     );
 
     // Check if job exists and get current balance
-    let job = market
+    let job = oyster_market
         .jobs(job_id.parse().context("Failed to parse job ID")?)
         .call()
         .await
@@ -54,13 +53,12 @@ pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str)
     if job.owner == Address::ZERO {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
-    info!("Depositing: {:.6} USDC", format_usdc(amount_u256));
 
-    // First approve USDC transfer
-    approve_usdc(amount_u256, provider.clone()).await?;
+    info!("Deposting: {} tokens", format_usdc(amount_u256));
+    approve_total_cost(amount_u256, provider.clone()).await?;
 
     // Call jobDeposit function
-    let tx_hash = market
+    let tx_hash = oyster_market
         .jobDeposit(
             job_id.parse().context("Failed to parse job ID")?,
             amount_u256,
