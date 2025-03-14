@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
-use tracing::info;
+use tracing::{error, info};
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
@@ -253,9 +253,8 @@ async fn get_receipt_and_job_id(
         return Err(anyhow!("Transaction failed - check contract interaction"));
     }
 
-    let oyster_job_opened_signature =
-        "JobOpened(bytes32,bytes,address,address,uint256,uint256,uint256)";
-    let oyster_job_opened_topic = keccak256(oyster_job_opened_signature.as_bytes());
+    let oyster_job_opened_event = "JobOpened(bytes32,string,address,address)";
+    let oyster_job_opened_topic = keccak256(oyster_job_opened_event.as_bytes());
 
     // Look for JobOpened event
     for log in receipt.inner.logs().iter() {
@@ -487,7 +486,13 @@ async fn get_operator_cp(
     let market = OysterMarket::new(market_address, provider);
 
     // Call providers function to get CP URL
-    let cp_url = market.providers(provider_address).call().await?.cp;
+    let cp_url = market.providers(provider_address).call().await;
 
-    Ok(cp_url)
+    match cp_url {
+        Ok(cp_url) => Ok(cp_url.cp),
+        Err(e) => {
+            error!("Failed to get CP URL: {:?}", e);
+            Err(anyhow!("Failed to get CP URL"))
+        }
+    }
 }
