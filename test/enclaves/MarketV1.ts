@@ -58,8 +58,7 @@ const TWO_MINUTES = 60 * 2;
 const FIVE_MINUTES = 60 * 5;
 const NOTICE_PERIOD = FIVE_MINUTES;
 const SIGNER1_INITIAL_FUND = BN.from(1000).e6(); // 1000 USDC
-const INITIAL_TIMESTAMP = Math.floor(Date.now() / 1000) + 86400;
-
+const SIGNER2_INITIAL_FUND = BN.from(1000).e6(); // 1000 USDC
 const JOB_RATE_1 = BN.from(1).e16();
 
 const calcNoticePeriodCost = (rate: BN) => {
@@ -129,6 +128,7 @@ describe("Initialization", function () {
   let token: Contract;
 
   let user: Signer;
+  let user2: Signer;
   let provider: Signer;
   let admin: Signer;
   
@@ -139,7 +139,8 @@ describe("Initialization", function () {
     admin = signers[0];
     user = signers[1];
     provider = signers[2];
-    
+    user2 = signers[3];
+
     // Deploy USDC
     const Token = await ethers.getContractFactory("Pond");
     token = await upgrades.deployProxy(Token, ["USDC", "USDC"], {
@@ -147,7 +148,7 @@ describe("Initialization", function () {
       unsafeAllow: ["missing-initializer-call"],
     });
     await token.transfer(await user.getAddress(), SIGNER1_INITIAL_FUND);
-    
+    await token.transfer(await user2.getAddress(), SIGNER1_INITIAL_FUND);
     // Deploy MarketV1
     const MarketV1 = await ethers.getContractFactory("MarketV1");
     const marketv1Contract = await upgrades.deployProxy(
@@ -294,7 +295,9 @@ describe("Initialization", function () {
   });
 });
 
-describe.only("MarketV1", function () {
+describe("MarketV1", function () {
+  let INITIAL_TIMESTAMP: number;
+
   let signers: Signer[];
   let addrs: string[];
   let marketv1: MarketV1;
@@ -304,8 +307,10 @@ describe.only("MarketV1", function () {
   let admin: Signer;
   let user: Signer;
   let provider: Signer;
-
+  let user2: Signer;
   let INITIAL_JOB_INDEX: string;
+  let JOB_OPENED_TIMESTAMP: number;
+
 
   before(async function () {
     signers = await ethers.getSigners();
@@ -314,7 +319,7 @@ describe.only("MarketV1", function () {
     admin = signers[0];
     user = signers[1];
     provider = signers[2];
-    
+    user2 = signers[3];
     // Deploy USDC
     const USDC = await ethers.getContractFactory("Pond");
     token = await upgrades.deployProxy(USDC, ["Marlin", "USDC"], {
@@ -322,6 +327,7 @@ describe.only("MarketV1", function () {
       unsafeAllow: ["missing-initializer-call"],
     });
     await token.transfer(addrs[1], SIGNER1_INITIAL_FUND);
+    await token.transfer(addrs[3], SIGNER2_INITIAL_FUND);
     
     // Deploy MarketV1
     const MarketV1 = await ethers.getContractFactory("MarketV1");
@@ -345,11 +351,11 @@ describe.only("MarketV1", function () {
     await creditToken.initialize(addrs[0]);
     await marketv1.connect(admin).reinitialize(FIVE_MINUTES, creditToken.address);
     
-
     await marketv1.updateNoticePeriod(FIVE_MINUTES);
 
     // Set initial timestamp
-    await time.increaseTo(INITIAL_TIMESTAMP);
+    await time.increaseTo(Math.floor((new Date().getTime()) / 1000));
+    INITIAL_TIMESTAMP = (await ethers.provider.getBlock('latest')).timestamp;
 
     // Setup for using Credit
     await creditToken.connect(admin).grantRole(await creditToken.MINTER_ROLE(), await admin.getAddress());
@@ -520,6 +526,25 @@ describe.only("MarketV1", function () {
 
       expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.equal(initialBalance.sub(noticePeriodCost));
     });
+
+    it("should open job with USDC and Credit", async () => {
+      const totalBalance = usdc(50);
+      const creditBalance = usdc(10);
+      const noticePeriodCost = calcNoticePeriodCost(JOB_RATE_1);
+
+      await creditToken.connect(user).approve(marketv1.address, creditBalance);
+      await marketv1
+        .connect(user)
+        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, totalBalance);
+
+      const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+      expect(jobInfo.metadata).to.equal("some metadata");
+      expect(jobInfo.owner).to.equal(await user.getAddress());
+      expect(jobInfo.provider).to.equal(await provider.getAddress());
+      expect(jobInfo.rate).to.equal(JOB_RATE_1);
+      expect(jobInfo.balance).to.equal(totalBalance.sub(noticePeriodCost));
+      expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.equal(creditBalance.sub(noticePeriodCost));
+    })
   
     it("should revert when opening job without enough approved", async () => {
       await expect(
@@ -539,291 +564,920 @@ describe.only("MarketV1", function () {
     const initialDeposit = usdc(50);
     const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
 
+    beforeEach(async () => {
+      JOB_OPENED_TIMESTAMP = (await ethers.provider.getBlock('latest')).timestamp;
+    });
+
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
-    beforeEach(async () => {
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-    });
+    describe("USDC Only", function () {
+
+      beforeEach(async () => {
+        await token.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      });
+
+      describe("CASE1: Settle Job immediately after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
   
-    describe("CASE1: Settle Job immediately after Job Open", function () {
-      it("should revert before lastSettled", async () => {
-        await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+      describe("CASE2: Settle Job 2 minutes after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          const TWO_MINUTES = 60 * 2;
+          await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+  
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE3: Settle Job 1 second before notice period", function () {
+        it("should revert before lastSettled", async () => {
+          const jobOpenedTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+          await time.increaseTo(jobOpenedTimestamp + NOTICE_PERIOD - 1);
+          
+          const lastSettled = (await marketv1.jobs(INITIAL_JOB_INDEX)).lastSettled;
+          expect(lastSettled).to.equal(jobOpenedTimestamp + NOTICE_PERIOD);
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE4: Settle Job 2 minutes after notice period", function () {
+        it("should spend notice period cost and 2 minutes worth tokens", async () => {
+          const TWO_MINUTES = 60 * 2;
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES);
+  
+          // Job Settle
+          await marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX);
+  
+          const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+          expect(jobInfo.metadata).to.equal("some metadata");
+          expect(jobInfo.owner).to.equal(await user.getAddress());
+          expect(jobInfo.provider).to.equal(await provider.getAddress());
+          expect(jobInfo.rate).to.equal(JOB_RATE_1);
+  
+          const jobBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+  
+          const lastSettledTimestampExpected = INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES;
+          expect(jobInfo.lastSettled).to.equal(lastSettledTimestampExpected);
+  
+          // User balance
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
+          expect(await token.balanceOf(await user.getAddress())).to.equal(userBalanceExpected);
+  
+          // Provider balance
+          const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          // MarketV1 balance
+          const marketv1BalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+        });
       });
     });
 
-    describe("CASE2: Settle Job 2 minutes after Job Open", function () {
-      it("should revert before lastSettled", async () => {
-        const TWO_MINUTES = 60 * 2;
-        await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+    describe("Credit Only", function () {
+      beforeEach(async () => {
+        // await token.connect(user).approve(marketv1.address, initialDeposit);
+        await creditToken.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      });
 
-        await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+      describe("CASE1: Settle Job immediately after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE2: Settle Job 2 minutes after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          const TWO_MINUTES = 60 * 2;
+          await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+  
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE3: Settle Job exactly after notice period", function () {
+        it("should revert before lastSettled", async () => {
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD);
+  
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE4: Settle Job 2 minutes after notice period", function () {
+        it("should spend notice period cost and 2 minutes worth tokens", async () => {
+          const TWO_MINUTES = 60 * 2;
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES);
+  
+          // Job Settle
+          await marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX);
+
+          // Job Info After Settle
+          const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+          expect(jobInfo.metadata).to.equal("some metadata");
+          expect(jobInfo.owner).to.equal(await user.getAddress());
+          expect(jobInfo.provider).to.equal(await provider.getAddress());
+          expect(jobInfo.rate).to.equal(JOB_RATE_1);
+  
+          const jobBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+  
+          const lastSettledTimestampExpected = INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
+  
+          // User balance
+          const userTokenBalanceExpected = SIGNER1_INITIAL_FUND;
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userTokenBalanceExpected.sub(JOB_RATE_1), userTokenBalanceExpected.add(JOB_RATE_1));
+          const userCreditBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await creditToken.balanceOf(await user.getAddress())).to.be.within(userCreditBalanceExpected.sub(JOB_RATE_1), userCreditBalanceExpected.add(JOB_RATE_1));
+  
+          // Provider balance
+          const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          // MarketV1 balance
+          const marketv1TokenBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1TokenBalanceExpected.sub(JOB_RATE_1), marketv1TokenBalanceExpected.add(JOB_RATE_1));
+          const marketv1CreditBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+          expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        });
       });
     });
 
-    describe("CASE3: Settle Job exactly after notice period", function () {
-      it("should revert before lastSettled", async () => {
-        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD);
+    describe("Credit and USDC", function () {
+      const creditDeposit = usdc(10);
+      const usdcDeposit = usdc(40);
 
-        await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+      beforeEach(async () => {
+        await token.connect(user).approve(marketv1.address, usdcDeposit);
+        await creditToken.connect(user).approve(marketv1.address, creditDeposit);
+        // deposit 10 credit and 40 usdc
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, usdcDeposit.add(creditDeposit));
       });
-    });
 
-    describe("CASE4: Settle Job 2 minutes after notice period", function () {
-      it("should spend notice period cost and 2 minutes worth tokens", async () => {
-        const TWO_MINUTES = 60 * 2;
-        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES);
+      describe("CASE1: Settle Job immediately after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE2: Settle Job 2 minutes after Job Open", function () {
+        it("should revert before lastSettled", async () => {
+          const TWO_MINUTES = 60 * 2;
+          await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+  
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE3: Settle Job exactly after notice period", function () {
+        it("should revert before lastSettled", async () => {
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD);
+  
+          await expect(marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX)).to.be.revertedWith("cannot settle before lastSettled");
+        });
+      });
+  
+      describe("CASE4: Settle Job 2 minutes after notice period - only Credit is settled", function () {
+        it("should settle notice period cost and 2 minutes worth tokens only from Credit", async () => {
+          const TWO_MINUTES = 60 * 2;
+          const TIME_JOB_OPEN = (await ethers.provider.getBlock('latest')).timestamp;
+          await time.increaseTo(TIME_JOB_OPEN + NOTICE_PERIOD + TWO_MINUTES);
+          const TIME_JOB_SETTLE = (await ethers.provider.getBlock('latest')).timestamp;
+          const TIME_DIFF = TIME_JOB_SETTLE - TIME_JOB_OPEN;
 
-        // Job Settle
-        await marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX);
+          const noticePeriodCost = calcNoticePeriodCost(JOB_RATE_1);
+  
+          // Job Settle
+          await marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX);
 
-        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-        expect(jobInfo.metadata).to.equal("some metadata");
-        expect(jobInfo.owner).to.equal(await user.getAddress());
-        expect(jobInfo.provider).to.equal(await provider.getAddress());
-        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+          /* Job Info After Settle */
+          const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+          expect(jobInfo.metadata).to.equal("some metadata");
+          expect(jobInfo.owner).to.equal(await user.getAddress());
+          expect(jobInfo.provider).to.equal(await provider.getAddress());
+          expect(jobInfo.rate).to.equal(JOB_RATE_1);
+          // Job Balance
+          const jobBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+          // Job Last Settled
+          const lastSettledTimestampExpected = TIME_JOB_OPEN + NOTICE_PERIOD + TWO_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
+          // Job Credit Balance
+          const amountSettledExpected = calcAmountToPay(JOB_RATE_1, TIME_DIFF);
+          const jobCreditBalanceExpected = creditDeposit.sub(amountSettledExpected);
+          expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.be.within(jobCreditBalanceExpected.sub(JOB_RATE_1), jobCreditBalanceExpected.add(JOB_RATE_1));
+  
+          /* User balance */
+          // User Token balance
+          const userTokenBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcDeposit);
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userTokenBalanceExpected.sub(JOB_RATE_1), userTokenBalanceExpected.add(JOB_RATE_1));
+          // User Credit balance
+          const userCreditBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await creditToken.balanceOf(await user.getAddress())).to.be.within(userCreditBalanceExpected.sub(JOB_RATE_1), userCreditBalanceExpected.add(JOB_RATE_1));
+  
+          /* Provider balance */
+          // Provider Token balance
+          const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          /* MarketV1 balance */
+          // MarketV1 Token balance
+          const marketv1TokenBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1TokenBalanceExpected.sub(JOB_RATE_1), marketv1TokenBalanceExpected.add(JOB_RATE_1));
+          // MarketV1 Credit balance
+          const marketv1CreditBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+          expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        });
+      });
 
-        const jobBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
-        expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+      describe("CASE5: Settle Job 20 minutes after notice period - both Credit and USDC are settled", function () {
+        it("should settle all Credits and some USDC", async () => {
+          const TWENTY_MINUTES = 60 * 20;
+          await time.increaseTo(JOB_OPENED_TIMESTAMP + NOTICE_PERIOD + TWENTY_MINUTES);
+          const TIME_JOB_SETTLE = (await ethers.provider.getBlock('latest')).timestamp;
+          const TIME_DIFF = TIME_JOB_SETTLE - JOB_OPENED_TIMESTAMP;
 
-        const paymentSettledTimestampExpected = INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES;
-        expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const noticePeriodCost = calcNoticePeriodCost(JOB_RATE_1);
+  
+          // Job Settle
+          await marketv1.connect(user).jobSettle(INITIAL_JOB_INDEX);
 
-        // User balance
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
-        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-
-        // Provider balance
-        const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
-        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
-
-        // MarketV1 balance
-        const marketv1BalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
-        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+          /* Job Info After Settle */
+          const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+          expect(jobInfo.metadata).to.equal("some metadata");
+          expect(jobInfo.owner).to.equal(await user.getAddress());
+          expect(jobInfo.provider).to.equal(await provider.getAddress());
+          expect(jobInfo.rate).to.equal(JOB_RATE_1);
+          // Job Balance
+          const jobBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWENTY_MINUTES));
+          expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+          // Job Last Settled
+          const lastSettledTimestampExpected = JOB_OPENED_TIMESTAMP + NOTICE_PERIOD + TWENTY_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
+          // Job Credit Balance
+          const amountSettledExpected = calcAmountToPay(JOB_RATE_1, TIME_DIFF);
+          const jobCreditBalanceExpected = creditDeposit.sub(amountSettledExpected);
+          expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.be.within(jobCreditBalanceExpected.sub(JOB_RATE_1), jobCreditBalanceExpected.add(JOB_RATE_1));
+          expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.equal(0);
+  
+          /* User balance */
+          // User Token balance
+          const userTokenBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcDeposit);
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userTokenBalanceExpected.sub(JOB_RATE_1), userTokenBalanceExpected.add(JOB_RATE_1));
+          // User Credit balance
+          const userCreditBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await creditToken.balanceOf(await user.getAddress())).to.be.within(userCreditBalanceExpected.sub(JOB_RATE_1), userCreditBalanceExpected.add(JOB_RATE_1));
+  
+          /* Provider balance */
+          // Provider Token balance
+          const providerBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          /* MarketV1 balance */
+          // MarketV1 Token balance
+          const marketv1TokenBalanceExpected = initialBalance.sub(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
+          expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1TokenBalanceExpected.sub(JOB_RATE_1), marketv1TokenBalanceExpected.add(JOB_RATE_1));
+          // MarketV1 Credit balance
+          const marketv1CreditBalanceExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+          expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        });
       });
     });
   }); 
 
   describe("Job Deposit", function () {
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
-  
-    it("should deposit to job", async () => {
-      const initialDeposit = usdc(50);
-      const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
-      const additionalDepositAmount = usdc(25);
 
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-      
-      // Deposit 25 USDC
-      await marketv1
-        .connect(signers[1])
-        .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount);
+    describe("USDC Only", function () {
+      it("should deposit to job with USDC", async () => {
+        const initialDeposit = usdc(50);
+        const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
+        const additionalDepositAmount = usdc(25);
   
-      // Job after deposit
-      const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-      expect(jobInfo.metadata).to.equal("some metadata");
-      expect(jobInfo.owner).to.equal(addrs[1]);
-      expect(jobInfo.provider).to.equal(addrs[2]);
-      expect(jobInfo.rate).to.equal(JOB_RATE_1);
-      expect(jobInfo.balance).to.equal(initialBalance.add(additionalDepositAmount));
-      expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + 2);
-      
-      const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(additionalDepositAmount);
-      expect(await token.balanceOf(addrs[1])).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-
-      const marketv1BalanceExpected = initialBalance.add(additionalDepositAmount);
-      expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+        
+        // Deposit 25 USDC
+        await marketv1
+          .connect(signers[1])
+          .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount);
+    
+        // Job after deposit
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(addrs[1]);
+        expect(jobInfo.provider).to.equal(addrs[2]);
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        expect(jobInfo.balance).to.equal(initialBalance.add(additionalDepositAmount));
+        expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 3, INITIAL_TIMESTAMP + FIVE_MINUTES + 3);
+        
+        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(additionalDepositAmount);
+        expect(await token.balanceOf(addrs[1])).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+  
+        const marketv1BalanceExpected = initialBalance.add(additionalDepositAmount);
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should revert when depositing to job without enough approved", async () => {
+        const initialDeposit = usdc(50);
+        const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
+        const additionalDepositAmount = usdc(25);
+  
+        await token.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+        
+        // Deposit 25 USDC
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount)).to.be.revertedWith("ERC20: insufficient allowance");
+      });
+    
+      it("should revert when depositing to job without enough balance", async () => {
+        const initialDeposit = SIGNER1_INITIAL_FUND;
+        const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
+        const additionalDepositAmount = usdc(25);
+  
+        // Open Job
+        await token.connect(user).approve(marketv1.address, SIGNER1_INITIAL_FUND.add(usdc(1000)));
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+        
+        // Deposit 25 USDC
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+      });
+    
+      it("should revert when depositing to never registered job", async () => {
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(ethers.utils.hexZeroPad("0x01", 32), 25)).to.be.revertedWith("job not found");
+      });
+    
+      it("should revert when depositing to closed job", async () => {
+        const initialDeposit = usdc(50);
+  
+        // Job Open
+        await token.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    
+        // Job Close
+        await marketv1.connect(user).jobClose(INITIAL_JOB_INDEX);
+    
+        // Job Deposit
+        await expect(marketv1
+          .connect(signers[1])
+          .jobDeposit(INITIAL_JOB_INDEX, 25)).to.be.revertedWith("job not found");
+      });
     });
-  
-    it("should revert when depositing to job without enough approved", async () => {
-      const initialDeposit = usdc(50);
-      const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
-      const additionalDepositAmount = usdc(25);
 
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    describe("Credit Only", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const ADDITIONAL_DEPOSIT_AMOUNT = usdc(25);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
+
+      it("should deposit to job with Credit", async () => {
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+        
+        // Deposit 25 Credit
+        await creditToken.connect(user).approve(marketv1.address, ADDITIONAL_DEPOSIT_AMOUNT);
+        await marketv1
+          .connect(signers[1])
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_DEPOSIT_AMOUNT);
+
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+    
+        // Job after deposit
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        expect(jobInfo.balance).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).add(ADDITIONAL_DEPOSIT_AMOUNT));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
+        
+        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).sub(ADDITIONAL_DEPOSIT_AMOUNT);
+        expect(await token.balanceOf(addrs[1])).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+  
+        const marketv1BalanceExpected = INITIAL_DEPOSIT_AMOUNT.add(ADDITIONAL_DEPOSIT_AMOUNT);
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should revert when depositing to job without approving both Credit and USDC", async () => {
+        const additionalDepositAmount = usdc(25);
+  
+        await token.connect(user).approve(marketv1.address, INITIAL_DEPOSIT_AMOUNT);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+        
+        // Deposit without approving Credit
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_DEPOSIT_AMOUNT)).to.be.revertedWith("ERC20: insufficient allowance");
+      });
+    
+      it("should deposit USDC when Credit credit balance is not enough", async () => {
+        const initialDeposit = SIGNER1_INITIAL_FUND;
+
+        // Open Job
+        await token.connect(user2).approve(marketv1.address, SIGNER1_INITIAL_FUND.add(usdc(1000)));
+        await marketv1
+          .connect(user2)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+        
+        // Approve 25 Credit without having enough Credit balance
+        await creditToken.connect(user2).approve(marketv1.address, ADDITIONAL_DEPOSIT_AMOUNT);
+        await expect(marketv1
+          .connect(user2)
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_DEPOSIT_AMOUNT)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+        
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const creditBalance = await creditToken.balanceOf(await user2.getAddress());
+        expect(jobInfo.balance).to.equal(initialDeposit.sub(NOTICE_PERIOD_COST));
+        expect(creditBalance).to.equal(0);
+      });
+    
+      it("should revert when depositing to never registered job", async () => {
+        await creditToken.connect(user).approve(marketv1.address, INITIAL_DEPOSIT_AMOUNT);
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_DEPOSIT_AMOUNT)).to.be.revertedWith("job not found");
+      });
+    
+      it("should revert when depositing to closed job", async () => {
+        const initialDeposit = usdc(50);
+  
+        // Job Open
+        await token.connect(user).approve(marketv1.address, initialDeposit);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+    
+        // Job Close
+        await marketv1.connect(user).jobClose(INITIAL_JOB_INDEX);
+    
+        // Job Deposit
+        await creditToken.connect(user).approve(marketv1.address, ADDITIONAL_DEPOSIT_AMOUNT);
+        await expect(marketv1
+          .connect(signers[1])
+          .jobDeposit(INITIAL_JOB_INDEX, 25)).to.be.revertedWith("job not found");
+      });
+    });
+
+    describe("Both Credit and USDC", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
+      const TOTAL_ADITIONAL_DEPOSIT_AMOUNT = usdc(40);
+      const ADDITIONAL_CREDIT_DEPOSIT_AMOUNT = usdc(30);
+      const ADDITIONAL_USDC_DEPOSIT_AMOUNT = usdc(10);
+      const TOTAL_DEPOSIT_AMOUNT = INITIAL_DEPOSIT_AMOUNT.add(ADDITIONAL_USDC_DEPOSIT_AMOUNT).add(ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+
+      it("should deposit 10 USDC and 30 Credit", async () => {
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+        expect((await marketv1.jobs(INITIAL_JOB_INDEX)).balance).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST));
+        
+        // Deposit 30 Credit and 10 USDC
+        await creditToken.connect(user).approve(marketv1.address, ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+        await marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, TOTAL_ADITIONAL_DEPOSIT_AMOUNT);
+        
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+        
+        // Job after deposit
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const creditBalance = await marketv1.jobCreditBalance(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        expect(jobInfo.balance).to.equal(TOTAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
+        expect(creditBalance).to.equal(ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+        
+        // User Balance
+        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).sub(ADDITIONAL_USDC_DEPOSIT_AMOUNT).sub(ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+        expect(await token.balanceOf(addrs[1])).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+        
+        // MarketV1 Balance
+        const marketv1BalanceExpected = TOTAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST);
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should revert when depositing to job without enough USDC approved", async () => {
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+        
+        // Deposit 30 Credit and 1000 USDC
+        await creditToken.connect(user).approve(marketv1.address, ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_CREDIT_DEPOSIT_AMOUNT.add(SIGNER1_INITIAL_FUND))).to.be.revertedWith("ERC20: insufficient allowance");
+      });
+
+      it("should revert when user does not have enough USDC balance", async () => {
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+        
+        // Deposit 30 Credit and 1000 USDC
+        await creditToken.connect(user).approve(marketv1.address, ADDITIONAL_CREDIT_DEPOSIT_AMOUNT);
+        await token.connect(user).approve(marketv1.address, SIGNER1_INITIAL_FUND);
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, ADDITIONAL_CREDIT_DEPOSIT_AMOUNT.add(SIGNER1_INITIAL_FUND))).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+      });
       
-      // Deposit 25 USDC
-      await expect(marketv1
-        .connect(user)
-        .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount)).to.be.revertedWith("ERC20: insufficient allowance");
-    });
-  
-    it("should revert when depositing to job without enough balance", async () => {
-      const initialDeposit = SIGNER1_INITIAL_FUND;
-      const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
-      const additionalDepositAmount = usdc(25);
-
-      // Open Job
-      await token.connect(user).approve(marketv1.address, SIGNER1_INITIAL_FUND.add(usdc(1000)));
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-      
-      // Deposit 25 USDC
-      await expect(marketv1
-        .connect(user)
-        .jobDeposit(INITIAL_JOB_INDEX, additionalDepositAmount)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
-    });
-  
-    it("should revert when depositing to never registered job", async () => {
-      await expect(marketv1
-        .connect(user)
-        .jobDeposit(ethers.utils.hexZeroPad("0x01", 32), 25)).to.be.revertedWith("job not found");
-    });
-  
-    it("should revert when depositing to closed job", async () => {
-      const initialDeposit = usdc(50);
-
-      // Job Open
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-  
-      // Job Close
-      await marketv1.connect(user).jobClose(INITIAL_JOB_INDEX);
-  
-      // Job Deposit
-      await expect(marketv1
-        .connect(signers[1])
-        .jobDeposit(INITIAL_JOB_INDEX, 25)).to.be.revertedWith("job not found");
+      it("should revert when balance is below notice period cost", async () => {
+        // Open Job
+        await token.connect(user).approve(marketv1.address, SIGNER1_INITIAL_FUND.add(usdc(1000)));
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, SIGNER1_INITIAL_FUND);
+        
+        // 100_000 seconds passed (spend 1000 usdc)
+        await time.increaseTo(INITIAL_TIMESTAMP + 100_000);
+        
+        // Deposit 25 USDC
+        await expect(marketv1
+          .connect(user)
+          .jobDeposit(INITIAL_JOB_INDEX, usdc(25))).to.be.revertedWith("insufficient funds to deposit");
+      });
     });
   });
 
   describe("Job Withdraw", function () {
-    const initialDeposit = usdc(50);
-    const initialBalance = initialDeposit.sub(calcNoticePeriodCost(JOB_RATE_1));
+    const TWO_MINUTES = 60 * 2;
+    const SEVEN_MINUTES = 60 * 7;
 
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-    beforeEach(async () => {
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-    });
-  
-    it("should withdraw from job immediately", async () => {
-      const withdrawAmount = usdc(10);
-
-      // Job Withdraw
-      await marketv1
-        .connect(signers[1])
-        .jobWithdraw(INITIAL_JOB_INDEX, withdrawAmount);
-  
-      let jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-      expect(jobInfo.metadata).to.equal("some metadata");
-      expect(jobInfo.owner).to.equal(addrs[1]);
-      expect(jobInfo.provider).to.equal(addrs[2]);
-      expect(jobInfo.rate).to.equal(JOB_RATE_1);
-      expect(jobInfo.balance).to.equal(initialBalance.sub(withdrawAmount));
-      expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES - 3, INITIAL_TIMESTAMP + FIVE_MINUTES + 3);
     
-      expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
-      expect(await token.balanceOf(await provider.getAddress())).to.equal(calcNoticePeriodCost(JOB_RATE_1));
-      expect(await token.balanceOf(marketv1.address)).to.equal(initialBalance.sub(withdrawAmount));
-    });
-  
-    it("should withdraw from job before lastSettled", async () => {
-      const TWO_MINUTES = 60 * 2;
-      const withdrawAmount = usdc(10);
-
-      // 2 minutes passed
-      await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
-
-      const providerBalanceBefore = await token.balanceOf(await provider.getAddress());
-
-      // Job Withdraw
-      await marketv1
-        .connect(user)
-        .jobWithdraw(INITIAL_JOB_INDEX, withdrawAmount);
-      
-
+    describe("USDC Only", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
       const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
-      const SETTLED_AMOUNT = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+      const TOTAL_WITHDRAW_AMOUNT = usdc(10);
+  
+      beforeEach(async () => {
+        // Deposit 50 USDC
+        await token.connect(user).approve(marketv1.address, INITIAL_DEPOSIT_AMOUNT);
+        await marketv1
+          .connect(user)
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+      });
+
+      it("should withdraw from job immediately", async () => {
+        const withdrawAmount = usdc(10);
+  
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, withdrawAmount);
+        
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+    
+        let jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        expect(jobInfo.balance).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(withdrawAmount));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
       
-      // Job info after Withdrawal
-      let jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-      expect(jobInfo.metadata).to.equal("some metadata");
-      expect(jobInfo.owner).to.equal(await user.getAddress());
-      expect(jobInfo.provider).to.equal(await provider.getAddress());
-      expect(jobInfo.rate).to.equal(JOB_RATE_1);
-      const jobBalanceExpected = initialBalance.sub(withdrawAmount).sub(SETTLED_AMOUNT);
-      expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
-      expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES - 2, INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES + 2);
-      
-      // Check User USDC balance
-      const userUSDCBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount);
-      expect(await token.balanceOf(await user.getAddress())).to.be.within(userUSDCBalanceExpected.sub(JOB_RATE_1), userUSDCBalanceExpected.add(JOB_RATE_1));
-
-      // Check Provider USDC balance
-      const providerUSDCBalanceExpected = NOTICE_PERIOD_COST.add(SETTLED_AMOUNT);
-      expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerUSDCBalanceExpected.sub(JOB_RATE_1), providerUSDCBalanceExpected.add(JOB_RATE_1));
-
-      // Check MarketV1 USDC balance
-      const marketv1BalanceExpected = initialBalance.sub(withdrawAmount).sub(SETTLED_AMOUNT);
-      expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+        expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(withdrawAmount));
+        expect(await token.balanceOf(await provider.getAddress())).to.equal(NOTICE_PERIOD_COST);
+        expect(await token.balanceOf(marketv1.address)).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(withdrawAmount));
+      });
+    
+      it("should withdraw from job before lastSettled", async () => {
+  
+        // 2 minutes passed
+        await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+  
+        const providerBalanceBefore = await token.balanceOf(await provider.getAddress());
+  
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, TOTAL_WITHDRAW_AMOUNT); // withdraw 10 USDC
+  
+        const SETTLED_AMOUNT = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+        
+        // Job info after Withdrawal
+        let jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        const jobBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(SETTLED_AMOUNT).sub(TOTAL_WITHDRAW_AMOUNT);
+        expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+        expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES - 3, INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES + 3);
+        
+        // Check User USDC balance
+        const userUSDCBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(TOTAL_WITHDRAW_AMOUNT);
+        expect(await token.balanceOf(await user.getAddress())).to.be.within(userUSDCBalanceExpected.sub(JOB_RATE_1), userUSDCBalanceExpected.add(JOB_RATE_1));
+  
+        // Check Provider USDC balance
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST.add(SETTLED_AMOUNT);
+        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerUSDCBalanceExpected.sub(JOB_RATE_1), providerUSDCBalanceExpected.add(JOB_RATE_1));
+  
+        // Check MarketV1 USDC balance
+        const marketv1BalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(SETTLED_AMOUNT);
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should withdraw from job after lastSettled with settlement", async () => {
+        const settledAmountExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+  
+        // 7 minutes passed after Job Open
+        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES);
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, TOTAL_WITHDRAW_AMOUNT);
+        
+        expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(TOTAL_WITHDRAW_AMOUNT));
+  
+        const providerBalanceExpected = calcNoticePeriodCost(JOB_RATE_1).add(settledAmountExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+        const marketv1BalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(settledAmountExpected);
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should revert when withdrawing from non existent job", async () => {
+        const max_uint256_bytes32 = ethers.utils.hexZeroPad(ethers.constants.MaxUint256.toHexString(), 32);
+    
+        await expect(marketv1
+          .connect(user)
+          .jobWithdraw(max_uint256_bytes32, usdc(100))).to.be.revertedWith("job not found");
+      });
+    
+      it("should revert when withdrawing from third party job", async () => {
+        await expect(marketv1
+          .connect(signers[3]) // neither owner nor provider
+          .jobWithdraw(INITIAL_JOB_INDEX, usdc(100))).to.be.revertedWith("only job owner");
+      });
+    
+      it("should revert when balance is below notice period cost", async () => {
+        // deposited 50 USDC
+        // 0.01 USDC/s
+        // notice period cost: 0.01 * 300 = 3 USDC
+        // 47 USDC left
+  
+        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + 4500); // spend 45 USDC (300 + 4500 seconds passed)
+  
+        await expect(marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, usdc(1))).to.be.revertedWith("insufficient funds to withdraw");
+      });
+    
+      it("should revert when withdrawal request amount exceeds max withdrawable amount", async () => {
+        // Current balance: 47 USDC
+  
+        await expect(marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, usdc(48))).to.be.revertedWith("withdrawal amount exceeds job balance");
+      });
     });
+
+    describe("Credit Only", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
+      const CREDIT_WITHDRAW_AMOUNT = usdc(10);
+      const TOTAL_WITHDRAW_AMOUNT = usdc(10);
+
+      beforeEach(async () => {
+        // Deposit 50 Credit
+        await creditToken.connect(user).approve(marketv1.address, INITIAL_DEPOSIT_AMOUNT);
+        await marketv1.connect(user).jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+      });
+
+      it("should withdraw from job immediately", async () => {
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, CREDIT_WITHDRAW_AMOUNT); // withdraw 10 Credit
+    
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const jobCreditBalance = await marketv1.jobCreditBalance(INITIAL_JOB_INDEX);
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        expect(jobInfo.balance).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(CREDIT_WITHDRAW_AMOUNT));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
+
+        expect(jobCreditBalance).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(CREDIT_WITHDRAW_AMOUNT));
+        
+        // User Balance
+        const userCreditBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(CREDIT_WITHDRAW_AMOUNT);
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+
+        // Provider Balance
+        const providerCreditBalanceExpected = 0;
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST;
+        expect(await creditToken.balanceOf(await provider.getAddress())).to.equal(providerCreditBalanceExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.equal(providerUSDCBalanceExpected);
+
+        const marketv1CreditBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(CREDIT_WITHDRAW_AMOUNT);
+        expect(await creditToken.balanceOf(marketv1.address)).to.equal(marketv1CreditBalanceExpected);
+      });
+    
+      it("should withdraw from job before lastSettled", async () => {
+        // 2 minutes passed
+        await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+        const SETTLED_AMOUNT = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
   
-    it("should withdraw from job after lastSettled with settlement", async () => {
-      const withdrawAmount = usdc(10);
-      const settledAmountExpected = calcAmountToPay(JOB_RATE_1, TWO_MINUTES);
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, CREDIT_WITHDRAW_AMOUNT); // withdraw 10 Credit
+        
+        // Job info after Withdrawal
+        let jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const jobCreditBalance = await marketv1.jobCreditBalance(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        const jobBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(SETTLED_AMOUNT).sub(TOTAL_WITHDRAW_AMOUNT);
+        expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+        expect(jobInfo.lastSettled).to.be.within(INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES - 3, INITIAL_TIMESTAMP + FIVE_MINUTES + TWO_MINUTES + 3);
+        
+        const jobCreditBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(SETTLED_AMOUNT).sub(TOTAL_WITHDRAW_AMOUNT);
+        expect(jobCreditBalance).to.be.within(jobCreditBalanceExpected.sub(JOB_RATE_1), jobCreditBalanceExpected.add(JOB_RATE_1));
+        
+        // User Balance
+        const userCreditBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(TOTAL_WITHDRAW_AMOUNT);
+        const userUSDCBalanceExpected = 0;
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+        expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND);
 
-      // 7 minutes passed after Job Open
-      await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + TWO_MINUTES);
-      await marketv1
-        .connect(user)
-        .jobWithdraw(INITIAL_JOB_INDEX, withdrawAmount);
-      
-      expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(initialDeposit).add(withdrawAmount));
+        // Provider Balance
+        const providerCreditBalanceExpected = 0;
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST.add(SETTLED_AMOUNT);
+        expect(await creditToken.balanceOf(await provider.getAddress())).to.equal(providerCreditBalanceExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerUSDCBalanceExpected.sub(JOB_RATE_1), providerUSDCBalanceExpected.add(JOB_RATE_1));
+  
+        // Check MarketV1 USDC balance
+        const marketv1CreditBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(SETTLED_AMOUNT).sub(TOTAL_WITHDRAW_AMOUNT);
+        const marketv1USDCBalanceExpected = 0;
+        expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        expect(await token.balanceOf(marketv1.address)).to.equal(marketv1USDCBalanceExpected);
+      });
+    
+      it("should withdraw from job after lastSettled with settlement", async () => {
+        const settledAmountExpected = calcAmountToPay(JOB_RATE_1, SEVEN_MINUTES);
+  
+        // 7 minutes passed after Job Open
+        await time.increaseTo(INITIAL_TIMESTAMP + SEVEN_MINUTES);
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, TOTAL_WITHDRAW_AMOUNT);
+        
+        
+        // User Balance
+        const userCreditBalanceExpected = SIGNER1_INITIAL_FUND.sub(INITIAL_DEPOSIT_AMOUNT).add(TOTAL_WITHDRAW_AMOUNT);
+        const userUSDCBalanceExpected = SIGNER1_INITIAL_FUND;
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+        expect(await token.balanceOf(await user.getAddress())).to.equal(userUSDCBalanceExpected);
+  
+        // Provider Balance
+        const providerCreditBalanceExpected = 0;
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST.add(settledAmountExpected);
+        expect(await creditToken.balanceOf(await provider.getAddress())).to.equal(providerCreditBalanceExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerUSDCBalanceExpected.sub(JOB_RATE_1), providerUSDCBalanceExpected.add(JOB_RATE_1));
 
-      const providerBalanceExpected = calcNoticePeriodCost(JOB_RATE_1).add(settledAmountExpected);
-      expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
-
-      const marketv1BalanceExpected = initialBalance.sub(withdrawAmount).sub(settledAmountExpected);
-      expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1BalanceExpected.sub(JOB_RATE_1), marketv1BalanceExpected.add(JOB_RATE_1));
+        // Check MarketV1 Balance
+        const marketv1CreditBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(settledAmountExpected).sub(TOTAL_WITHDRAW_AMOUNT);
+        const marketv1USDCBalanceExpected = 0;
+        expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        expect(await token.balanceOf(marketv1.address)).to.equal(marketv1USDCBalanceExpected);
+      });
     });
-  
-    it("should revert when withdrawing from non existent job", async () => {
-      const max_uint256_bytes32 = ethers.utils.hexZeroPad(ethers.constants.MaxUint256.toHexString(), 32);
-  
-      await expect(marketv1
-        .connect(user)
-        .jobWithdraw(max_uint256_bytes32, usdc(100))).to.be.revertedWith("job not found");
-    });
-  
-    it("should revert when withdrawing from third party job", async () => {
-      await expect(marketv1
-        .connect(signers[3]) // neither owner nor provider
-        .jobWithdraw(INITIAL_JOB_INDEX, usdc(100))).to.be.revertedWith("only job owner");
-    });
-  
-    it("should revert when balance is below notice period cost", async () => {
-      // deposited 50 USDC
-      // 0.01 USDC/s
-      // notice period cost: 0.01 * 300 = 3 USDC
-      // 47 USDC left
 
-      await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + 4500); // spend 45 USDC (300 + 4500 seconds passed)
+    describe("Both Credit and USDC", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const INITIAL_CREDIT_DEPOSIT_AMOUNT = usdc(40);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
+      const TOTAL_WITHDRAW_AMOUNT = usdc(20); // 13 USDC + 7 Credit
 
-      await expect(marketv1
-        .connect(user)
-        .jobWithdraw(INITIAL_JOB_INDEX, usdc(1))).to.be.revertedWith("insufficient funds to withdraw");
-    });
-  
-    it("should revert when withdrawal request amount exceeds max withdrawable amount", async () => {
-      // Current balance: 47 USDC
+      beforeEach(async () => {
+        // Deposit 10 Credit, 40 USDC
+        await creditToken.connect(user).approve(marketv1.address, INITIAL_CREDIT_DEPOSIT_AMOUNT);
+        await marketv1.connect(user).jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+      });
 
-      await expect(marketv1
-        .connect(user)
-        .jobWithdraw(INITIAL_JOB_INDEX, usdc(48))).to.be.revertedWith("withdrawal amount exceeds job balance");
+      it("should withdraw only USDC", async () => {
+        const userCreditBalanceBefore = await creditToken.balanceOf(await user.getAddress());
+        const userUSDCBalanceBefore = await token.balanceOf(await user.getAddress());
+
+        const USDC_WITHDRAWAL_AMOUNT = usdc(5);
+
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, USDC_WITHDRAWAL_AMOUNT); // withdraw 5 usdc
+
+        // Job Info
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const jobCreditBalance = await marketv1.jobCreditBalance(INITIAL_JOB_INDEX);
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        const jobBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(TOTAL_WITHDRAW_AMOUNT);
+        expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
+        const jobCreditBalanceExpected = INITIAL_CREDIT_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST);
+        expect(jobCreditBalance).to.equal(jobCreditBalanceExpected);
+        
+        // User Balance
+        const userCreditBalanceExpected = userCreditBalanceBefore;
+        const userUSDCBalanceExpected = userUSDCBalanceBefore.sub(USDC_WITHDRAWAL_AMOUNT);
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+        expect(await token.balanceOf(await user.getAddress())).to.be.within(userUSDCBalanceExpected.sub(JOB_RATE_1), userUSDCBalanceExpected.add(JOB_RATE_1));
+
+        // Provider Balance
+        const providerCreditBalanceExpected = 0;
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST;
+        expect(await creditToken.balanceOf(await provider.getAddress())).to.equal(providerCreditBalanceExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.equal(providerUSDCBalanceExpected);
+
+        const marketv1CreditBalanceExpected = INITIAL_CREDIT_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST);
+        const marketv1USDCBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(INITIAL_CREDIT_DEPOSIT_AMOUNT).sub(USDC_WITHDRAWAL_AMOUNT);
+        expect(await creditToken.balanceOf(marketv1.address)).to.be.within(marketv1CreditBalanceExpected.sub(JOB_RATE_1), marketv1CreditBalanceExpected.add(JOB_RATE_1));
+        expect(await token.balanceOf(marketv1.address)).to.be.within(marketv1USDCBalanceExpected.sub(JOB_RATE_1), marketv1USDCBalanceExpected.add(JOB_RATE_1));
+      });
+    
+      it("should withdraw both USDC and Credit", async () => {
+        const userCreditBalanceBefore = await creditToken.balanceOf(await user.getAddress());
+        const userUSDCBalanceBefore = await token.balanceOf(await user.getAddress());
+
+        const withdrawnUSDCAmountExpected = ((await marketv1.jobs(INITIAL_JOB_INDEX)).balance).sub(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX));
+        const withdrawnCreditAmountExpected = TOTAL_WITHDRAW_AMOUNT.sub(withdrawnUSDCAmountExpected);
+        // Job Withdraw
+        await marketv1
+          .connect(user)
+          .jobWithdraw(INITIAL_JOB_INDEX, TOTAL_WITHDRAW_AMOUNT); // withdraw 20 (13 USDC + 7 Credit)
+
+        const currentTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
+
+        // Job Info
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        const jobCreditBalance = await marketv1.jobCreditBalance(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("some metadata");
+        expect(jobInfo.owner).to.equal(await user.getAddress());
+        expect(jobInfo.provider).to.equal(await provider.getAddress());
+        expect(jobInfo.rate).to.equal(JOB_RATE_1);
+        const jobBalanceExpected = INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(TOTAL_WITHDRAW_AMOUNT);
+        expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
+        expect(jobInfo.lastSettled).to.equal(currentTimestamp + NOTICE_PERIOD);
+        expect(jobCreditBalance).to.equal(INITIAL_CREDIT_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(withdrawnCreditAmountExpected));
+        
+        // User Balance
+        const userCreditBalanceExpected = userCreditBalanceBefore.add(withdrawnCreditAmountExpected);
+        const userUSDCBalanceExpected = userUSDCBalanceBefore.add(withdrawnUSDCAmountExpected);
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+        expect(await token.balanceOf(await user.getAddress())).to.equal(userUSDCBalanceExpected);
+
+        // Provider Balance
+        const providerCreditBalanceExpected = 0;
+        const providerUSDCBalanceExpected = NOTICE_PERIOD_COST;
+        expect(await creditToken.balanceOf(await provider.getAddress())).to.equal(providerCreditBalanceExpected);
+        expect(await token.balanceOf(await provider.getAddress())).to.equal(providerUSDCBalanceExpected);
+
+        // MarketV1 Balance
+        const marketv1CreditBalanceExpected = INITIAL_CREDIT_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST).sub(withdrawnCreditAmountExpected);
+        expect(await creditToken.balanceOf(marketv1.address)).to.equal(marketv1CreditBalanceExpected);
+        expect(await token.balanceOf(marketv1.address)).to.equal(0);
+      });
     });
   });
 
@@ -944,13 +1598,14 @@ describe.only("MarketV1", function () {
         });
       });
     });
+
     describe("CASE 2: Revising Rate 2 minutes after job open", function () {
       const TWO_MINUTES = 60 * 2;
       const SEVEN_MINUTES = 60 * 7;
 
       describe("when rate is higher", function () {
-        it("should spend notice period cost + 2 minutes worth tokens with higher rate", async () => {
-          // 5 min * initial rate + 2 min * higher rate
+        it("should spend notice period cost + 3 minutes worth tokens with higher rate", async () => {
+          // 5 min * initial rate + 3 min * higher rate
           const usdcSpentExpected = calcNoticePeriodCost(JOB_RATE_1).add(calcAmountToPay(HIGHER_RATE, TWO_MINUTES));
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
 
@@ -966,8 +1621,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(usdcSpentExpected);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
 
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(usdcSpentExpected);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -981,8 +1636,8 @@ describe.only("MarketV1", function () {
       });
 
       describe("when rate is lower", function () {
-        it("should spend notice period cost + 2 minutes worth tokens with initial rate", async () => {
-          // 5 min * initial rate + 2 min * initial rate
+        it("should spend notice period cost + 3 minutes worth tokens with initial rate", async () => {
+          // 5 min * initial rate + 3 min * initial rate
           const usdcSpentExpected = calcNoticePeriodCost(JOB_RATE_1).add(calcAmountToPay(JOB_RATE_1, TWO_MINUTES));
           const initialTimestamp = (await ethers.provider.getBlock('latest')).timestamp;
 
@@ -998,8 +1653,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(usdcSpentExpected);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
 
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(usdcSpentExpected);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -1034,8 +1689,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(firstNoticePeriodCost).sub(secondNoticePeriodCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
 
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -1066,8 +1721,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(firstNoticePeriodCost).sub(secondNoticePeriodCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
 
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -1103,8 +1758,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(firstNoticePeriodCost).sub(secondNoticePeriodCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
           
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -1135,8 +1790,8 @@ describe.only("MarketV1", function () {
           const jobBalanceExpected = initialDeposit.sub(firstNoticePeriodCost).sub(secondNoticePeriodCost);
           expect(jobInfo.balance).to.be.within(jobBalanceExpected.sub(JOB_RATE_1), jobBalanceExpected.add(JOB_RATE_1));
 
-          const paymentSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
-          expect(jobInfo.lastSettled).to.be.within(paymentSettledTimestampExpected - 3, paymentSettledTimestampExpected + 3);
+          const lastSettledTimestampExpected = (await ethers.provider.getBlock('latest')).timestamp + FIVE_MINUTES;
+          expect(jobInfo.lastSettled).to.be.within(lastSettledTimestampExpected - 3, lastSettledTimestampExpected + 3);
 
           const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
           expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
@@ -1157,125 +1812,177 @@ describe.only("MarketV1", function () {
 
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
-    beforeEach(async () => {
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-    });
-
-    it("should close job", async () => {
-      // Job Close
-      await marketv1
-        .connect(user)
-        .jobClose(INITIAL_JOB_INDEX); // here, user should get back (initial deposit - notice period cost)
-
-      const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-      expect(jobInfo.metadata).to.equal("");
-      expect(jobInfo.owner).to.equal(ethers.constants.AddressZero);
-      expect(jobInfo.provider).to.equal(ethers.constants.AddressZero);
-      expect(jobInfo.rate).to.equal(0);
-      expect(jobInfo.balance).to.equal(0);
-      expect(jobInfo.lastSettled).to.equal(0);
-    
-      const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcNoticePeriodCost(JOB_RATE_1));
-      expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-    });
-
-    it("should revert when closing non existent job", async () => {
-      await expect(marketv1
-        .connect(user)
-        .jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("job not found");
-    });
-
-    it("should revert when closing third party job", async () => {
-      await expect(marketv1
-        .connect(signers[3]) // neither owner nor provider
-        .jobClose(INITIAL_JOB_INDEX)).to.be.revertedWith("only job owner");
-    });
-
-    describe("Scenario 1: Closing Job immediately after opening", function () {
-      it("should spend notice period cost only", async () => {
+    describe("USDC Only", function () {
+      beforeEach(async () => {
+        await token.connect(user).approve(marketv1.address, initialDeposit);
         await marketv1
           .connect(user)
-          .jobClose(INITIAL_JOB_INDEX);
-
-        const noticePeriodCostExpected = calcNoticePeriodCost(JOB_RATE_1);
-
-        // user balance after = initial fund - notice period cost
-        expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(noticePeriodCostExpected));
-        // provider balance after = notice period cost
-        expect(await token.balanceOf(await provider.getAddress())).to.equal(noticePeriodCostExpected);
-        // marketv1 balance after = 0
-        expect(await token.balanceOf(marketv1.address)).to.equal(0);
+          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
+      });
+  
+      it("should close job", async () => {
+        // Job Close
+        await marketv1
+          .connect(user)
+          .jobClose(INITIAL_JOB_INDEX); // here, user should get back (initial deposit - notice period cost)
+  
+        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
+        expect(jobInfo.metadata).to.equal("");
+        expect(jobInfo.owner).to.equal(ethers.constants.AddressZero);
+        expect(jobInfo.provider).to.equal(ethers.constants.AddressZero);
+        expect(jobInfo.rate).to.equal(0);
+        expect(jobInfo.balance).to.equal(0);
+        expect(jobInfo.lastSettled).to.equal(0);
+      
+        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit).sub(calcNoticePeriodCost(JOB_RATE_1));
+        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+      });
+  
+      it("should revert when closing non existent job", async () => {
+        await expect(marketv1
+          .connect(user)
+          .jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("job not found");
+      });
+  
+      it("should revert when closing third party job", async () => {
+        await expect(marketv1
+          .connect(signers[3]) // neither owner nor provider
+          .jobClose(INITIAL_JOB_INDEX)).to.be.revertedWith("only job owner");
+      });
+  
+      describe("Scenario 1: Closing Job immediately after opening", function () {
+        it("should spend notice period cost only", async () => {
+          await marketv1
+            .connect(user)
+            .jobClose(INITIAL_JOB_INDEX);
+  
+          const noticePeriodCostExpected = calcNoticePeriodCost(JOB_RATE_1);
+  
+          // user balance after = initial fund - notice period cost
+          expect(await token.balanceOf(await user.getAddress())).to.equal(SIGNER1_INITIAL_FUND.sub(noticePeriodCostExpected));
+          // provider balance after = notice period cost
+          expect(await token.balanceOf(await provider.getAddress())).to.equal(noticePeriodCostExpected);
+          // marketv1 balance after = 0
+          expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        });
+      });
+  
+      describe("Scenario 2: Closing Job 2 minutes after opening (before notice period)", function () {
+        it("should spend notice period cost only", async () => {
+          const TWO_MINUTES = 60 * 2;
+  
+          await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+  
+          await marketv1
+            .connect(user)
+            .jobClose(INITIAL_JOB_INDEX);
+        
+          const noticePeriodCostExpected = calcNoticePeriodCost(JOB_RATE_1);
+  
+          // user balance after = initial fund - 3 minutes worth tokens - notice period cost
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdc(TWO_MINUTES)).sub(noticePeriodCostExpected);
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+        
+          // provider balance after = 2 minutes worth tokens + notice period cost
+          const providerBalanceExpected = usdc(TWO_MINUTES).add(noticePeriodCostExpected);
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          // marketv1 balance after = 0
+          expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        });
+      });
+  
+      describe("Scenario 3: Closing Job exactly after notice period", function () {
+        it("should spend 10 minutes worth tokens", async () => {
+          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, FIVE_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+  
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD);
+  
+          await marketv1
+            .connect(user)
+            .jobClose(INITIAL_JOB_INDEX);
+        
+          // user balance after = initial fund - 5 minutes worth tokens - notice period cost
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcSpentExpected);
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+  
+          // provider balance after = 5 minutes worth tokens + notice period cost
+          const providerBalanceExpected = usdcSpentExpected;
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+  
+          expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        });
+      });
+  
+      describe("Scenario 4: Closing Job 2 minutes after notice period", function () {
+        it("should spend 12 minutes worth tokens", async () => {
+          const SEVEN_MINUTES = 60 * 7;
+          const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, SEVEN_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+  
+          await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + SEVEN_MINUTES);
+  
+          await marketv1
+            .connect(user)
+            .jobClose(INITIAL_JOB_INDEX);
+  
+          const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcSpentExpected);
+          expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
+  
+          const providerBalanceExpected = usdcSpentExpected;
+          expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+        
+          expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        });
       });
     });
 
-    describe("Scenario 2: Closing Job 2 minutes after opening (before notice period)", function () {
-      it("should spend notice period cost only", async () => {
-        const TWO_MINUTES = 60 * 2;
+    describe("Credit Only", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
 
-        await time.increaseTo(INITIAL_TIMESTAMP + TWO_MINUTES);
+      beforeEach(async () => {
+        // Deposit 50 Credit
+        await creditToken.connect(user).approve(marketv1.address, INITIAL_DEPOSIT_AMOUNT);
+        await marketv1.connect(user).jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
+      });
 
-        await marketv1
-          .connect(user)
-          .jobClose(INITIAL_JOB_INDEX);
-      
-        const noticePeriodCostExpected = calcNoticePeriodCost(JOB_RATE_1);
+      it("should close job and withdraw all credit", async () => {
+        expect(await marketv1.jobCreditBalance(INITIAL_JOB_INDEX)).to.equal(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST));
+        const userCreditBalanceBefore = await creditToken.balanceOf(await user.getAddress());
+        const userUSDCBalanceBefore = await token.balanceOf(await user.getAddress());
 
-        // user balance after = initial fund - 2 minutes worth tokens - notice period cost
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdc(TWO_MINUTES)).sub(noticePeriodCostExpected);
-        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-      
-        // provider balance after = 2 minutes worth tokens + notice period cost
-        const providerBalanceExpected = usdc(TWO_MINUTES).add(noticePeriodCostExpected);
-        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
+        // Close job
+        await marketv1.connect(user).jobClose(INITIAL_JOB_INDEX);
 
-        // marketv1 balance after = 0
-        expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        const userCreditBalanceExpected = userCreditBalanceBefore.add(INITIAL_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST));
+        const userUSDCBalanceExpected = userUSDCBalanceBefore;
+        expect(await creditToken.balanceOf(await user.getAddress())).to.equal(userCreditBalanceExpected);
+        expect(await token.balanceOf(await user.getAddress())).to.equal(userUSDCBalanceExpected);
       });
     });
 
-    describe("Scenario 3: Closing Job exactly after notice period", function () {
-      it("should spend 10 minutes worth tokens", async () => {
-        const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, FIVE_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+    describe("Both Credit and USDC", function () {
+      const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+      const INITIAL_CREDIT_DEPOSIT_AMOUNT = usdc(40);
+      const NOTICE_PERIOD_COST = calcNoticePeriodCost(JOB_RATE_1);
 
-        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD);
-
-        await marketv1
-          .connect(user)
-          .jobClose(INITIAL_JOB_INDEX);
-      
-        // user balance after = initial fund - 5 minutes worth tokens - notice period cost
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcSpentExpected);
-        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-
-        // provider balance after = 5 minutes worth tokens + notice period cost
-        const providerBalanceExpected = usdcSpentExpected;
-        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
-
-        expect(await token.balanceOf(marketv1.address)).to.equal(0);
+      beforeEach(async () => {
+        // Deposit 40 Credit, 10 USDC
+        await creditToken.connect(user).approve(marketv1.address, INITIAL_CREDIT_DEPOSIT_AMOUNT);
+        await marketv1.connect(user).jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, INITIAL_DEPOSIT_AMOUNT);
       });
-    });
 
-    describe("Scenario 4: Closing Job 2 minutes after notice period", function () {
-      it("should spend 12 minutes worth tokens", async () => {
-        const SEVEN_MINUTES = 60 * 7;
-        const usdcSpentExpected = calcAmountToPay(JOB_RATE_1, SEVEN_MINUTES).add(calcNoticePeriodCost(JOB_RATE_1));
+      it("should close job and withdraw all Credit and USDC", async () => {
+        const userCreditBalanceBefore = await creditToken.balanceOf(await user.getAddress());
+        const userUSDCBalanceBefore = await token.balanceOf(await user.getAddress());
 
-        await time.increaseTo(INITIAL_TIMESTAMP + NOTICE_PERIOD + SEVEN_MINUTES);
+        // Close job
+        await marketv1.connect(user).jobClose(INITIAL_JOB_INDEX);
 
-        await marketv1
-          .connect(user)
-          .jobClose(INITIAL_JOB_INDEX);
-
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(usdcSpentExpected);
-        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-
-        const providerBalanceExpected = usdcSpentExpected;
-        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
-      
-        expect(await token.balanceOf(marketv1.address)).to.equal(0);
+        const userCreditBalanceExpected = userCreditBalanceBefore.add(INITIAL_CREDIT_DEPOSIT_AMOUNT.sub(NOTICE_PERIOD_COST));
+        const userUSDCBalanceExpected = userUSDCBalanceBefore.add(INITIAL_DEPOSIT_AMOUNT.sub(INITIAL_CREDIT_DEPOSIT_AMOUNT));
+        expect(await creditToken.balanceOf(await user.getAddress())).to.be.within(userCreditBalanceExpected.sub(JOB_RATE_1), userCreditBalanceExpected.add(JOB_RATE_1));
+        expect(await token.balanceOf(await user.getAddress())).to.be.within(userUSDCBalanceExpected.sub(JOB_RATE_1), userUSDCBalanceExpected.add(JOB_RATE_1));
       });
     });
   });
@@ -1305,67 +2012,6 @@ describe.only("MarketV1", function () {
       await expect(marketv1
         .connect(signers[3]) // neither owner nor provider
         .jobMetadataUpdate(INITIAL_JOB_INDEX, "some updated metadata")).to.be.revertedWith("only job owner");
-    });
-  });
-
-  describe.skip("Complex Scenario Test", function () {
-    const initialDeposit = usdc(50);
-
-    takeSnapshotBeforeAndAfterEveryTest(async () => { });
-
-    beforeEach(async () => {
-      await token.connect(user).approve(marketv1.address, initialDeposit);
-      await marketv1
-        .connect(user)
-        .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-    });
-
-    describe("Scenario1", function () {
-      const JOB_RATE_2 = BN.from(9).e15(); // 9e15
-      const JOB_RATE_3 = BN.from(1).e16(); // 1e16
-      const JOB_RATE_4 = BN.from(12).e15(); // 12e15
-      const JOB_RATE_5 = BN.from(9).e15(); // 9e15
-
-      const initialDeposit = usdc(50);
-      
-      it("[0min] should open a job with 50 USDC and have the correct initial balance", async function () {
-        // user opens job
-        await token.connect(user).approve(marketv1.address, initialDeposit);
-        await marketv1
-          .connect(user)
-          .jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, initialDeposit);
-        
-        const noticePeriodCost = calcNoticePeriodCost(JOB_RATE_1);
-        const initialBalanceExpected = initialDeposit.sub(noticePeriodCost);
-
-        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-        expect(jobInfo.balance).to.equal(initialBalanceExpected); // initialDeposit(50USDC) - noticePeriodCost(3USDC) = 47USDCs
-      });
-
-      it("[4min] should revise rate lower and pay 4min*previousRate", async function () {
-        const FOUR_MINUTES = 60 * 4;
-        const previousRate = JOB_RATE_1;
-        const revisedRate = JOB_RATE_2;
-
-        await time.increaseTo(INITIAL_TIMESTAMP + FOUR_MINUTES);
-        
-        await marketv1
-          .connect(user)
-          .jobReviseRate(INITIAL_JOB_INDEX, revisedRate);
-
-        const jobInfo = await marketv1.jobs(INITIAL_JOB_INDEX);
-        expect(jobInfo.rate).to.equal(revisedRate);
-
-        const amountPaidExpected = calcAmountToPay(previousRate, FOUR_MINUTES);
-        expect(jobInfo.balance).to.equal(initialBalanceExpected.sub(amountPaidExpected));
-
-        const userBalanceExpected = SIGNER1_INITIAL_FUND.sub(initialDeposit);
-        expect(await token.balanceOf(await user.getAddress())).to.be.within(userBalanceExpected.sub(JOB_RATE_1), userBalanceExpected.add(JOB_RATE_1));
-
-        const providerBalanceExpected = noticePeriodCost.add(amountPaidExpected);
-        expect(await token.balanceOf(await provider.getAddress())).to.be.within(providerBalanceExpected.sub(JOB_RATE_1), providerBalanceExpected.add(JOB_RATE_1));
-        
-      })
     });
   });
 });

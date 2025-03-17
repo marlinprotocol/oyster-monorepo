@@ -22,8 +22,6 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ICredit} from "./interfaces/ICredit.sol";
 
-import "hardhat/console.sol";
-
 contract MarketV1 is
     Initializable, // initializer
     ContextUpgradeable, // _msgSender, _msgData
@@ -268,13 +266,11 @@ contract MarketV1 is
         _jobReviseRate(jobId, _rate);
     }
 
-    function _jobSettle(bytes32 _jobId) internal {
-        _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp);
-    }
-
     function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns(bool isBalanceEnough) {
         uint256 lastSettled = jobs[_jobId].lastSettled;
-        require(_settleTill >= lastSettled, "cannot settle before lastSettled");
+
+        if(_settleTill == lastSettled) return true; // when JobOpen
+        require(_settleTill > lastSettled, "cannot settle before lastSettled");
 
         uint256 usageDuration = _settleTill - lastSettled;
         uint256 amountUsed = _calcAmountUsed(_rate, usageDuration);
@@ -383,7 +379,7 @@ contract MarketV1 is
      * @param   _jobId  The job to settle.
      */
     function jobSettle(bytes32 _jobId) external onlyExistingJob(_jobId) {
-        _jobSettle(_jobId);
+        _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp);
     }
 
     /**
@@ -576,8 +572,8 @@ contract MarketV1 is
 
         if(withdrawAmount > 0) {
             require(address(creditToken) != address(0), "credit token not set");
-            creditToken.safeTransfer(_to, withdrawAmount);
             jobCreditBalance[_jobId] -= withdrawAmount;
+            creditToken.safeTransfer(_to, withdrawAmount);
             emit JobWithdrawn(_jobId, address(creditToken), _to, withdrawAmount);
         }
     }
