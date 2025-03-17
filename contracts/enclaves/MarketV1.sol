@@ -75,7 +75,7 @@ contract MarketV1 is
         super._revokeRole(role, account);
 
         // protect against accidentally removing all admins
-        require(getRoleMemberCount(DEFAULT_ADMIN_ROLE) != 0);
+        require(getRoleMemberCount(DEFAULT_ADMIN_ROLE) != 0, "cannot remove all admins");
     }
 
     function _authorizeUpgrade(address /*account*/ ) internal view override onlyAdmin {}
@@ -104,7 +104,7 @@ contract MarketV1 is
 
         _updateToken(_token);
     }
-    
+
     function reinitialize(uint256 _noticePeriod, address _creditToken) public onlyAdmin reinitializer(2) {
         // set the first 8 bytes of the job as a prefix with the chainId
         jobIndex = (bytes32(block.chainid) << 192) | jobIndex;
@@ -113,7 +113,7 @@ contract MarketV1 is
         _updateCreditToken(_creditToken);
     }
 
-    //------------- ------------------- Initializer end --------------------------------//
+    //--------------------------------- Initializer end --------------------------------//
 
     //-------------------------------- Providers start --------------------------------//
 
@@ -175,7 +175,7 @@ contract MarketV1 is
     bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
 
     struct Job {
-        string metadata;
+        string metadata; // TODO: fix to bytes
         address owner;
         address provider;
         uint256 rate;
@@ -202,7 +202,9 @@ contract MarketV1 is
     event JobClosed(bytes32 indexed jobId);
     event JobDeposited(bytes32 indexed jobId, address indexed token, address indexed from, uint256 amount);
     event JobWithdrawn(bytes32 indexed jobId, address indexed token, address indexed to, uint256 amount);
-    event JobSettlementWithdrawn(bytes32 indexed jobId, address indexed token, address indexed provider, uint256 amount);
+    event JobSettlementWithdrawn(
+        bytes32 indexed jobId, address indexed token, address indexed provider, uint256 amount
+    );
     event JobRateRevised(bytes32 indexed jobId, uint256 newRate);
     event JobMetadataUpdated(bytes32 indexed jobId, string metadata);
 
@@ -250,7 +252,9 @@ contract MarketV1 is
         IERC20(_token).safeTransfer(_to, _amount);
     }
 
-    function _jobOpen(string calldata _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance) internal {
+    function _jobOpen(string calldata _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance)
+        internal
+    {
         uint256 _jobIndex = uint256(jobIndex);
         jobIndex = bytes32(_jobIndex + 1);
         bytes32 jobId = bytes32(_jobIndex);
@@ -266,10 +270,10 @@ contract MarketV1 is
         _jobReviseRate(jobId, _rate);
     }
 
-    function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns(bool isBalanceEnough) {
+    function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns (bool isBalanceEnough) {
         uint256 lastSettled = jobs[_jobId].lastSettled;
 
-        if(_settleTill == lastSettled) return true; // when JobOpen
+        if (_settleTill == lastSettled) return true; // when JobOpen
         require(_settleTill > lastSettled, "cannot settle before lastSettled");
 
         uint256 usageDuration = _settleTill - lastSettled;
@@ -278,7 +282,7 @@ contract MarketV1 is
         _settle(_jobId, settleAmount);
         jobs[_jobId].lastSettled = _settleTill;
         emit JobSettled(_jobId, _settleTill);
-        
+
         isBalanceEnough = amountUsed <= settleAmount;
     }
 
@@ -298,20 +302,14 @@ contract MarketV1 is
 
     function _jobDeposit(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
-        require(
-            _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod),
-            "insufficient funds to deposit"
-        );
+        require(_jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod), "insufficient funds to deposit");
 
         _deposit(_jobId, _msgSender(), _amount);
     }
 
     function _jobWithdraw(bytes32 _jobId, uint256 _amount) internal {
         require(_amount > 0, "invalid amount");
-        require(
-            _jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod),
-            "insufficient funds to withdraw"
-        );
+        require(_jobSettle(_jobId, jobs[_jobId].rate, block.timestamp + noticePeriod), "insufficient funds to withdraw");
 
         // withdraw
         _withdraw(_jobId, _msgSender(), _amount);
@@ -337,10 +335,7 @@ contract MarketV1 is
         // deduct shutdown delay cost
         // higher rate is used to calculate shutdown delay cost
         uint256 higherRate = _max(oldRate, _newRate);
-        require(
-            _jobSettle(_jobId, higherRate, block.timestamp + noticePeriod),
-            "insufficient funds to revise rate"
-        );
+        require(_jobSettle(_jobId, higherRate, block.timestamp + noticePeriod), "insufficient funds to revise rate");
     }
 
     function _jobMetadataUpdate(bytes32 _jobId, string calldata _metadata) internal {
@@ -372,7 +367,7 @@ contract MarketV1 is
 
     /**
      * @notice  Settles the job and sends the amount settled to the job's provider.
-     *          If the job has Credit balance, the credit balance will be deducted first. 
+     *          If the job has Credit balance, the credit balance will be deducted first.
      * @dev     Reverts if block.timestamp is before `lastSettled` of given jobId.
      *          If settled with Credit tokens the Credit tokens will be burned and redeemed to USDC when transfering
      *          to the job's provider.
@@ -472,8 +467,7 @@ contract MarketV1 is
 
         if (address(creditToken) != address(0)) {
             // amount to transfer from credit token
-            uint256 creditBalance =
-                _min(creditToken.balanceOf(_from), creditToken.allowance(_from, address(this)));
+            uint256 creditBalance = _min(creditToken.balanceOf(_from), creditToken.allowance(_from, address(this)));
 
             if (creditBalance > 0) {
                 (creditAmount, tokenAmount) = _calculateTokenSplit(_amount, creditBalance);
@@ -517,16 +511,16 @@ contract MarketV1 is
     }
 
     /**
-    * @notice Calculates how much of each token type to use
-    * @param _totalAmount Total amount to process
-    * @param _creditBalance Available credit token amount
-    * @return creditAmount Amount to handle with credit tokens
-    * @return tokenAmount Amount to handle with payment tokens
-    */
-    function _calculateTokenSplit(uint256 _totalAmount, uint256 _creditBalance) 
-        internal 
-        pure 
-        returns (uint256 creditAmount, uint256 tokenAmount) 
+     * @notice  Calculates how much of each token type to use
+     * @param   _totalAmount Total amount to process
+     * @param   _creditBalance Available credit token amount
+     * @return   creditAmount Amount to handle with credit tokens
+     * @return  tokenAmount Amount to handle with payment tokens
+     */
+    function _calculateTokenSplit(uint256 _totalAmount, uint256 _creditBalance)
+        internal
+        pure
+        returns (uint256 creditAmount, uint256 tokenAmount)
     {
         if (_totalAmount > _creditBalance) {
             creditAmount = _creditBalance;
@@ -557,20 +551,20 @@ contract MarketV1 is
         jobs[_jobId].balance -= withdrawAmount;
 
         uint256 tokenAmountToTransfer;
-        if(jobTokenBalance < withdrawAmount) {
+        if (jobTokenBalance < withdrawAmount) {
             tokenAmountToTransfer = jobTokenBalance;
             withdrawAmount -= jobTokenBalance;
         } else {
             tokenAmountToTransfer = withdrawAmount;
             withdrawAmount = 0;
         }
-        
-        if(tokenAmountToTransfer > 0) {
+
+        if (tokenAmountToTransfer > 0) {
             token.safeTransfer(_to, tokenAmountToTransfer);
             emit JobWithdrawn(_jobId, address(token), _to, tokenAmountToTransfer);
         }
 
-        if(withdrawAmount > 0) {
+        if (withdrawAmount > 0) {
             require(address(creditToken) != address(0), "credit token not set");
             jobCreditBalance[_jobId] -= withdrawAmount;
             creditToken.safeTransfer(_to, withdrawAmount);
