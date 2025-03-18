@@ -308,6 +308,8 @@ describe("MarketV1", function () {
   let user: Signer;
   let provider: Signer;
   let user2: Signer;
+  let admin2: Signer;
+
   let INITIAL_JOB_INDEX: string;
   let JOB_OPENED_TIMESTAMP: number;
 
@@ -320,6 +322,8 @@ describe("MarketV1", function () {
     user = signers[1];
     provider = signers[2];
     user2 = signers[3];
+    admin2 = signers[4];
+    
     // Deploy USDC
     const USDC = await ethers.getContractFactory("Pond");
     token = await upgrades.deployProxy(USDC, ["Marlin", "USDC"], {
@@ -2014,6 +2018,74 @@ describe("MarketV1", function () {
         .jobMetadataUpdate(INITIAL_JOB_INDEX, "some updated metadata")).to.be.revertedWith("only job owner");
     });
   });
+
+  describe("Emergency Withdraw", function () {
+    const NUM_TOTAL_JOB = 5;
+    const INITIAL_DEPOSIT_AMOUNT = usdc(50);
+    let TOTAL_DEPOSIT_AMOUNT = BN.from(0);
+    let jobs: string[] = [];
+    let deposits: BN[] = [];
+    
+    beforeEach(async () => {
+      await marketv1.connect(admin).grantRole(await marketv1.EMERGENCY_WITHDRAW_ROLE(), await admin2.getAddress());
+
+      // open 5 jobs
+      for (let i = 0; i < NUM_TOTAL_JOB; i++) {
+        const EXTRA_DEPOSIT_AMOUNT = usdc(i * 10);
+        const DEPOSIT_AMOUNT = INITIAL_DEPOSIT_AMOUNT.add(EXTRA_DEPOSIT_AMOUNT);
+        
+        // list of jobs and deposits
+        jobs.push(await marketv1.jobIndex());
+        deposits.push(DEPOSIT_AMOUNT);
+        // total credit deposit amount
+        TOTAL_DEPOSIT_AMOUNT = TOTAL_DEPOSIT_AMOUNT.add(DEPOSIT_AMOUNT);
+
+        // open job only with credit
+        await creditToken.connect(user).approve(marketv1.address, DEPOSIT_AMOUNT);
+        await marketv1.connect(user).jobOpen("some metadata", await provider.getAddress(), JOB_RATE_1, DEPOSIT_AMOUNT);
+      }
+    });
+
+    it("should revert when withdrawing to address without EMERGENCY_WITHDRAW_ROLE", async () => {
+      await expect(marketv1
+        .connect(admin)
+        .emergencyWithdrawCredit(await user.getAddress(), [INITIAL_JOB_INDEX])).to.be.revertedWith("only to emergency withdraw role");
+    });
+
+    it("should revert when non-admin calls emergencyWithdrawCredit", async () => {
+      await expect(marketv1
+        .connect(user)
+        .emergencyWithdrawCredit(await user.getAddress(), jobs)).to.be.revertedWith("only admin");
+    });
+    
+    it("should settle all jobs and withdraw all credit", async () => {
+      const totalSettledAmountExpected = calcNoticePeriodCost(JOB_RATE_1).mul(NUM_TOTAL_JOB);
+
+      await marketv1.connect(admin).emergencyWithdrawCredit(await admin2.getAddress(), jobs);
+
+      const CURRENT_TIMESTAMP = (await ethers.provider.getBlock('latest')).timestamp;
+      for (let i = 0; i < NUM_TOTAL_JOB; i++) {
+        // fetch job info
+        const jobInfo = await marketv1.jobs(jobs[i]);
+        
+        // should settle all jobs
+        expect(jobInfo.lastSettled).to.equal((CURRENT_TIMESTAMP + NOTICE_PERIOD).toString());
+        
+        // job credit balance should be 0
+        expect(await marketv1.jobCreditBalance(jobs[i])).to.equal(0);
+      }
+
+      // withdrawal recipient
+      const withdrawalAmountExpected = TOTAL_DEPOSIT_AMOUNT.sub(totalSettledAmountExpected);
+      expect(await creditToken.balanceOf(await admin2.getAddress())).to.be.within(withdrawalAmountExpected.sub(JOB_RATE_1), withdrawalAmountExpected.add(JOB_RATE_1));
+
+      // Provider
+      expect(await token.balanceOf(await provider.getAddress())).to.be.within(totalSettledAmountExpected.sub(JOB_RATE_1), totalSettledAmountExpected.add(JOB_RATE_1));
+
+      // MarketV1
+      expect(await creditToken.balanceOf(marketv1.address)).to.equal(0);
+    });
+  })
 });
   
   
