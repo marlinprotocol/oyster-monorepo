@@ -247,9 +247,23 @@ contract MarketV1 is
         _updateCreditToken(_creditToken);
     }
 
-    function emergencyWithdraw(address _token, address _to, uint256 _amount) external onlyAdmin {
-        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _msgSender()), "only to emergency withdraw role");
-        IERC20(_token).safeTransfer(_to, _amount);
+    function _emergencyWithdrawCredit(address _to, bytes32[] calldata _jobIds) internal {
+        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _to), "only to emergency withdraw role");
+
+        uint256 settleTill = block.timestamp + noticePeriod;
+
+        for (uint256 i = 0; i < _jobIds.length; i++) {
+            bytes32 jobId = _jobIds[i];
+            _jobSettle(jobId, jobs[jobId].rate, settleTill);
+            uint256 creditBalance = jobCreditBalance[jobId];
+            if (creditBalance > 0) {
+                _withdraw(jobId, _to, creditBalance);
+            }
+        }
+    }
+
+    function emergencyWithdrawCredit(address _to, bytes32[] calldata _jobIds) external onlyAdmin {
+        _emergencyWithdrawCredit(_to, _jobIds);
     }
 
     function _jobOpen(string calldata _metadata, address _owner, address _provider, uint256 _rate, uint256 _balance)
