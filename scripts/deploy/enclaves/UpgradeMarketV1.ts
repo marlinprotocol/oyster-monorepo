@@ -5,7 +5,15 @@ import { Credit__factory, MarketV1__factory, UUPSUpgradeable__factory } from '..
 import { ContractType, getConfig, verifyContract } from '../../helper/helper';
 import * as fs from 'fs';
 
-// 2024-03-13 Arbitrum Sepolia Upgrade
+async function main() {
+  // await deployMarketV1();
+  // await deployCredit();
+  // await verifyContract("MarketV1", ContractType.Proxy);
+  // await verifyContract("MarketV1", ContractType.Implementation);
+  await deployAndUpgradeMarketV1();
+}
+
+// 2024-03-18 Arbitrum Sepolia Upgrade
 async function deployAndUpgradeMarketV1() {
   const { addresses, path } = await getConfig();
   const signers = await ethers.getSigners();
@@ -20,19 +28,14 @@ async function deployAndUpgradeMarketV1() {
   const upgradeTx = await marketV1Proxy.connect(admin).upgradeTo(newMarketV1Impl.address);
   await upgradeTx.wait();
 
-  const FIVE_MINUTES = 5 * 60;
-  const marketV1 = MarketV1__factory.connect(marketV1Proxy.address, admin);
-  const reinitializeTx = await marketV1.connect(admin).reinitialize(FIVE_MINUTES, addresses.proxy.credit);
-  await reinitializeTx.wait();
+  // const FIVE_MINUTES = 5 * 60;
+  // const marketV1 = MarketV1__factory.connect(marketV1Proxy.address, admin);
+  // const reinitializeTx = await marketV1.connect(admin).reinitialize(FIVE_MINUTES, addresses.proxy.credit);
+  // await reinitializeTx.wait();
+
+  await verifyContract("MarketV1", ContractType.Implementation);
 
   console.log("MarketV1 upgraded to:", newMarketV1Impl.address);
-}
-
-async function main() {
-  // await deployMarketV1();
-  // await deployCredit();
-  // await verifyContract("MarketV1", ContractType.Proxy);
-  await verifyContract("MarketV1", ContractType.Implementation);
 }
 
 // Freshly Deploy MarketV1 
