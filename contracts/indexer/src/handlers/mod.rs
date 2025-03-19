@@ -89,7 +89,7 @@ static INITIALIZED: [u8; 32] = event!("Initialized(uint8)");
     parent = None,
     fields(block = log.block_number, idx = log.log_index, tx = ?log.transaction_hash)
 )]
-pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_log_before_update_block(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let log_type = log

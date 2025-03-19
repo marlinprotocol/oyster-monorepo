@@ -57,7 +57,7 @@ mod tests {
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log;
+    use crate::handlers::handle_log_before_update_block;
     use crate::handlers::test_db::TestDb;
     use crate::schema::{jobs, providers, revise_rate_requests};
 
@@ -224,8 +224,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_before_update_block instead of concrete handler to test dispatch
+        handle_log_before_update_block(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -432,8 +432,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_before_update_block instead of concrete handler to test dispatch
+        handle_log_before_update_block(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -655,8 +655,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_before_update_block instead of concrete handler to test dispatch
+        handle_log_before_update_block(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
