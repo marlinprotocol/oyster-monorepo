@@ -164,7 +164,7 @@ describe("Initialization", function () {
     const creditTokenContract = await upgrades.deployProxy(Credit, [], {
       kind: "uups",
       unsafeAllow: ["missing-initializer-call"],
-      constructorArgs: [marketv1.address, token.address],
+      constructorArgs: [token.address],
       initializer: false
     });
     creditToken = getCredit(creditTokenContract.address, signers[0]);
@@ -287,6 +287,7 @@ describe("Initialization", function () {
 
       await creditToken.connect(admin).grantRole(await creditToken.MINTER_ROLE(), await admin.getAddress());
       await creditToken.connect(admin).grantRole(await creditToken.TRANSFER_ALLOWED_ROLE(), await user.getAddress());
+      await creditToken.connect(admin).grantRole(await creditToken.REDEEMER_ROLE(), marketv1.address);
       await creditToken.connect(admin).mint(await user.getAddress(), usdc(10000));
       expect(await creditToken.hasRole(await creditToken.TRANSFER_ALLOWED_ROLE(), await user.getAddress())).to.be.true;
 
@@ -348,7 +349,7 @@ describe("MarketV1", function () {
     const creditTokenContract = await upgrades.deployProxy(Credit, [], {
       kind: "uups",
       unsafeAllow: ["missing-initializer-call"],
-      constructorArgs: [marketv1.address, token.address],
+      constructorArgs: [token.address],
       initializer: false
     });
     creditToken = getCredit(creditTokenContract.address, signers[0]);
@@ -365,6 +366,7 @@ describe("MarketV1", function () {
     await creditToken.connect(admin).grantRole(await creditToken.MINTER_ROLE(), await admin.getAddress());
     await creditToken.connect(admin).grantRole(await creditToken.TRANSFER_ALLOWED_ROLE(), await admin.getAddress());
     await creditToken.connect(admin).grantRole(await creditToken.TRANSFER_ALLOWED_ROLE(), marketv1.address);
+    await creditToken.connect(admin).grantRole(await creditToken.REDEEMER_ROLE(), marketv1.address);
     await token.connect(admin).transfer(creditToken.address, usdc(1000));
 
     // Fund user with 1000 Credit
@@ -1235,7 +1237,7 @@ describe("MarketV1", function () {
     
         await expect(marketv1
           .connect(user)
-          .jobWithdraw(max_uint256_bytes32, usdc(100))).to.be.revertedWith("job not found");
+          .jobWithdraw(max_uint256_bytes32, usdc(100))).to.be.revertedWith("only job owner");
       });
     
       it("should revert when withdrawing from third party job", async () => {
@@ -1537,7 +1539,7 @@ describe("MarketV1", function () {
     it("should revert when initiating rate revision for non existent job", async () => {
       await expect(marketv1
         .connect(user)
-        .jobReviseRate(ethers.utils.hexZeroPad("0x01", 32), JOB_HIGHER_RATE)).to.be.revertedWith("job not found");
+        .jobReviseRate(ethers.utils.hexZeroPad("0x01", 32), JOB_HIGHER_RATE)).to.be.revertedWith("only job owner");
     });
 
     it("should revert when initiating rate revision for third party job", async () => {
@@ -1845,7 +1847,7 @@ describe("MarketV1", function () {
       it("should revert when closing non existent job", async () => {
         await expect(marketv1
           .connect(user)
-          .jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("job not found");
+          .jobClose(ethers.utils.hexZeroPad("0x01", 32))).to.be.revertedWith("only job owner");
       });
   
       it("should revert when closing third party job", async () => {

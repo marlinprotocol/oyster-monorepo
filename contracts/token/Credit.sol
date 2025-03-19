@@ -37,16 +37,13 @@ contract Credit is
     error OnlyToEmergencyWithdrawRole();
 
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // 0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6
+    bytes32 public constant BURNER_ROLE = keccak256("BURNER_ROLE"); // 0x3c11d16cbaffd01df69ce1c404f6340ee057498f5f00246190ea54220576a848
     bytes32 public constant TRANSFER_ALLOWED_ROLE = keccak256("TRANSFER_ALLOWED_ROLE"); // 0xed89ee80d998965e2804dad373576bf7ffc490ba5986d52deb7d526e93617101
+    bytes32 public constant REDEEMER_ROLE = keccak256("REDEEMER_ROLE"); // 0x44ac9762eec3a11893fefb11d028bb3102560094137c3ed4518712475b2577cc
     bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
 
     modifier onlyAdmin() {
         require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), OnlyAdmin());
-        _;
-    }
-
-    modifier onlyOysterMarket() {
-        require(_msgSender() == i_oysterMarket, OnlyOysterMarket());
         _;
     }
 
@@ -78,18 +75,15 @@ contract Credit is
     //-------------------------------- Overrides end --------------------------------//
 
     /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
-    address immutable i_oysterMarket;
-    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
-    address immutable i_usdc;
+    address immutable USDC;
 
     uint256[500] private __gap1;
 
     //-------------------------------- Initializer start --------------------------------/
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor(address _oysterMarket, address _usdc) {
-        i_oysterMarket = _oysterMarket;
-        i_usdc = _usdc;
+    constructor(address _usdc) {
+        USDC = _usdc;
     }
 
     function initialize(address _admin) public initializer {
@@ -106,11 +100,11 @@ contract Credit is
 
     //-------------------------------- Token Mint/Burn start --------------------------------/
 
-    function mint(address _to, uint256 _amount) external onlyRole(MINTER_ROLE) {
+    function mint(address _to, uint256 _amount) external whenNotPaused onlyRole(MINTER_ROLE) {
         _mint(_to, _amount);
     }
 
-    function burn(address _from, uint256 _amount) external onlyRole(MINTER_ROLE) {
+    function burn(address _from, uint256 _amount) external whenNotPaused onlyRole(BURNER_ROLE) {
         _burn(_from, _amount);
     }
 
@@ -118,10 +112,9 @@ contract Credit is
     
     //-------------------------------- Oyster Market start --------------------------------//
 
-    function redeemAndBurn(address _to, uint256 _amount) external whenNotPaused onlyOysterMarket {
-        require(IERC20(i_usdc).balanceOf(address(this)) >= _amount, NotEnoughUSDC());
-        IERC20(i_usdc).safeTransfer(_to, _amount);
-        _burn(_msgSender(), _amount); // TODO: move above
+    function redeemAndBurn(address _to, uint256 _amount) external whenNotPaused onlyRole(REDEEMER_ROLE) {
+        IERC20(USDC).safeTransfer(_to, _amount);
+        _burn(_msgSender(), _amount);
     }
 
     //-------------------------------- Oyster Market end --------------------------------//
@@ -129,7 +122,7 @@ contract Credit is
     //-------------------------------- Emergency Withdraw start --------------------------------//
 
     function emergencyWithdraw(address _token, address _to, uint256 _amount) external onlyAdmin {
-        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _msgSender()), OnlyToEmergencyWithdrawRole());
+        require(hasRole(EMERGENCY_WITHDRAW_ROLE, _to), OnlyToEmergencyWithdrawRole());
         IERC20(_token).safeTransfer(_to, _amount);
     }
 

@@ -175,7 +175,7 @@ contract MarketV1 is
     bytes32 public constant EMERGENCY_WITHDRAW_ROLE = keccak256("EMERGENCY_WITHDRAW_ROLE"); // 0x66f144ecd65ad16d38ecdba8687842af4bc05fde66fe3d999569a3006349785f
 
     struct Job {
-        string metadata; // TODO: fix to bytes
+        string metadata;
         address owner;
         address provider;
         uint256 rate;
@@ -287,7 +287,7 @@ contract MarketV1 is
     function _jobSettle(bytes32 _jobId, uint256 _rate, uint256 _settleTill) internal returns (bool isBalanceEnough) {
         uint256 lastSettled = jobs[_jobId].lastSettled;
 
-        if (_settleTill == lastSettled) return true; // when JobOpen
+        if (_settleTill == lastSettled) return true;
         require(_settleTill > lastSettled, "cannot settle before lastSettled");
 
         uint256 usageDuration = _settleTill - lastSettled;
@@ -397,7 +397,7 @@ contract MarketV1 is
      * @dev     Settles the job before closing it.
      * @param   _jobId  The job to close.
      */
-    function jobClose(bytes32 _jobId) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+    function jobClose(bytes32 _jobId) external onlyJobOwner(_jobId) {
         _jobClose(_jobId);
     }
 
@@ -419,7 +419,7 @@ contract MarketV1 is
      * @param   _jobId  The job to withdraw from.
      * @param   _amount  The amount to withdraw.
      */
-    function jobWithdraw(bytes32 _jobId, uint256 _amount) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+    function jobWithdraw(bytes32 _jobId, uint256 _amount) external onlyJobOwner(_jobId) {
         _jobWithdraw(_jobId, _amount);
     }
 
@@ -430,7 +430,7 @@ contract MarketV1 is
      * @param   _jobId  The job to revise the rate of.
      * @param   _newRate  The new rate of the job.
      */
-    function jobReviseRate(bytes32 _jobId, uint256 _newRate) external onlyExistingJob(_jobId) onlyJobOwner(_jobId) {
+    function jobReviseRate(bytes32 _jobId, uint256 _newRate) external onlyJobOwner(_jobId) {
         _jobReviseRate(_jobId, _newRate);
     }
 
@@ -442,7 +442,6 @@ contract MarketV1 is
      */
     function jobMetadataUpdate(bytes32 _jobId, string calldata _metadata)
         external
-        onlyExistingJob(_jobId)
         onlyJobOwner(_jobId)
     {
         _jobMetadataUpdate(_jobId, _metadata);
