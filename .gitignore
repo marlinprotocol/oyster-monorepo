@@ -18,3 +18,9 @@ coverage.json
 .gitsigners
 typechain-types/*
 *.log
+.vscode
+
+# Local Network
+addresses/31337.json
+
+.openzeppelin

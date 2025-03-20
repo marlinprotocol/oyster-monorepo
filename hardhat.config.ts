@@ -5,6 +5,9 @@ import '@openzeppelin/hardhat-upgrades';
 import 'solidity-coverage';
 import "hardhat-gas-reporter";
 import "@nomicfoundation/hardhat-chai-matchers";
+import "hardhat-tracer";
+// import * as tdly from "@tenderly/hardhat-tenderly";
+// tdly.setup();
 
 import dotenv from 'dotenv';
 
@@ -46,13 +49,28 @@ export default {
     },
   },
   solidity: {
-    version: "0.8.17",
-    settings: {
-      // viaIR: true,
-      optimizer: {
-        enabled: true,
-        runs: 10000,
+    compilers: [
+      {
+        version: "0.8.17",
+        settings: {
+          // viaIR: true,
+          optimizer: {
+            enabled: true,
+            runs: 10000,
+          },
+        }
       },
+      {
+        version: "0.8.26",
+        settings: {
+          viaIR: true,
+          optimizer: {
+            enabled: true,
+            runs: 10000,
+          },
+        }
+      }
+    ],
       // tried to use SMTChecker, gets killed, investigate later
       // modelChecker: {
       //   engine: "all",
@@ -67,7 +85,6 @@ export default {
       //     "balance",
       //   ],
       // },
-    },
   },
   etherscan: {
     apiKey: {
