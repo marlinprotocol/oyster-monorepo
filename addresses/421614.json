@@ -1,11 +1,11 @@
 {
     "proxy": {
         "usdc": "0x2e6566bBcE6F3400427849A26e273847f1D7Ed2C",
-        "marketV1": "0x01257EB1d6EBfDdf85ABB463d0bafD219D32ede3",
+        "marketV1": "0xDcD2846DCA523Db1C8F3c842a41A58099dE26A0A",
         "credit": "0x1343d88885eE888CEe79FEb3DfD0C5fC8fd65Af1"
     },
     "implementation": {
-        "marketV1": "0x02027F0384bcC280ABfAd0F39f3201b382A816ad",
-        "credit": "0x8bbcD338446415a0d49AFe1768B9271D09150872"
+        "marketV1": "0x573B6a07d1Eb414B9CED0707DEca19b07798D105",
+        "credit": "0x587A50Fd13161503384A2a431b838868Db0b3b39"
     }
 }
