@@ -12,10 +12,13 @@ use job_opened::handle_job_opened;
 mod job_deposited;
 use job_deposited::handle_job_deposited;
 
+mod job_rate_revised;
+use job_rate_revised::handle_job_rate_revised;
+
 // job logs
 static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address)");
 static JOB_DEPOSITED: [u8; 32] = event!("JobDeposited(bytes32,address,address,uint256)");
-
+static JOB_RATE_REVISED: [u8; 32] = event!("JobRateRevised(bytes32,uint256)");
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
 static LOCK_WAIT_TIME_UPDATED: [u8; 32] = event!("LockWaitTimeUpdated(bytes32,uint256,uint256)");
@@ -40,6 +43,8 @@ pub fn handle_log_v2(conn: &mut PgConnection, log: Log) -> Result<()> {
         handle_job_opened(conn, log)
     } else if log_type == JOB_DEPOSITED {
         handle_job_deposited(conn, log)
+    } else if log_type == JOB_RATE_REVISED {
+        handle_job_rate_revised(conn, log)
     } else if log_type == UPGRADED
         || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
