@@ -1,0 +1,20 @@
+[package]
+name = "oyster-attestation-server-mock"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+axum = "0.7.4"
+clap = { version = "4.0.18", features = ["derive"] }
+hex = "0.4.3"
+p384 = { version = "0.13.0", features = ["ecdsa-core"] }
+sec1 = "0.7.3"
+sha2 = "0.10.8"
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1
