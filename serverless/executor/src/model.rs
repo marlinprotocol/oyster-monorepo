@@ -63,6 +63,7 @@ pub struct AppState {
     pub enclave_owner: Arc<Mutex<H160>>,
     pub http_rpc_client: Arc<Mutex<Option<HttpSignerProvider>>>,
     pub jobs_contract_abi: Abi,
+    pub code_contract_abi: Abi,
     pub job_requests_running: Arc<Mutex<HashSet<U256>>>,
     pub last_block_seen: Arc<AtomicU64>,
     pub nonce_to_send: Arc<Mutex<U256>>,

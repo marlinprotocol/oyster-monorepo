@@ -1,8 +1,27 @@
-use crate::configs::global::OYSTER_MARKET_ADDRESS;
 use crate::utils::provider::create_provider;
+use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::sol;
 use anyhow::{Context, Result};
+use clap::Args;
 use tracing::info;
+
+#[derive(Args)]
+pub struct UpdateArgs {
+    /// Job ID
+    #[arg(short, long)]
+    job_id: String,
+
+    #[command(flatten)]
+    wallet: WalletArgs,
+
+    /// New URL of the enclave image
+    #[arg(short, long)]
+    image_url: Option<String>,
+
+    /// New debug mode
+    #[arg(short, long)]
+    debug: Option<bool>,
+}
 
 sol!(
     #[allow(missing_docs)]
@@ -11,12 +30,12 @@ sol!(
     "src/abis/oyster_market_abi.json"
 );
 
-pub async fn update_job(
-    job_id: &str,
-    wallet_private_key: &str,
-    image_url: Option<&str>,
-    debug: Option<bool>,
-) -> Result<()> {
+pub async fn update_job(args: UpdateArgs) -> Result<()> {
+    let wallet_private_key = &args.wallet.load_required()?;
+    let job_id = args.job_id;
+    let debug = args.debug;
+    let image_url = args.image_url;
+
     let provider = create_provider(wallet_private_key)
         .await
         .context("Failed to create provider")?;

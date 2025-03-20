@@ -3,7 +3,10 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use fetch::fetch_seed;
 use scallop::{AuthStore, Auther};
-use tokio::{fs::read, net::TcpListener};
+use tokio::{
+    fs::{read, read_to_string},
+    net::TcpListener,
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -15,8 +18,12 @@ mod scallop;
 #[command(version, about, long_about = None)]
 struct Args {
     /// KMS endpoint
-    #[arg(long)]
-    kms_endpoint: String,
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    kms_endpoint: Option<String>,
 
     /// Listening address
     #[arg(long, default_value = "127.0.0.1:1100")]
@@ -31,20 +38,44 @@ struct Args {
     secret_path: String,
 
     /// PCR0 of the root server
-    #[arg(long)]
-    pcr0: String,
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    pcr0: Option<String>,
 
     /// PCR1 of the root server
-    #[arg(long)]
-    pcr1: String,
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    pcr1: Option<String>,
 
     /// PCR2 of the root server
-    #[arg(long)]
-    pcr2: String,
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    pcr2: Option<String>,
 
     /// user data of the root server
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    user_data: Option<String>,
+
+    /// file containing enclave verification contract address in hexadecimal
     #[arg(long)]
-    user_data: String,
+    contract_address_file: Option<String>,
+
+    /// JSON config file containing the root server's details
+    #[arg(long, required_unless_present_all = ["kms_endpoint", "pcr0", "pcr1", "pcr2", "user_data"])]
+    root_server_config: Option<String>,
 }
 
 #[derive(Clone)]
@@ -68,27 +99,80 @@ async fn main() -> Result<()> {
         url: args.attestation_endpoint,
     };
 
-    let pcr0: [u8; 48] = hex::decode(args.pcr0)
-        .context("failed to decode pcr0")?
-        .try_into()
-        .map_err(|_| anyhow!("incorrect pcr0 size"))?;
-    let pcr1: [u8; 48] = hex::decode(args.pcr1)
-        .context("failed to decode pcr1")?
-        .try_into()
-        .map_err(|_| anyhow!("incorrect pcr1 size"))?;
-    let pcr2: [u8; 48] = hex::decode(args.pcr2)
-        .context("failed to decode pcr2")?
-        .try_into()
-        .map_err(|_| anyhow!("incorrect pcr2 size"))?;
-    let user_data = hex::decode(args.user_data)
+    let pcr0: [u8; 48];
+    let pcr1: [u8; 48];
+    let pcr2: [u8; 48];
+    let user_data: Box<[u8]>;
+    let kms_endpoint: String;
+
+    if let Some(filename) = args.root_server_config {
+        let config_content = read_to_string(filename)
+            .await
+            .context("failed to read root server config file")?;
+        let config: serde_json::Value = serde_json::from_str(&config_content)
+            .context("failed to parse root server config file")?;
+
+        kms_endpoint = config["kms_endpoint"]
+            .as_str()
+            .context("missing kms_endpoint in config")?
+            .to_string();
+        pcr0 = hex::decode(config["pcr0"].as_str().context("missing pcr0 in config")?)
+            .context("failed to decode pcr0")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr0 size"))?;
+        pcr1 = hex::decode(config["pcr1"].as_str().context("missing pcr1 in config")?)
+            .context("failed to decode pcr1")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr1 size"))?;
+        pcr2 = hex::decode(config["pcr2"].as_str().context("missing pcr2 in config")?)
+            .context("failed to decode pcr2")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr2 size"))?;
+        user_data = hex::decode(
+            config["user_data"]
+                .as_str()
+                .context("missing user_data in config")?,
+        )
         .context("failed to decode user data")?
         .into_boxed_slice();
+    } else {
+        kms_endpoint = args.kms_endpoint.unwrap();
+        pcr0 = hex::decode(args.pcr0.unwrap())
+            .context("failed to decode pcr0")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr0 size"))?;
+        pcr1 = hex::decode(args.pcr1.unwrap())
+            .context("failed to decode pcr1")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr1 size"))?;
+        pcr2 = hex::decode(args.pcr2.unwrap())
+            .context("failed to decode pcr2")?
+            .try_into()
+            .map_err(|_| anyhow!("incorrect pcr2 size"))?;
+        user_data = hex::decode(args.user_data.unwrap())
+            .context("failed to decode user data")?
+            .into_boxed_slice();
+    }
 
     let auth_store = AuthStore {
         state: ([pcr0, pcr1, pcr2], user_data),
     };
 
-    let seed = fetch_seed(auther, auth_store, secret, args.kms_endpoint)
+    let contract_address = if let Some(contract_address_file) = args.contract_address_file {
+        let address = read(contract_address_file)
+            .await
+            .context("failed to read contract address file")?;
+        Some(
+            String::from_utf8(address)
+                .context("failed to parse contract address")?
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let seed = fetch_seed(auther, auth_store, secret, kms_endpoint, contract_address)
         .await
         .context("failed to fetch seed")?;
 

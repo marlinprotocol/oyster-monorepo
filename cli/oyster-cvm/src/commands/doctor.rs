@@ -1,9 +1,26 @@
 use crate::types::Dependency;
 use anyhow::Result;
+use clap::Args;
 use std::process::Command;
 use tracing::{error, info};
 
-pub fn run_doctor(docker: bool, nix: bool) -> Result<()> {
+#[derive(Args)]
+pub struct DoctorArgs {
+    /// Perform Docker checks
+    #[arg(short, long)]
+    docker: bool,
+    /// Perform Nix checks
+    #[arg(short, long)]
+    nix: bool,
+}
+
+pub fn run_doctor(args: DoctorArgs) -> Result<()> {
+    // enable all if nothing is enabled
+    let all = !args.docker && !args.nix;
+
+    let docker = args.docker || all;
+    let nix = args.nix || all;
+
     let mut has_error = false;
     let mut error_msg = String::new();
 

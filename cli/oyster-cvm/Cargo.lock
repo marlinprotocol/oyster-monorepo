@@ -2914,6 +2914,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
+ "lazy_static",
  "libsodium-sys-stable",
  "openssl",
  "oyster-sdk",

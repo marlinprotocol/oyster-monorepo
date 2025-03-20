@@ -1,7 +1,8 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    commands::log::stream_logs,
+    commands::log::{stream_logs, LogArgs},
     configs::global::OYSTER_MARKET_ADDRESS,
+    types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
         provider::create_provider,
@@ -49,16 +50,13 @@ sol!(
 
 #[derive(Args, Debug)]
 pub struct DeployArgs {
-    /// URL of the enclave image
-    #[arg(
-        long,
-        default_value = "https://artifacts.marlin.org/oyster/eifs/base-blue_v1.0.0_linux_arm64.eif"
-    )]
-    image_url: String,
+    /// Preset for parameters (e.g. blue)
+    #[arg(long, default_value = "blue")]
+    preset: String,
 
-    /// Region for deployment
-    #[arg(long, default_value = "ap-south-1")]
-    region: String,
+    /// Platform architecture (e.g. amd64, arm64)
+    #[arg(long, default_value = "arm64")]
+    arch: Platform,
 
     #[command(flatten)]
     wallet: WalletArgs,
@@ -67,9 +65,17 @@ pub struct DeployArgs {
     #[arg(long, default_value = "0xe10fa12f580e660ecd593ea4119cebc90509d642")]
     operator: String,
 
+    /// URL of the enclave image
+    #[arg(long)]
+    image_url: Option<String>,
+
+    /// Region for deployment
+    #[arg(long, default_value = "ap-south-1")]
+    region: String,
+
     /// Instance type (e.g. "r6g.large")
-    #[arg(long, default_value = "r6g.large")]
-    instance_type: String,
+    #[arg(long)]
+    instance_type: Option<String>,
 
     /// Optional bandwidth in KBps (default: 10)
     #[arg(long, default_value = "10")]
@@ -120,8 +126,7 @@ struct InstanceRate {
 pub async fn deploy(args: DeployArgs) -> Result<()> {
     tracing::info!("Starting deployment...");
 
-    let provider =
-        create_provider(&args.wallet.load()?.ok_or(anyhow!("Wallet is required"))?).await?;
+    let provider = create_provider(&args.wallet.load_required()?).await?;
 
     // Get CP URL using the configured provider
     let cp_url = get_operator_cp(&args.operator, provider.clone())
@@ -147,9 +152,20 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         ));
     }
 
+    let instance_type =
+        args.instance_type
+            .map(Result::Ok)
+            .unwrap_or(match args.preset.as_str() {
+                "blue" => match args.arch {
+                    Platform::AMD64 => Ok("c6a.xlarge".into()),
+                    Platform::ARM64 => Ok("c6g.large".into()),
+                },
+                _ => Err(anyhow!("Instance type is required")),
+            })?;
+
     // Fetch operator min rates with early validation
     let selected_instance =
-        find_minimum_rate_instance(&operator_spec, &args.region, &args.instance_type)
+        find_minimum_rate_instance(&operator_spec, &args.region, &instance_type)
             .context("Configuration not supported by operator")?;
 
     // Calculate costs
@@ -169,18 +185,35 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         (total_rate.to::<u128>() * 3600) as f64 / 1e18
     );
 
+    let image_url = args
+        .image_url
+        .map(Result::Ok)
+        .unwrap_or(match args.preset.as_str() {
+            "blue" => match args.arch {
+                Platform::AMD64 => Ok(
+                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v1.0.0_linux_amd64.eif"
+                        .into(),
+                ),
+                Platform::ARM64 => Ok(
+                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v1.0.0_linux_arm64.eif"
+                        .into(),
+                ),
+            },
+            _ => Err(anyhow!("Image URL is required")),
+        })?;
+
     // Create metadata
     let metadata = create_metadata(
         &selected_instance.instance,
         &args.region,
         selected_instance.memory,
         selected_instance.cpu,
-        &args.image_url,
+        &image_url,
         &args.job_name,
         args.debug,
         &args
             .init_params
-            .load()
+            .load(args.preset, args.arch, args.debug)
             .context("Failed to load init params")?
             .unwrap_or("".into()),
     );
@@ -213,7 +246,13 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     if args.debug && !args.no_stream {
         info!("Debug mode enabled - starting log streaming...");
-        stream_logs(&ip_address, Some("0"), true, false).await?;
+        stream_logs(LogArgs {
+            ip: ip_address,
+            start_from: Some("0".into()),
+            with_log_id: true,
+            quiet: false,
+        })
+        .await?;
     }
 
     Ok(())
@@ -294,8 +333,38 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
             attempt, IP_CHECK_RETRIES
         );
 
-        let response = client.get(&ip_url).send().await?;
-        let json: serde_json::Value = response.json().await?;
+        let resp = client.get(&ip_url).send().await;
+        let Ok(response) = resp else {
+            tracing::error!("Failed to connect to IP endpoint: {}", resp.unwrap_err());
+            tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
+            continue;
+        };
+
+        // Get the status code
+        let status = response.status();
+
+        // Get text response first to log in case of error
+        let text = response.text().await;
+        let Ok(text_body) = text else {
+            tracing::error!("Failed to read response body: {}", text.unwrap_err());
+            tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
+            continue;
+        };
+
+        // Parse the JSON
+        let json_result = serde_json::from_str::<serde_json::Value>(&text_body);
+        let Ok(json) = json_result else {
+            let err = json_result.unwrap_err();
+            tracing::error!(
+                "Failed to parse IP endpoint response (status: {}): {}. Raw response: {}",
+                status,
+                err,
+                text_body
+            );
+            tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
+            continue;
+        };
+
         last_response = json.to_string();
 
         info!("Response from IP endpoint: {}", last_response);

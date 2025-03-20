@@ -1,6 +1,7 @@
 use crate::configs::global::INDEXER_URL;
 use anyhow::{Context, Result};
 use chrono::DateTime;
+use clap::Args;
 use prettytable::{row, Table};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -8,6 +9,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 const BUFFER_TIME_HOURS: f64 = 5.0 / 60.0; // 5 minutes in hours
+
+#[derive(Args)]
+pub struct ListArgs {
+    /// Wallet address to query jobs for
+    #[arg(short, long, required = true)]
+    address: String,
+
+    /// Number of most recent jobs to display (optional)
+    #[arg(short, long)]
+    count: Option<u32>,
+}
 
 #[derive(Debug)]
 struct JobData {
@@ -18,7 +30,10 @@ struct JobData {
     provider: String,
 }
 
-pub async fn list_jobs(wallet_address: &str, count: Option<u32>) -> Result<()> {
+pub async fn list_jobs(args: ListArgs) -> Result<()> {
+    let wallet_address = args.address;
+    let count = args.count;
+
     info!("Listing active jobs for wallet address: {}", wallet_address);
 
     let client = Client::new();

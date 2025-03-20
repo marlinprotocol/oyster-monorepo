@@ -7,7 +7,7 @@
     "web_socket_url": "wss://arb-sepolia.g.alchemy.com/v2/",
     "tee_manager_contract_addr": "0xE35E287DBC371561E198bFaCBdbEc9cF78bDe930",
     "jobs_contract_addr": "0xd3b682f6F58323EC77dEaE730733C6A83a1561Fd",
-    "code_contract_addr": "0x44fe06d2940b8782a0a9a9ffd09c65852c0156b1",
+    "code_contract_addr": "0x74b7a582a19c10b12C628F6B8311ffA738820Cf7",
     "enclave_signer_file": "./id.sec",
     "execution_buffer_time": 20,
     "num_selected_executors": 3

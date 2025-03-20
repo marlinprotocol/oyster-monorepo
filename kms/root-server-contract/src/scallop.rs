@@ -12,7 +12,7 @@ use oyster::{
 #[derive(Clone, Default)]
 pub struct AuthStore {}
 
-pub type AuthStoreState = Key;
+pub type AuthStoreState = ([[u8; 48]; 3], Box<[u8]>);
 
 impl ScallopAuthStore for AuthStore {
     type State = AuthStoreState;
@@ -44,7 +44,7 @@ impl ScallopAuthStore for AuthStore {
             return None;
         }
 
-        return Some(key);
+        return Some((decoded.pcrs, decoded.user_data));
     }
 }
 

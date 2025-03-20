@@ -18,3 +18,6 @@ pub const EXECUTOR_DEREGISTERED_EVENT: &str = "TeeNodeDeregistered(address)";
 pub const JOB_CREATED_EVENT: &str =
     "JobCreated(uint256,uint8,address,uint256,bytes32,bytes,uint256,address[])";
 pub const JOB_RESPONDED_EVENT: &str = "JobResponded(uint256,address,bytes,uint256,uint8,uint8)";
+
+// Code contract 'saveCodeInCalldata' function selector
+pub const SAVE_CODE_FUNCTION_SELECTOR: &str = "0x1ae53fea";

@@ -2,6 +2,7 @@ use std::process::Child;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use ethers::abi::Abi;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -14,6 +15,7 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::cgroups::Cgroups;
+use crate::constant::SAVE_CODE_FUNCTION_SELECTOR;
 
 // Define errors that might arise during a job execution
 #[derive(Error, Debug)]
@@ -28,8 +30,6 @@ pub enum ServerlessError {
     InvalidTxToValue(String, String),
     #[error("calldata field of transaction data is not a string")]
     InvalidTxCalldataType,
-    #[error("calldata string is shorter than 138 characters")]
-    InvalidTxCalldataLength,
     #[error("calldata doesn't belong to the expected method")]
     InvalidTxCalldata,
     #[error("calldata field is not a valid hex string")]
@@ -56,6 +56,7 @@ pub async fn create_code_file(
     workerd_runtime_path: &str,
     rpc: &str,
     contract: &str,
+    code_contract_abi: &Abi,
 ) -> Result<(), ServerlessError> {
     // Get code transaction data from its hash
     let mut tx_data = match Retry::spawn(
@@ -84,28 +85,36 @@ pub async fn create_code_file(
         ));
     }
 
-    // Get the calldata of the transaction as string
-    let calldata = match tx_data["input"].take() {
-        Value::String(calldata) => Ok(calldata),
+    // Get the transaction data as hexadecimal string starting with '0x'
+    let input = match tx_data["input"].take() {
+        Value::String(input) => Ok(input),
         _ => Err(ServerlessError::InvalidTxCalldataType),
     }?;
 
-    if calldata.len() < 138 {
-        return Err(ServerlessError::InvalidTxCalldataLength);
-    }
-
-    if !calldata
-        .starts_with("0xff7cdaf30000000000000000000000000000000000000000000000000000000000000020")
-    {
+    // Ensure the function selector is correct
+    if !input.starts_with(SAVE_CODE_FUNCTION_SELECTOR) {
         return Err(ServerlessError::InvalidTxCalldata);
     }
+    let input_bytes = hex::decode(&input[2..])?;
 
-    // Hex decode the calldata by skipping to the code bytes
-    let mut calldata = hex::decode(&calldata[138..])?;
+    // Get the Function object corresponding to function saveCodeInCallData(string calldata inputData, bytes calldata metadata)
+    let save_code_function = code_contract_abi.function("saveCodeInCallData").unwrap();
+
+    // Now decode the data
+    let Ok(tokens) = save_code_function.decode_input(&input_bytes[4..]) else {
+        return Err(ServerlessError::InvalidTxCalldata);
+    };
+
+    // Extract inputData token
+    let Some(code_str) = tokens[0].clone().into_string() else {
+        return Err(ServerlessError::InvalidTxCalldata);
+    };
+
+    let mut code_bytes = code_str.into_bytes();
 
     // Strip trailing zeros in the calldata
-    let idx = calldata.iter().rev().position(|x| *x != 0).unwrap_or(0);
-    calldata.truncate(calldata.len() - idx);
+    let idx = code_bytes.iter().rev().position(|x| *x != 0).unwrap_or(0);
+    code_bytes.truncate(code_bytes.len() - idx);
 
     // Write calldata to the desired file location
     Retry::spawn(
@@ -113,7 +122,7 @@ pub async fn create_code_file(
         || async {
             create_and_populate_file(
                 workerd_runtime_path.to_owned() + "/" + tx_hash + "-" + slug + ".js",
-                calldata.as_slice(),
+                code_bytes.as_slice(),
             )
             .await
         },

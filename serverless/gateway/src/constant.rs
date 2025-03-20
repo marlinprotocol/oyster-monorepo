@@ -25,7 +25,7 @@ pub const COMMON_CHAIN_GATEWAY_CHAIN_REMOVED_EVENT: &str = "ChainRemoved(address
 pub const REQUEST_CHAIN_GATEWAY_REGISTERED_EVENT: &str = "GatewayRegistered(address,address)";
 
 pub const REQUEST_CHAIN_JOB_RELAYED_EVENT: &str =
-    "JobRelayed(uint256,uint8,bytes32,bytes,uint256,uint256,uint256,uint256,address,address,uint256,uint256)";
+    "JobRelayed(uint256,uint8,bytes32,bytes,uint256,uint256,uint256,uint256,address,address,uint256,uint256,address)";
 pub const REQUEST_CHAIN_JOB_CANCELLED_EVENT: &str = "JobCancelled(uint256)";
 pub const REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT: &str =
     "JobSubscriptionStarted(uint256,uint8,address,uint256,uint256,uint256,uint256,address,bytes32,bytes,uint256)";

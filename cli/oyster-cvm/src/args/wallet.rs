@@ -1,6 +1,6 @@
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 
 #[derive(Args, Debug)]
@@ -28,5 +28,11 @@ impl WalletArgs {
         }
 
         Ok(None)
+    }
+
+    pub fn load_required(&self) -> Result<String> {
+        self.load().transpose().ok_or(anyhow!(
+            "Wallet parameter is required, specify one of wallet-private-key or wallet-file."
+        ))?
     }
 }

@@ -1,3 +1,4 @@
+use crate::args::wallet::WalletArgs;
 use crate::configs::global::{MIN_WITHDRAW_AMOUNT, OYSTER_MARKET_ADDRESS};
 use crate::utils::{provider::create_provider, usdc::format_usdc};
 use alloy::{
@@ -6,8 +7,27 @@ use alloy::{
     sol,
 };
 use anyhow::{anyhow, Context, Result};
+use clap::Args;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
+
+#[derive(Args)]
+pub struct WithdrawArgs {
+    /// Job ID
+    #[arg(short, long, required = true)]
+    job_id: String,
+
+    /// Amount to withdraw in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
+    #[arg(short, long, required_unless_present = "max")]
+    amount: Option<u64>,
+
+    /// Withdraw all remaining balance
+    #[arg(long, conflicts_with = "amount")]
+    max: bool,
+
+    #[command(flatten)]
+    wallet: WalletArgs,
+}
 
 // Withdrawal Settings
 const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
@@ -69,12 +89,12 @@ fn calculate_current_balance(balance: U256, rate: U256, last_settled: U256) -> R
     })
 }
 
-pub async fn withdraw_from_job(
-    job_id: &str,
-    amount: Option<u64>,
-    max: bool,
-    wallet_private_key: &str,
-) -> Result<()> {
+pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
+    let job_id = args.job_id;
+    let wallet_private_key = &args.wallet.load_required()?;
+    let max = args.max;
+    let amount = args.amount;
+
     info!("Starting withdrawal process...");
 
     // Setup provider

@@ -131,6 +131,7 @@ async fn execute_job(
         &app_state.workerd_runtime_path,
         &app_state.http_rpc_url,
         &app_state.code_contract_addr,
+        &app_state.code_contract_abi,
     )
     .await
     {
@@ -141,10 +142,7 @@ async fn execute_job(
                 total_time: execution_timer_start.elapsed().as_millis().into(),
                 ..Default::default()
             }),
-            InvalidTxCalldata
-            | InvalidTxCalldataType
-            | InvalidTxCalldataLength
-            | BadCalldata(_) => Some(JobOutput {
+            InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => Some(JobOutput {
                 output: Bytes::new(),
                 error_code: 2,
                 total_time: execution_timer_start.elapsed().as_millis().into(),

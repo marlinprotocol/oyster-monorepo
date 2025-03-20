@@ -30,7 +30,7 @@ pub mod serverless_executor_test {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use rand::rngs::OsRng;
     use serde::{Deserialize, Serialize};
-    use serde_json::{json, Value};
+    use serde_json::{from_str, json, Value};
     use tempfile::Builder;
     use tokio::runtime::Handle;
     use tokio::sync::mpsc::channel;
@@ -48,7 +48,6 @@ pub mod serverless_executor_test {
         export_signed_registration_message, get_tee_details, index, inject_immutable_config,
         inject_mutable_config,
     };
-    use crate::utils::load_abi_from_file;
 
     // Testnet or Local blockchain (Hardhat) configurations
     const CHAIN_ID: u64 = 421614;
@@ -56,7 +55,7 @@ pub mod serverless_executor_test {
     const WS_URL: &str = "wss://arb-sepolia.g.alchemy.com/v2/";
     const TEE_MANAGER_CONTRACT_ADDR: &str = "0xFbc9cB063848Db801B382A1Da13E5A213dD378c0";
     const JOBS_CONTRACT_ADDR: &str = "0xb01AB6c250654978be77CD1098E5e760eC207b4F";
-    const CODE_CONTRACT_ADDR: &str = "0x44fe06d2940b8782a0a9a9ffd09c65852c0156b1";
+    const CODE_CONTRACT_ADDR: &str = "0x74b7a582a19c10b12C628F6B8311ffA738820Cf7";
 
     // Generate test app state
     async fn generate_app_state(code_contract_uppercase: bool) -> AppState {
@@ -93,7 +92,8 @@ pub mod serverless_executor_test {
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
             last_block_seen: Arc::new(AtomicU64::new(0)),
             nonce_to_send: Arc::new(Mutex::new(U256::from(0))),
-            jobs_contract_abi: load_abi_from_file().unwrap(),
+            jobs_contract_abi: from_str(include_str!("../Jobs.json")).unwrap(),
+            code_contract_abi: from_str(include_str!("../CodeContract.json")).unwrap(),
         }
     }
 
@@ -769,7 +769,7 @@ pub mod serverless_executor_test {
     async fn valid_job_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
+        let code_hash = "3077c6b1e9b8e04d4407d17c45a51129edde59d3b7b8ac4f838a4c326aac040f";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -878,7 +878,7 @@ pub mod serverless_executor_test {
     async fn valid_job_test_with_uppercase_code_contract() {
         let app_state = generate_app_state(true).await;
 
-        let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
+        let code_hash = "3077c6b1e9b8e04d4407d17c45a51129edde59d3b7b8ac4f838a4c326aac040f";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -938,7 +938,7 @@ pub mod serverless_executor_test {
     async fn invalid_input_job_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
+        let code_hash = "3077c6b1e9b8e04d4407d17c45a51129edde59d3b7b8ac4f838a4c326aac040f";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1082,7 +1082,7 @@ pub mod serverless_executor_test {
     async fn invalid_code_calldata_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "d23370ce64d1679fb53497b882347e25a026ba0bc54536340243ae7464d5d12d";
+        let code_hash = "8ed6dfbb74b6fa0b8f604cd2f43f1c9bc29a50a701b0f0acddefccbdeccb9e18";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1140,7 +1140,7 @@ pub mod serverless_executor_test {
     async fn invalid_code_job_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "96179f60fd7917c04ad9da6dd64690a1a960f39b50029d07919bf2628f5e7fe5";
+        let code_hash = "8bd66f460411263ecb0ccbe902623f5879852cdb9e3a82cc6964dd270628dc91";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1198,7 +1198,7 @@ pub mod serverless_executor_test {
     async fn deadline_timeout_job_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let code_hash = "6e854bafce4b94c2f9e29e64c3bad6cfdaba2b553bde47a074fc784ceed6004e";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1256,7 +1256,7 @@ pub mod serverless_executor_test {
     async fn timeout_job_execution_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let code_hash = "dd71c9ecb0003bba4d92d1b3e182077a916afd9247834df7771a848f5a9e2ab3";
         let user_deadline = 5000;
         let execution_buffer_time = app_state.execution_buffer_time;
 
@@ -1372,7 +1372,7 @@ pub mod serverless_executor_test {
     async fn invalid_env_id_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e46e";
+        let code_hash = "3077c6b1e9b8e04d4407d17c45a51129edde59d3b7b8ac4f838a4c326aac040f";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -1431,7 +1431,7 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state(false).await;
 
         // This serverless code return bytes array of given length filled with zeros
-        let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";
+        let code_hash = "16fff1ae745b0e1533788ec103fdef708e8974dff2454fc63405b27821bebe03";
         let user_deadline = 5000;
 
         // Case 1: Output size is exceeds the limit
@@ -1494,7 +1494,7 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state(false).await;
 
         // This serverless code return bytes array of given length filled with zeros
-        let code_hash = "9fa3e2632fdefe0986cac05b839dd4df8d492dbcfc85ec1a5b647e1fd8ed3157";
+        let code_hash = "16fff1ae745b0e1533788ec103fdef708e8974dff2454fc63405b27821bebe03";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -1568,7 +1568,7 @@ pub mod serverless_executor_test {
         let file_path_2 = temp_dir.path().join("2.bin");
         std::fs::write(&file_path_2, "Oyster123!").expect("Failed to write to file ./store/2.bin");
 
-        let code_hash = "5db45b92247332b2f4aaa2b6f18f91b0ad50728f9257471c56baa1d45355ac54";
+        let code_hash = "aeb0450d7b2b170b8b73827c751da62728d6dedff51e68dc45523157de06f24b";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1645,13 +1645,13 @@ pub mod serverless_executor_test {
             responses[0].clone(),
             0.into(),
             0,
-            "Hello World my secret is Secret!\n".into(),
+            "Hello World my secret is Secret!".into(),
         );
         assert_response(
             responses[1].clone(),
             1.into(),
             0,
-            "Hello World my secret is Oyster123!\n".into(),
+            "Hello World my secret is Oyster123!".into(),
         );
     }
 
@@ -1671,7 +1671,7 @@ pub mod serverless_executor_test {
         let file_path = temp_dir.path().join("1.bin");
         std::fs::write(&file_path, "Secret!").expect("Failed to write to file ./store/1.bin");
 
-        let code_hash = "b288530f1e50b61094101edb395756fc6a449973ac30eb70762337494ee77bd7";
+        let code_hash = "62e12670fde3edce489b89dbb3492bd0a60d7679c1b3f0e10600268da50b4687";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1729,7 +1729,7 @@ pub mod serverless_executor_test {
     async fn job_execution_stack_overflow_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "140531f7fd083d81e3b310c8ae4a4b4ee9fee8e64c7f8cec933765c881448952";
+        let code_hash = "3ecefd96803fc3c6dd3a2173c18adc00faeb8c2b7d33d0c8ecb4eb7ad24673d2";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1792,7 +1792,7 @@ pub mod serverless_executor_test {
     async fn job_execution_heap_bloat_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "09b81077b2596b065c1d7c8fe1a6bd3637919718b99c0198b3ac3532f527f87a";
+        let code_hash = "4479583a0dc54e87eb5e0ca162b4ece555afbea77b12ac232b14ceb98730a9b4";
         let user_deadline = 5000;
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
@@ -1855,7 +1855,7 @@ pub mod serverless_executor_test {
     async fn executor_drain_test() {
         let app_state = generate_app_state(false).await;
 
-        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let code_hash = "dd71c9ecb0003bba4d92d1b3e182077a916afd9247834df7771a848f5a9e2ab3";
         let user_deadline = 5000;
         let execution_buffer_time = app_state.execution_buffer_time;
         let app_state_clone = app_state.clone();
@@ -1933,7 +1933,7 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state(false).await;
         app_state.enclave_draining.store(true, Ordering::SeqCst);
 
-        let code_hash = "9c641b535e5586200d0f2fd81f05a39436c0d9dd35530e9fb3ca18352c3ba111";
+        let code_hash = "6e854bafce4b94c2f9e29e64c3bad6cfdaba2b553bde47a074fc784ceed6004e";
         let user_deadline = 5000;
         let app_state_clone = app_state.clone();
 

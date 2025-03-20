@@ -1,26 +1,17 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ethers::abi::{Abi, Token};
 use ethers::providers::Middleware;
 use ethers::types::transaction::eip2718::TypedTransaction;
 use ethers::types::{Address, Eip1559TransactionRequest, U256};
-use serde_json::{from_str, Value};
+use serde_json::Value;
 use tokio::time::sleep;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::constant::HTTP_CALL_RETRY_DELAY;
 use crate::model::{HttpSignerProvider, JobsTxnMetadata, JobsTxnSendError, JobsTxnType};
-
-// Returns the 'Jobs' Contract Abi object for encoding transaction data, takes the JSON ABI from 'Jobs.json' file
-pub fn load_abi_from_file() -> Result<Abi> {
-    let abi_json = include_str!("../Jobs.json");
-    let contract: Abi = from_str(&abi_json)
-        .context("Failed to deserialize 'Jobs' contract ABI from the Json file Jobs.json")?;
-
-    Ok(contract)
-}
 
 // Function to return the 'Jobs' txn data based on the txn type received, using the contract Abi object
 pub fn generate_txn(

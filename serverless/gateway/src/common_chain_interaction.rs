@@ -1449,6 +1449,7 @@ mod common_chain_interaction_tests {
                         DynSolValue::Address(PrivateKeySigner::random().address()),
                         DynSolValue::Uint(U256::from(job_starttime), 256),
                         DynSolValue::Uint(U256::from(5000), 256),
+                        DynSolValue::Address(PrivateKeySigner::random().address()),
                     ])
                     .abi_encode()
                     .as_slice()[32..]

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::Args;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
@@ -7,12 +8,31 @@ use tracing::info;
 
 const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn stream_logs(
-    ip: &str,
-    start_from: Option<&str>,
-    with_log_id: bool,
-    quiet: bool,
-) -> Result<()> {
+#[derive(Args)]
+pub struct LogArgs {
+    /// IP address of the instance
+    #[arg(short, long, required = true)]
+    pub ip: String,
+
+    /// Optional log ID to start streaming from
+    #[arg(short, long)]
+    pub start_from: Option<String>,
+
+    /// Include log ID prefix in output
+    #[arg(short, long, default_value_t = false)]
+    pub with_log_id: bool,
+
+    /// Suppress connection status message
+    #[arg(short, long, default_value_t = false)]
+    pub quiet: bool,
+}
+
+pub async fn stream_logs(args: LogArgs) -> Result<()> {
+    let ip = args.ip;
+    let start_from = args.start_from;
+    let quiet = args.quiet;
+    let with_log_id = args.with_log_id;
+
     let mut url = format!("http://{}:516/logs/stream", ip);
     if let Some(start_id) = start_from {
         url.push_str(&format!("?start_from={}", start_id));

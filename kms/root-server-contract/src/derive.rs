@@ -1,4 +1,9 @@
-use alloy::{providers::ProviderBuilder, sol};
+use alloy::{
+    primitives::B256,
+    providers::ProviderBuilder,
+    signers::k256::sha2::{Digest, Sha256},
+    sol,
+};
 use axum::{
     extract::{ConnectInfo, Query, State},
     http::StatusCode,
@@ -13,7 +18,7 @@ use crate::{scallop::AuthStoreState, AppState};
 sol!(
     #[sol(rpc)]
     interface IKMSVerifiable {
-        function oysterKMSVerify(bytes32 _key) external returns (bool);
+        function oysterKMSVerify(bytes32 _imageId) external returns (bool);
     }
 );
 
@@ -37,12 +42,17 @@ pub async fn derive(
     let provider = ProviderBuilder::new().on_http(rpc);
     let contract = IKMSVerifiableInstance::new(address, provider);
 
-    // SAFETY: transport should always have key associated, safe to unwrap
-    let Ok(res) = contract
-        .oysterKMSVerify(scallop_state.0.unwrap().into())
-        .call()
-        .await
-    else {
+    // SAFETY: transport should always have PCRs & User Data associated, safe to unwrap
+    let (pcrs, user_data) = scallop_state.0.unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(pcrs[0]);
+    hasher.update(pcrs[1]);
+    hasher.update(pcrs[2]);
+    hasher.update((user_data.len() as u16).to_be_bytes());
+    hasher.update(user_data);
+    let image_id: [u8; 32] = hasher.finalize().into();
+
+    let Ok(res) = contract.oysterKMSVerify(B256::from(image_id)).call().await else {
         return (StatusCode::INTERNAL_SERVER_ERROR, [0; 64]);
     };
 

@@ -1,12 +1,23 @@
 use crate::configs::global::{PINATA_GATEWAY_URL, PINATA_UPLOAD_URL};
 use crate::types::StorageProvider;
 use anyhow::{anyhow, Context, Result};
+use clap::Args;
 use reqwest::Client;
 use serde_json::Value;
 use std::{env, fs, time::Duration};
 use tracing::info;
 
-pub async fn upload_enclave_image(file_path: &str, provider: &StorageProvider) -> Result<()> {
+#[derive(Args)]
+pub struct UploadArgs {
+    /// Path to enclave image file
+    #[arg(short, long)]
+    file: String,
+}
+
+pub async fn upload_enclave_image(args: UploadArgs) -> Result<()> {
+    let file_path = &args.file;
+    let provider = StorageProvider::Pinata;
+
     info!("Uploading enclave image with:");
     info!("  File path: {}", file_path);
     info!("  Provider: {}", provider.as_str());

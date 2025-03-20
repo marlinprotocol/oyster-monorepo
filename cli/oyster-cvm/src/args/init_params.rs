@@ -1,17 +1,25 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Component, PathBuf},
 };
 
-use alloy::signers::k256::sha2::{Digest, Sha256};
-use anyhow::{bail, Context, Result};
+use alloy::primitives::Address;
+use alloy::{
+    hex::FromHex,
+    signers::k256::sha2::{Digest, Sha256},
+};
+use anyhow::{anyhow, bail, Context, Result};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use clap::Args;
+use lazy_static::lazy_static;
 use libsodium_sys::{crypto_box_SEALBYTES, crypto_box_seal, sodium_init};
 use serde::Serialize;
 use tracing::info;
 
-use super::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_ARM64};
+use crate::types::Platform;
+
+use super::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_AMD64, PCRS_BASE_BLUE_V1_0_0_ARM64};
 
 #[derive(Args, Debug)]
 #[group(multiple = true)]
@@ -34,6 +42,14 @@ pub struct InitParamsArgs {
     #[command(flatten)]
     pub pcrs: PcrArgs,
 
+    /// Encalve verifier contract address
+    #[arg(long, requires = "chain_id")]
+    pub contract_address: Option<String>,
+
+    /// Chain ID for KMS contract root server
+    #[arg(long, requires = "contract_address")]
+    pub chain_id: Option<u64>,
+
     /// Docker compose file defining services to run,
     /// set as first init param
     #[arg(long)]
@@ -41,14 +57,17 @@ pub struct InitParamsArgs {
 }
 
 impl InitParamsArgs {
-    pub fn load(self) -> Result<Option<String>> {
+    pub fn load(self, preset: String, arch: Platform, debug: bool) -> Result<Option<String>> {
         // check for encoded params
         if self.init_params_encoded.is_some() {
             return Ok(self.init_params_encoded.clone());
         }
 
         // check if there are any init params
-        if self.init_params.is_none() && self.docker_compose.is_none() {
+        if self.init_params.is_none()
+            && self.docker_compose.is_none()
+            && self.contract_address.is_none()
+        {
             return Ok(None);
         };
 
@@ -56,6 +75,22 @@ impl InitParamsArgs {
             .docker_compose
             .map(|x| vec![format!("docker-compose.yml:1:0:file:{x}")])
             .unwrap_or_default();
+
+        if let Some(address) = self.contract_address {
+            if let Err(_) = Address::from_hex(&address) {
+                bail!("invalid contract address");
+            }
+            init_params.push(format!("contract-address:1:0:utf8:{}", address));
+
+            let Some(root_server_str) = KMS_ROOT_SERVERS.get(&self.chain_id.unwrap()) else {
+                bail!("unknown chain id");
+            };
+            init_params.push(format!(
+                "root-server-config.json:1:0:utf8:{}",
+                root_server_str
+            ));
+        }
+
         init_params.append(&mut self.init_params.unwrap_or_default());
 
         // encoding has to be done
@@ -124,14 +159,29 @@ impl InitParamsArgs {
 
         // load pcrs
         // use pcrs of the blue base image by default
-        let pcrs = self.pcrs.load().context("Failed to load PCRs")?.unwrap_or((
-            PCRS_BASE_BLUE_V1_0_0_ARM64.0.into(),
-            PCRS_BASE_BLUE_V1_0_0_ARM64.1.into(),
-            PCRS_BASE_BLUE_V1_0_0_ARM64.2.into(),
-        ));
+        let pcrs = self
+            .pcrs
+            .load()
+            .context("Failed to load PCRs")?
+            .map(Result::Ok)
+            .unwrap_or(match preset.as_str() {
+                "blue" => match arch {
+                    Platform::AMD64 => Ok((
+                        PCRS_BASE_BLUE_V1_0_0_AMD64.0.into(),
+                        PCRS_BASE_BLUE_V1_0_0_AMD64.1.into(),
+                        PCRS_BASE_BLUE_V1_0_0_AMD64.2.into(),
+                    )),
+                    Platform::ARM64 => Ok((
+                        PCRS_BASE_BLUE_V1_0_0_ARM64.0.into(),
+                        PCRS_BASE_BLUE_V1_0_0_ARM64.1.into(),
+                        PCRS_BASE_BLUE_V1_0_0_ARM64.2.into(),
+                    )),
+                },
+                _ => Err(anyhow!("PCRs are required")),
+            })?;
 
         // fetch key
-        let pk = fetch_encryption_key(
+        let pk = fetch_encryption_key_with_pcr(
             self.kms_endpoint
                 .as_ref()
                 .unwrap_or(&"http://image-v2.kms.box:1101".into()),
@@ -163,6 +213,14 @@ impl InitParamsArgs {
 
                 // encrypt if needed
                 let final_contents = if should_encrypt {
+                    if debug {
+                        // attempting to use encrypted init params in debug mode
+                        // error out since it is not safe
+                        return Err(anyhow!(
+                            "Refused to allow encrypted init params in debug mode enclaves. It is not safe to use encrypted init params in debug mode since it can then be decrypted and exported by other debug enclaves."
+                        ));
+                    }
+
                     let mut final_contents =
                         vec![0u8; contents.len() + crypto_box_SEALBYTES as usize];
                     // SAFETY: buffer is big enough for the encrypted message
@@ -219,7 +277,7 @@ struct InitParamsList {
     params: Vec<InitParam>,
 }
 
-fn fetch_encryption_key(
+fn fetch_encryption_key_with_pcr(
     endpoint: &str,
     pcr0: &str,
     pcr1: &str,
@@ -240,4 +298,24 @@ fn fetch_encryption_key(
         .as_slice()
         .try_into()
         .context("failed to parse reponse")
+}
+
+// TODO fill store KMS details
+lazy_static! {
+    static ref KMS_ROOT_SERVERS: HashMap<u64, &'static str> = {
+        let mut root_servers = HashMap::new();
+        root_servers.insert(
+            31337,
+            r#"
+                {
+                    "kms_endpoint": "image-v2.kms.box:1101",
+                    "pcr0": "cb7ebc13d527e9cf9cc271b0d816c72a5bfa685ae56118ce4986fa82b8b9aac8b851206539a6c4600ad77566aa15bd0e",
+                    "pcr1": "3b26340a10ac3a5494139fed12bc30028017b72dabfb78a38763bd21ea67bbfe03214e7ce628c2952cfa2ff478f370ba",
+                    "pcr2": "0d128997bfc8ef24a2aa1ecec60c61e48eda9b439f8662d41eb38d8f0ba0401367778a5f8804127c591d824d5c3ed617",
+                    "user_data": "544d4b69000100009293c4308e0ebc7f830be9a963f343358c4875d67c36eb1dc0c3250cb9438a43f0399ed4fc7e0b80ccb99b106136e06bbaecb90bc460843d33b632beb3537a7d1c42531ad1b43bce0015ba7e7fb7ed82fed9a0d200ac11dc646ca22b743daec9baa39d689c350a3e70ce85979e856e9cac3c31f45febe28510360beb78495932a6e06c2a5fd6caa0adc9dff0fef20d9ff4916199bcbcc450cf36031706fbe58b82fcf808e76f801924ec66a3ea5bcaec0fb33619cf5df6314b43eca506a25392b1e042126a63744f35bd39403c6d73e81a4efaf0e0251563ee3eacc2ce419ae5a1c139d5d321761a9292c430868c3d012a5d524f0939e4ee4d60b738b4c44448ec286a5361e15ffbf2641e2df25363a204a738231e5f1a9621999741da01b87b22636f6e646974696f6e223a7b22636861696e223a312c22636f6e646974696f6e54797065223a22636f6e7472616374222c22636f6e747261637441646472657373223a22307843374430383443326536424341633030374433424146433431353438356133383038303343306265222c2266756e6374696f6e416269223a7b22696e70757473223a5b7b22696e7465726e616c54797065223a2261646472657373222c226e616d65223a22222c2274797065223a2261646472657373227d5d2c226e616d65223a2269735665726966696564222c226f757470757473223a5b7b22696e7465726e616c54797065223a22626f6f6c222c226e616d65223a22222c2274797065223a22626f6f6c227d5d2c2273746174654d75746162696c697479223a2276696577222c2274797065223a2266756e6374696f6e227d2c226d6574686f64223a2269735665726966696564222c22706172616d6574657273223a5b223a7573657241646472657373225d2c2272657475726e56616c756554657374223a7b22636f6d70617261746f72223a223d3d222c2276616c7565223a747275657d7d2c2276657273696f6e223a22312e302e30227dc441cd0ad8db7d03074a07437a39025a8deea6a72c433dedc45375b95d28257dc0300ae70507050f75c5d5c31c50b167bdde4c06ac789b22641defe91de9442fd74d1b"
+                }
+            "#,
+        );
+        root_servers
+    };
 }

@@ -11,6 +11,7 @@ use ethers::types::{H160, U256};
 use ethers::utils::public_key_to_address;
 use http_on_vsock_server::{VsockAddrParser, VsockServer};
 use k256::ecdsa::SigningKey;
+use serde_json::from_str;
 use tokio::fs;
 
 use serverless::cgroups::Cgroups;
@@ -19,7 +20,6 @@ use serverless::node_handler::{
     export_signed_registration_message, get_tee_details, index, inject_immutable_config,
     inject_mutable_config,
 };
-use serverless::utils::load_abi_from_file;
 use tokio_vsock::VsockListener;
 
 // EXECUTOR CONFIGURATION PARAMETERS
@@ -103,7 +103,8 @@ async fn main() -> Result<()> {
         job_requests_running: Arc::new(Mutex::new(HashSet::new())),
         last_block_seen: Arc::new(AtomicU64::new(0)),
         nonce_to_send: Arc::new(Mutex::new(U256::from(0))),
-        jobs_contract_abi: load_abi_from_file()?,
+        jobs_contract_abi: from_str(include_str!("../Jobs.json"))?,
+        code_contract_abi: from_str(include_str!("../CodeContract.json"))?,
     };
 
     // Create App using Router

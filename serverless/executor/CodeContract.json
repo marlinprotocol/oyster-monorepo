@@ -1,0 +1,33 @@
+[
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "bytes",
+                "name": "metadata",
+                "type": "bytes"
+            }
+        ],
+        "name": "CodeCreated",
+        "type": "event"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "inputData",
+                "type": "string"
+            },
+            {
+                "internalType": "bytes",
+                "name": "metadata",
+                "type": "bytes"
+            }
+        ],
+        "name": "saveCodeInCallData",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]

@@ -1,3 +1,4 @@
+use crate::args::wallet::WalletArgs;
 use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
 use crate::utils::{
     provider::create_provider,
@@ -9,7 +10,22 @@ use alloy::{
     sol,
 };
 use anyhow::{anyhow, Context, Result};
+use clap::Args;
 use tracing::info;
+
+#[derive(Args)]
+pub struct DepositArgs {
+    /// Job ID
+    #[arg(short, long, required = true)]
+    job_id: String,
+
+    /// Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
+    #[arg(short, long, required = true)]
+    amount: u64,
+
+    #[command(flatten)]
+    wallet: WalletArgs,
+}
 
 sol!(
     #[allow(missing_docs)]
@@ -18,8 +34,12 @@ sol!(
     "src/abis/oyster_market_abi.json"
 );
 
-pub async fn deposit_to_job(job_id: &str, amount: u64, wallet_private_key: &str) -> Result<()> {
+pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     info!("Starting deposit...");
+
+    let amount = args.amount;
+    let wallet_private_key = &args.wallet.load_required()?;
+    let job_id = args.job_id;
 
     // Input validation
     if amount < MIN_DEPOSIT_AMOUNT {

@@ -424,6 +424,7 @@ contract Relay is
      * @param callbackContract The address of the callback contract.
      * @param startTime The timestamp when the job was started.
      * @param callbackGasLimit The gas limit for the callback execution.
+     * @param jobOwner The address of the job owner.
      */
     event JobRelayed(
         uint256 indexed jobId,
@@ -437,7 +438,8 @@ contract Relay is
         address refundAccount,
         address callbackContract,
         uint256 startTime,
-        uint256 callbackGasLimit
+        uint256 callbackGasLimit,
+        address jobOwner
     );
 
     /**
@@ -523,7 +525,8 @@ contract Relay is
             _refundAccount,
             _callbackContract,
             block.timestamp,
-            _callbackGasLimit
+            _callbackGasLimit,
+            _jobOwner
         );
     }
 
