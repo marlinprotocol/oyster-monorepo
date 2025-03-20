@@ -1,16 +1,11 @@
-use std::str::FromStr;
-
 use crate::schema::jobs;
-use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -24,82 +19,30 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     let id = log.topics()[1].encode_hex_with_prefix();
     let owner = Address::from_word(log.topics()[2]).to_checksum(None);
     let provider = Address::from_word(log.topics()[3]).to_checksum(None);
-    let (metadata, rate, balance, timestamp) =
-        // parse rate and balance as B256 since the integer representation is not used
-        <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
-    let (rate, balance, timestamp) = (
-        BigDecimal::from_str(&rate.to_string())?,
-        BigDecimal::from_str(&balance.to_string())?,
-        std::time::SystemTime::UNIX_EPOCH
-            + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
-    );
-
-    let block = log
-        .block_number
-        .ok_or(anyhow!("did not get block from log"))?;
-    let idx = log.log_index.ok_or(anyhow!("did not get index from log"))?;
-    let tx_hash = log
-        .transaction_hash
-        .ok_or(anyhow!("did not get tx hash from log"))?
-        .encode_hex_with_prefix();
+    let (metadata, timestamp) = <(String, U256)>::abi_decode_sequence(&log.data().data, true)?;
+    let created =
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp.as_limbs()[0]);
 
     // we want to insert if job does not exist and provider exists and is active
     // we want to error out if job already exists or provider does not exist or is inactive
-
-    info!(
-        id,
-        owner,
-        provider,
-        metadata,
-        ?rate,
-        ?balance,
-        ?timestamp,
-        "creating job"
-    );
+    info!(id, owner, provider, metadata, ?created, "creating job");
 
     // target sql:
-    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed)
-    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false);
+    // INSERT INTO jobs (id, metadata, owner, provider, is_closed, created)
+    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", false, "<timestamp>");
     diesel::insert_into(jobs::table)
         .values((
             jobs::id.eq(&id),
             jobs::metadata.eq(&metadata),
             jobs::owner.eq(&owner),
             jobs::provider.eq(&provider),
-            jobs::rate.eq(&rate),
-            jobs::balance.eq(&balance),
-            jobs::last_settled.eq(&timestamp),
-            jobs::created.eq(&timestamp),
             jobs::is_closed.eq(false),
+            jobs::created.eq(&created),
         ))
         .execute(conn)
         .context("failed to create job")?;
 
-    // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", true);
-    diesel::insert_into(transactions::table)
-        .values((
-            transactions::block.eq(block as i64),
-            transactions::idx.eq(idx as i64),
-            transactions::tx_hash.eq(tx_hash),
-            transactions::job.eq(&id),
-            transactions::amount.eq(&balance),
-            transactions::is_deposit.eq(true),
-        ))
-        .execute(conn)
-        .context("failed to create deposit")?;
-
-    info!(
-        id,
-        owner,
-        provider,
-        metadata,
-        ?rate,
-        ?balance,
-        ?timestamp,
-        "created job"
-    );
+    info!(id, owner, provider, metadata, "created job");
 
     Ok(())
 }
@@ -108,11 +51,13 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
 mod tests {
     use alloy::{primitives::LogData, rpc::types::Log};
     use anyhow::Result;
+    use bigdecimal::BigDecimal;
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log_before_update_block;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::v2::handle_log_v2;
+    use crate::schema::transactions;
 
     use super::*;
 
@@ -163,8 +108,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        handle_log_before_update_block(conn, log)?;
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        handle_log_v2(conn, log)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
@@ -312,8 +257,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        handle_log_before_update_block(conn, log)?;
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        handle_log_v2(conn, log)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
@@ -518,8 +463,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        let res = handle_log_before_update_block(conn, log);
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        let res = handle_log_v2(conn, log);
 
         // checks
         assert_eq!(

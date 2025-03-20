@@ -11,7 +11,7 @@ use alloy::transports::http::reqwest::Url;
 use anyhow::{anyhow, Context, Result};
 use diesel::prelude::*;
 
-use handlers::handle_log_before_update_block;
+use handlers::handle_log;
 use tracing::{info, instrument};
 
 pub trait LogsProvider {
@@ -52,19 +52,6 @@ impl LogsProvider for AlloyProvider {
                 ),
         )?)
     }
-}
-
-pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
-    let block = log
-        .block_number
-        .ok_or(anyhow!("did not get block from log"))?;
-    if block > 11223044 {
-        handle_log_before_update_block(conn, log).context("failed to handle log")?;
-    } else {
-        handle_log_after_update_block(conn, log).context("failed to handle log")?;
-    }
-
-    Ok(())
 }
 
 #[instrument(level = "info", skip_all, parent = None)]

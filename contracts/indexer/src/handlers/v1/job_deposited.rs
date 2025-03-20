@@ -1,4 +1,4 @@
-use std::ops::Sub;
+use std::ops::Add;
 use std::str::FromStr;
 
 use crate::schema::jobs;
@@ -18,7 +18,7 @@ use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
@@ -37,11 +37,11 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, ?amount, "withdrawing from job");
+    info!(id, ?amount, "depositing into job");
 
     // target sql:
     // UPDATE jobs
-    // SET balance = balance - <amount>
+    // SET balance = balance + <amount>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -50,7 +50,7 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::balance.eq(jobs::balance.sub(&amount)))
+        .set(jobs::balance.eq(jobs::balance.add(&amount)))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -64,7 +64,7 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     // target sql:
     // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", false);
+    // VALUES (block, idx, "<job>", "<value>", true);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -72,12 +72,12 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(&id),
             transactions::amount.eq(&amount),
-            transactions::is_deposit.eq(false),
+            transactions::is_deposit.eq(true),
         ))
         .execute(conn)
-        .context("failed to create withdraw")?;
+        .context("failed to create deposit")?;
 
-    info!(id, ?amount, "withdrew from job");
+    info!(id, ?amount, "deposited into job");
 
     Ok(())
 }
@@ -91,14 +91,14 @@ mod tests {
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log_before_update_block;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::v1::handle_log_v1;
     use crate::schema::providers;
 
     use super::*;
 
     #[test]
-    fn test_withdraw_from_existing_job() -> Result<()> {
+    fn test_deposit_into_existing_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -163,7 +163,7 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                transactions::is_deposit.eq(false),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -221,7 +221,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                true,
+                false,
             ))
         );
 
@@ -237,7 +237,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobDeposited(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -250,8 +250,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        handle_log_before_update_block(conn, log)?;
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        handle_log_v1(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -277,7 +277,7 @@ mod tests {
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     BigDecimal::from(1),
-                    BigDecimal::from(15),
+                    BigDecimal::from(25),
                     creation_now,
                     creation_now,
                     false,
@@ -309,7 +309,7 @@ mod tests {
                     keccak256!("some tx").encode_hex_with_prefix(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(5),
-                    false,
+                    true,
                 ),
                 (
                     123i64,
@@ -317,7 +317,7 @@ mod tests {
                     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(10),
-                    true,
+                    false,
                 )
             ])
         );
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_from_non_existent_job() -> Result<()> {
+    fn test_deposit_into_non_existent_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -371,7 +371,7 @@ mod tests {
                 transactions::job
                     .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                transactions::is_deposit.eq(false),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -416,7 +416,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                true,
+                false,
             ))
         );
 
@@ -432,7 +432,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobDeposited(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -445,8 +445,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        let res = handle_log_before_update_block(conn, log);
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        let res = handle_log_v1(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -490,7 +490,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                true,
+                false,
             ))
         );
 
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_from_closed_job() -> Result<()> {
+    fn test_deposit_into_closed_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -563,7 +563,7 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                transactions::is_deposit.eq(false),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -621,7 +621,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                true,
+                false,
             ))
         );
 
@@ -637,7 +637,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobDeposited(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -650,8 +650,8 @@ mod tests {
             },
         };
 
-        // use handle_log_before_update_block instead of concrete handler to test dispatch
-        let res = handle_log_before_update_block(conn, log);
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        let res = handle_log_v1(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -708,7 +708,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                true,
+                false,
             ))
         );
 
