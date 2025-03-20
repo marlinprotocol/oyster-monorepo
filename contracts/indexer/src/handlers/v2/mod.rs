@@ -9,8 +9,12 @@ use tracing::{info, instrument};
 mod job_opened;
 use job_opened::handle_job_opened;
 
+mod job_deposited;
+use job_deposited::handle_job_deposited;
+
 // job logs
 static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address)");
+static JOB_DEPOSITED: [u8; 32] = event!("JobDeposited(bytes32,address,address,uint256)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
@@ -34,6 +38,8 @@ pub fn handle_log_v2(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     if log_type == JOB_OPENED {
         handle_job_opened(conn, log)
+    } else if log_type == JOB_DEPOSITED {
+        handle_job_deposited(conn, log)
     } else if log_type == UPGRADED
         || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
