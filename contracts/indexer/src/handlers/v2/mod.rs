@@ -21,6 +21,9 @@ use job_settled::handle_job_settled;
 mod job_settlement_withdraw;
 use job_settlement_withdraw::handle_job_settlement_withdraw;
 
+mod job_withdrew;
+use job_withdrew::handle_job_withdrew;
+
 // job logs
 static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address)");
 static JOB_DEPOSITED: [u8; 32] = event!("JobDeposited(bytes32,address,address,uint256)");
@@ -28,6 +31,7 @@ static JOB_RATE_REVISED: [u8; 32] = event!("JobRateRevised(bytes32,uint256)");
 static JOB_SETTLED: [u8; 32] = event!("JobSettled(bytes32,uint256)");
 static JOB_SETTLED_WITHDRAW: [u8; 32] =
     event!("JobSettlementWithdrawn(bytes32,address,address,uint256)");
+static JOB_WITHDRAWN: [u8; 32] = event!("JobWithdrawn(bytes32,address,address,uint256)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
@@ -59,6 +63,8 @@ pub fn handle_log_v2(conn: &mut PgConnection, log: Log) -> Result<()> {
         handle_job_settled(conn, log)
     } else if log_type == JOB_SETTLED_WITHDRAW {
         handle_job_settlement_withdraw(conn, log)
+    } else if log_type == JOB_WITHDRAWN {
+        handle_job_withdrew(conn, log)
     } else if log_type == UPGRADED
         || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
