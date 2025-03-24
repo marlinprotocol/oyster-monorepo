@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
-use tracing::info;
+use tracing::{debug, error, info};
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
@@ -328,14 +328,15 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
     let ip_url = format!("{}/ip?id={:?}&region={}", url, job_id, region);
 
     for attempt in 1..=IP_CHECK_RETRIES {
+        info!("Waiting for CVM to start. Please wait...");
         info!(
-            "Checking for IP address (attempt {}/{})",
+            "Polling for IP address (attempt {}/{})",
             attempt, IP_CHECK_RETRIES
         );
 
         let resp = client.get(&ip_url).send().await;
         let Ok(response) = resp else {
-            tracing::error!("Failed to connect to IP endpoint: {}", resp.unwrap_err());
+            debug!("Failed to connect to IP endpoint: {}", resp.unwrap_err());
             tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
             continue;
         };
@@ -346,7 +347,7 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
         // Get text response first to log in case of error
         let text = response.text().await;
         let Ok(text_body) = text else {
-            tracing::error!("Failed to read response body: {}", text.unwrap_err());
+            debug!("Failed to read response body: {}", text.unwrap_err());
             tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
             continue;
         };
@@ -355,11 +356,9 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
         let json_result = serde_json::from_str::<serde_json::Value>(&text_body);
         let Ok(json) = json_result else {
             let err = json_result.unwrap_err();
-            tracing::error!(
+            debug!(
                 "Failed to parse IP endpoint response (status: {}): {}. Raw response: {}",
-                status,
-                err,
-                text_body
+                status, err, text_body
             );
             tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
             continue;
@@ -367,7 +366,7 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
 
         last_response = json.to_string();
 
-        info!("Response from IP endpoint: {}", last_response);
+        debug!("Response from IP endpoint: {}", last_response);
 
         // Check for IP in response
         if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str()) {
@@ -410,7 +409,7 @@ async fn ping_ip(ip: &str) -> bool {
 async fn check_reachability(ip: &str) -> bool {
     // First check basic connectivity
     if !ping_ip(ip).await {
-        tracing::error!("Failed to establish TCP connection to the instance");
+        error!("Failed to establish TCP connection to the instance");
         return false;
     }
 
