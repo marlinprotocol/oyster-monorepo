@@ -185,6 +185,13 @@
         init-params-manager = initialization.init-params-manager.compressed;
         kernels = kernels.tuna;
       };
+      sdks.local-dev-image = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./sdks/local-dev-image {
+        inherit nixpkgs systemConfig;
+        supervisord = external.supervisord.compressed;
+        keygen = initialization.keygen.compressed;
+        attestation-server-mock = attestation.server-mock.compressed;
+        mock-derive-server = kms.mock-derive-server.compressed;
+      };
       enclaves.blue = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/blue {
         inherit nixpkgs systemConfig nitro-util;
         supervisord = external.supervisord.compressed;
