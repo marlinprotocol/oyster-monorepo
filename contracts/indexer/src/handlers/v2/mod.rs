@@ -27,6 +27,9 @@ use job_withdrew::handle_job_withdrew;
 mod job_metadata_updated;
 use job_metadata_updated::handle_job_metadata_updated;
 
+mod job_closed;
+use job_closed::handle_job_closed;
+
 // job logs
 static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address)");
 static JOB_DEPOSITED: [u8; 32] = event!("JobDeposited(bytes32,address,address,uint256)");
@@ -36,6 +39,7 @@ static JOB_SETTLED_WITHDRAW: [u8; 32] =
     event!("JobSettlementWithdrawn(bytes32,address,address,uint256)");
 static JOB_WITHDRAWN: [u8; 32] = event!("JobWithdrawn(bytes32,address,address,uint256)");
 static JOB_METADATA_UPDATED: [u8; 32] = event!("JobMetadataUpdated(bytes32,string)");
+static JOB_CLOSED: [u8; 32] = event!("JobClosed(bytes32)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
@@ -71,6 +75,8 @@ pub fn handle_log_v2(conn: &mut PgConnection, log: Log) -> Result<()> {
         handle_job_withdrew(conn, log)
     } else if log_type == JOB_METADATA_UPDATED {
         handle_job_metadata_updated(conn, log)
+    } else if log_type == JOB_CLOSED {
+        handle_job_closed(conn, log)
     } else if log_type == UPGRADED
         || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
