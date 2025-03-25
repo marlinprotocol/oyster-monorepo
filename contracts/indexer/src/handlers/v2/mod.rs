@@ -6,6 +6,15 @@ use ethp::event;
 use tracing::warn;
 use tracing::{info, instrument};
 
+mod provider_added;
+use provider_added::handle_provider_added;
+
+mod provider_removed;
+use provider_removed::handle_provider_removed;
+
+mod provider_updated_with_cp;
+use provider_updated_with_cp::handle_provider_updated_with_cp;
+
 mod job_opened;
 use job_opened::handle_job_opened;
 
@@ -40,6 +49,11 @@ static JOB_SETTLED_WITHDRAW: [u8; 32] =
 static JOB_WITHDRAWN: [u8; 32] = event!("JobWithdrawn(bytes32,address,address,uint256)");
 static JOB_METADATA_UPDATED: [u8; 32] = event!("JobMetadataUpdated(bytes32,string)");
 static JOB_CLOSED: [u8; 32] = event!("JobClosed(bytes32)");
+
+// provider logs
+static PROVIDER_ADDED: [u8; 32] = event!("ProviderAdded(address,string)");
+static PROVIDER_REMOVED: [u8; 32] = event!("ProviderRemoved(address)");
+static PROVIDER_UPDATED_WITH_CP: [u8; 32] = event!("ProviderUpdatedWithCp(address,string)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
@@ -77,6 +91,12 @@ pub fn handle_log_v2(conn: &mut PgConnection, log: Log) -> Result<()> {
         handle_job_metadata_updated(conn, log)
     } else if log_type == JOB_CLOSED {
         handle_job_closed(conn, log)
+    } else if log_type == PROVIDER_ADDED {
+        handle_provider_added(conn, log)
+    } else if log_type == PROVIDER_REMOVED {
+        handle_provider_removed(conn, log)
+    } else if log_type == PROVIDER_UPDATED_WITH_CP {
+        handle_provider_updated_with_cp(conn, log)
     } else if log_type == UPGRADED
         || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
