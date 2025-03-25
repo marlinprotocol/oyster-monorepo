@@ -58,8 +58,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     );
 
     // target sql:
-    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed)
-    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false);
+    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed, usdc_balance)
+    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false, "<balance>");
     diesel::insert_into(jobs::table)
         .values((
             jobs::id.eq(&id),
@@ -71,13 +71,14 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::last_settled.eq(&timestamp),
             jobs::created.eq(&timestamp),
             jobs::is_closed.eq(false),
+            jobs::usdc_balance.eq(&balance),
         ))
         .execute(conn)
         .context("failed to create job")?;
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", true);
+    // INSERT INTO transactions (block, idx, job, value, is_deposit, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", true, true);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -86,6 +87,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::job.eq(&id),
             transactions::amount.eq(&balance),
             transactions::is_deposit.eq(true),
+            transactions::is_usdc.eq(true),
         ))
         .execute(conn)
         .context("failed to create deposit")?;

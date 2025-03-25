@@ -41,7 +41,9 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     // target sql:
     // UPDATE jobs
-    // SET balance = balance + <amount>
+    // SET
+    //     balance = balance + <amount>
+    //     usdc_balance = usdc_balance + <amount>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -50,7 +52,10 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::balance.eq(jobs::balance.add(&amount)))
+        .set((
+            jobs::balance.eq(jobs::balance.add(&amount)),
+            jobs::usdc_balance.eq(jobs::usdc_balance.add(&amount)),
+        ))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -63,7 +68,7 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
     }
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit)
+    // INSERT INTO transactions (block, idx, job, value, is_deposit, is_usdc)
     // VALUES (block, idx, "<job>", "<value>", true);
     diesel::insert_into(transactions::table)
         .values((
@@ -73,6 +78,7 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::job.eq(&id),
             transactions::amount.eq(&amount),
             transactions::is_deposit.eq(true),
+            transactions::is_usdc.eq(true),
         ))
         .execute(conn)
         .context("failed to create deposit")?;

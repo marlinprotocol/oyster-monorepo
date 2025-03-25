@@ -36,6 +36,7 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
     // UPDATE jobs
     // SET
     //     balance = balance - <amount>
+    //     usdc_balance = usdc_balance - <amount>
     //     last_settled = <timestamp>
     // WHERE id = "<id>"
     // AND is_closed = false;
@@ -47,6 +48,7 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
         .filter(jobs::is_closed.eq(false))
         .set((
             jobs::balance.eq(jobs::balance.sub(&amount)),
+            jobs::usdc_balance.eq(jobs::usdc_balance.sub(&amount)),
             jobs::last_settled.eq(&timestamp),
         ))
         .execute(conn)
