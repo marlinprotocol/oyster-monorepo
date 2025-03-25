@@ -5,8 +5,10 @@
   keygen, 
   attestation-server-mock, 
   mock-derive-server,
-  compose ? null,
-  dockerImages ? [ ],
+  compose ? ./. + builtins.getEnv "COMPOSE",
+  dockerImages ? let
+    envValue = builtins.getEnv "DOCKER_IMAGES";
+  in if envValue == "" then [ ] else builtins.fromJSON (envValue),
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
@@ -52,14 +54,14 @@
     chmod +x $out/app/*
     cp ${supervisorConf} $out/etc/supervisord.conf
     ${
-      if compose == null
+      if compose == ./.
       then "# No docker compose specified"
       else "cp ${compose} $out/app/docker-compose.yml"
     }  
     ${
       if builtins.length dockerImages == 0
       then "# No docker images provided"
-      else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/app/docker-images/") dockerImages)
+      else builtins.concatStringsSep "\n" (map (img: "cp ${./. + img} $out/app/docker-images/") dockerImages)
     }
   '';  
 
