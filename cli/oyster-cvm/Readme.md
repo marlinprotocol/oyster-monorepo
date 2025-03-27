@@ -60,6 +60,21 @@ Optional args:
 - `--check-docker`: Check if Docker is installed
 - `--check-nix`: Check if Nix is installed
 
+#### `simulate`
+Simulates the oyster-cvm environment locally inside a docker container.
+
+Required args:
+- `--docker-compose` (path to docker-compose.yml file)
+
+Optional args:
+- `--docker-images` (list of Docker image .tar file paths)
+- `--init-params` (list of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`)
+- `--image-name` (local dev base image name)
+- `--image-tag` (local dev base image tag)
+- `--memory` (memory limit for the local dev container)
+- `--cpu-shares` (cpu shares to allocate to the local dev container)
+- `--container-name` (local dev container name)
+
 #### `build`
 Builds an oyster-cvm image. Only needed for custom enclave images - you can use the base image for standard deployments.
 
@@ -201,6 +216,11 @@ Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensu
 # Sample output:
 [INFO] Docker is installed ✓
 [INFO] Nix is installed ✓
+
+# Simulate oyster-cvm environment locally
+./oyster-cvm simulate \
+  --docker-compose ./docker-compose.yml \
+  --init-params secret:1:0:utf8:hello
 
 # Deploy using base image (quickstart)
 ./oyster-cvm deploy \

@@ -4,6 +4,7 @@ pub mod deposit;
 pub mod doctor;
 pub mod list;
 pub mod log;
+pub mod simulate;
 pub mod stop;
 pub mod update;
 pub mod upload;

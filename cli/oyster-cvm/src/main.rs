@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
     build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, doctor::DoctorArgs, list::ListArgs,
-    log::LogArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs, verify::VerifyArgs,
-    withdraw::WithdrawArgs,
+    log::LogArgs, simulate::SimulateArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs,
+    verify::VerifyArgs, withdraw::WithdrawArgs,
 };
 
 mod args;
@@ -34,6 +34,8 @@ struct Cli {
 enum Commands {
     /// Check optional system dependencies like Docker & Nix
     Doctor(DoctorArgs),
+    /// Simulate oyster environment locally
+    Simulate(SimulateArgs),
     /// Build enclave image
     Build(BuildArgs),
     /// Upload enclave image to IPFS
@@ -64,6 +66,7 @@ async fn main() -> Result<()> {
 
     let result = match cli.command {
         Commands::Doctor(args) => commands::doctor::run_doctor(args),
+        Commands::Simulate(args) => commands::simulate::simulate(args).await,
         Commands::Build(args) => commands::build::build_oyster_image(args),
         Commands::Upload(args) => commands::upload::upload_enclave_image(args).await,
         Commands::Verify(args) => commands::verify::verify(args).await,
