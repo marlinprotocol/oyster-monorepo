@@ -52,8 +52,8 @@ diesel::table! {
         #[max_length = 66]
         job -> Bpchar,
         amount -> Numeric,
-        is_deposit -> Bool,
-        is_usdc -> Bool,
+        tx_type -> Varchar,
+        is_usdc -> Nullable<Bool>,
     }
 }
 

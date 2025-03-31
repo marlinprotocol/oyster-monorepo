@@ -2,11 +2,13 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -26,6 +28,15 @@ pub fn handle_job_settlement_withdraw(conn: &mut PgConnection, log: Log) -> Resu
     let provider = Address::from_word(log.topics()[3]).to_checksum(None);
     let amount = U256::abi_decode(&log.data().data, true)?;
     let amount = BigDecimal::from_str(&amount.to_string())?;
+
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
+    let idx = log.log_index.ok_or(anyhow!("did not get index from log"))?;
+    let tx_hash = log
+        .transaction_hash
+        .ok_or(anyhow!("did not get tx hash from log"))?
+        .encode_hex_with_prefix();
 
     let is_usdc = token == USDC_ADDRESS;
 
@@ -60,7 +71,24 @@ pub fn handle_job_settlement_withdraw(conn: &mut PgConnection, log: Log) -> Resu
             // we error out for now, can consider just moving on
             return Err(anyhow::anyhow!("could not find job"));
         }
-        info!(id, ?amount, "withdrew usdc settlement from job");
+
+        // target sql:
+        // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+        // VALUES (block, idx, "<job>", "<value>", "settle", true);
+        diesel::insert_into(transactions::table)
+            .values((
+                transactions::block.eq(block as i64),
+                transactions::idx.eq(idx as i64),
+                transactions::tx_hash.eq(tx_hash),
+                transactions::job.eq(&id),
+                transactions::amount.eq(&amount),
+                transactions::tx_type.eq("settle"),
+                transactions::is_usdc.eq(true),
+            ))
+            .execute(conn)
+            .context("failed to create usdc settle transaction")?;
+
+        info!(?id, ?amount, "withdrew usdc settlement from job");
     } else {
         // target sql:
         // UPDATE jobs
@@ -88,6 +116,23 @@ pub fn handle_job_settlement_withdraw(conn: &mut PgConnection, log: Log) -> Resu
             // we error out for now, can consider just moving on
             return Err(anyhow::anyhow!("could not find job"));
         }
+
+        // target sql:
+        // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+        // VALUES (block, idx, "<job>", "<value>", "settle", false);
+        diesel::insert_into(transactions::table)
+            .values((
+                transactions::block.eq(block as i64),
+                transactions::idx.eq(idx as i64),
+                transactions::tx_hash.eq(tx_hash),
+                transactions::job.eq(&id),
+                transactions::amount.eq(&amount),
+                transactions::tx_type.eq("settle"),
+                transactions::is_usdc.eq(false),
+            ))
+            .execute(conn)
+            .context("failed to create credits settle transaction")?;
+
         info!(id, ?amount, "withdrew credits settlement from job");
     }
 

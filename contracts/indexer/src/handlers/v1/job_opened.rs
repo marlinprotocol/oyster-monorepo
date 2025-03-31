@@ -77,8 +77,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .context("failed to create job")?;
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit, is_usdc)
-    // VALUES (block, idx, "<job>", "<value>", true, true);
+    // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", "deposit", true);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -86,7 +86,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(&id),
             transactions::amount.eq(&balance),
-            transactions::is_deposit.eq(true),
+            transactions::tx_type.eq("deposit"),
             transactions::is_usdc.eq(true),
         ))
         .execute(conn)

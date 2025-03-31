@@ -51,8 +51,8 @@ fn handle_usdc_deposit(
     }
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit, is_usdc)
-    // VALUES (block, idx, "<job>", "<value>", true, true);
+    // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", "deposit", true);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -60,7 +60,7 @@ fn handle_usdc_deposit(
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(id),
             transactions::amount.eq(amount),
-            transactions::is_deposit.eq(true),
+            transactions::tx_type.eq("deposit"),
             transactions::is_usdc.eq(true),
         ))
         .execute(conn)
@@ -102,8 +102,8 @@ fn handle_credits_deposit(
     }
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit, is_usdc)
-    // VALUES (block, idx, "<job>", "<value>", true, false);
+    // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", "deposit", false);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -111,7 +111,7 @@ fn handle_credits_deposit(
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(id),
             transactions::amount.eq(amount),
-            transactions::is_deposit.eq(true),
+            transactions::tx_type.eq("deposit"),
             transactions::is_usdc.eq(false),
         ))
         .execute(conn)

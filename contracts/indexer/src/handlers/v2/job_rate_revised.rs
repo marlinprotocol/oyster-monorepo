@@ -1,10 +1,12 @@
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -21,9 +23,17 @@ pub fn handle_job_rate_revised(conn: &mut PgConnection, log: Log) -> Result<()> 
     let rate = U256::abi_decode(&log.data().data, true)?;
     let rate = BigDecimal::from_str(&rate.to_string())?;
 
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
+    let idx = log.log_index.ok_or(anyhow!("did not get index from log"))?;
+    let tx_hash = log
+        .transaction_hash
+        .ok_or(anyhow!("did not get tx hash from log"))?
+        .encode_hex_with_prefix();
+
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
-
     info!(id, ?rate, "revising job rate");
 
     // target sql:
@@ -48,6 +58,21 @@ pub fn handle_job_rate_revised(conn: &mut PgConnection, log: Log) -> Result<()> 
         // we error out for now, can consider just moving on
         return Err(anyhow::anyhow!("could not find job"));
     }
+
+    // target sql:
+    // INSERT INTO transactions (block, idx, job, value, tx_type)
+    // VALUES (block, idx, "<job>", "<value>", "rate_revision");
+    diesel::insert_into(transactions::table)
+        .values((
+            transactions::block.eq(block as i64),
+            transactions::idx.eq(idx as i64),
+            transactions::tx_hash.eq(tx_hash),
+            transactions::job.eq(&id),
+            transactions::amount.eq(&rate),
+            transactions::tx_type.eq("rate_revision"),
+        ))
+        .execute(conn)
+        .context("failed to create rate revision")?;
 
     info!(id, ?rate, "finalized job rate revision");
 
