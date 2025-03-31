@@ -7,8 +7,8 @@ pub const USDC_ADDRESS: &str = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 // Credit Contract Address
 pub const CREDIT_ADDRESS: &str = "0x972e62BE92e1b29c20a85A47042DaBC556Aa5474";
 
-// RPC URLs
-pub const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
+// Solana USDC Mint Address
+pub const SOLANA_USDC_MINT_ADDRESS: &str = "HG7hcQRkZyQH48z85xnf9mRSame7y8JB21dCDnjztVk7";
 
 // Pinata API URLs
 pub const PINATA_UPLOAD_URL: &str = "https://api.pinata.cloud/pinning/pinFileToIPFS";

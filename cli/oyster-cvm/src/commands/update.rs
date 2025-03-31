@@ -1,11 +1,26 @@
 use crate::args::init_params::InitParamsArgs;
+use crate::configs::blockchain::Blockchain;
+use crate::configs::global::SOLANA_USDC_MINT_ADDRESS;
 use crate::types::Platform;
-use crate::utils::provider::create_provider;
+use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::sol;
-use anyhow::{Context, Result};
+use anchor_client::solana_sdk::system_program;
+use anchor_lang::{declare_program, prelude::Pubkey};
+use anchor_spl::{associated_token::get_associated_token_address, token};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use solana_transaction_status_client_types::UiTransactionEncoding;
+use std::str::FromStr;
 use tracing::info;
+
+declare_program!(market_v);
+use market_v::{
+    accounts::Job as SolanaMarketVJob, client::accounts::JobUpdate as SolanaMarketVJobUpdate,
+    client::args::JobUpdate as SolanaMarketVJobUpdateArgs,
+};
+
+declare_program!(oyster_credits);
 
 #[derive(Args)]
 pub struct UpdateArgs {
@@ -29,7 +44,7 @@ pub struct UpdateArgs {
     preset: String,
 
     /// Platform architecture (e.g. amd64, arm64)
-    #[arg(long, default_value = "arm64")]
+    #[arg(long, default_value = Platform::ARM64.as_str())]
     arch: Platform,
 
     /// New init params
@@ -45,12 +60,28 @@ sol!(
 );
 
 pub async fn update_job(args: UpdateArgs) -> Result<()> {
+    let job_id = args.job_id.clone();
+
+    let blockchain = Blockchain::blockchain_from_job_id(job_id.clone())?;
+
+    if blockchain == Blockchain::Arbitrum {
+        update_ethereum_job(args, blockchain).await?;
+    } else if blockchain == Blockchain::Solana {
+        update_solana_job(args, blockchain).await?;
+    } else {
+        return Err(anyhow!("Unsupported blockchain"));
+    }
+
+    Ok(())
+}
+
+async fn update_ethereum_job(args: UpdateArgs, blockchain: Blockchain) -> Result<()> {
     let wallet_private_key = &args.wallet.load_required()?;
-    let job_id = args.job_id;
     let debug = args.debug;
     let image_url = args.image_url;
+    let job_id = args.job_id.clone();
 
-    let provider = create_provider(wallet_private_key)
+    let provider = create_ethereum_provider(wallet_private_key, &blockchain)
         .await
         .context("Failed to create provider")?;
 
@@ -97,6 +128,127 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
         .await?;
 
     info!("Metadata update transaction: {:?}", tx_hash);
+
+    Ok(())
+}
+
+async fn update_solana_job(args: UpdateArgs, blockchain: Blockchain) -> Result<()> {
+    let wallet_private_key = &args.wallet.load_required()?;
+    let debug = args.debug;
+    let image_url = args.image_url;
+    let job_id = args.job_id.clone();
+
+    let provider = create_solana_provider(wallet_private_key, &blockchain)
+        .await
+        .context("Failed to create provider")?;
+
+    let program = provider
+        .program(market_v::ID)
+        .context("Failed to get program")?;
+
+    let job_index = job_id.parse::<u128>().context("Failed to parse job ID")?;
+
+    let job_id_pa =
+        Pubkey::find_program_address(&[b"job", job_index.to_le_bytes().as_ref()], &market_v::ID).0;
+
+    let job = program.account::<SolanaMarketVJob>(job_id_pa).await?;
+
+    let mut metadata = serde_json::from_str::<serde_json::Value>(&job.metadata)?;
+
+    info!(
+        "Original metadata: {}",
+        serde_json::to_string_pretty(&metadata)?
+    );
+
+    if let Some(debug) = debug {
+        metadata["debug"] = serde_json::Value::Bool(debug);
+    }
+
+    if let Some(image_url) = image_url {
+        metadata["url"] = serde_json::Value::String(image_url.into());
+    }
+
+    if let Some(init_params) = args
+        .init_params
+        .load(
+            args.preset,
+            args.arch,
+            metadata["debug"].as_bool().unwrap_or(false),
+        )
+        .context("Failed to load init params")?
+    {
+        metadata["init_params"] = init_params.into();
+    }
+
+    info!(
+        "Updated metadata: {}",
+        serde_json::to_string_pretty(&metadata)?
+    );
+
+    let market = Pubkey::find_program_address(&[b"market"], &market_v::ID).0;
+    let owner = program.payer();
+    let token_mint = Pubkey::from_str(SOLANA_USDC_MINT_ADDRESS)?;
+    let provider_token_account = get_associated_token_address(&job.provider, &token_mint);
+    let program_token_account =
+        Pubkey::find_program_address(&[b"job_token", token_mint.as_ref()], &market_v::ID).0;
+    let user_token_account = get_associated_token_address(&owner, &token_mint);
+    let credit_mint = Pubkey::find_program_address(&[b"credit_mint"], &oyster_credits::ID).0;
+    let program_credit_token_account =
+        Pubkey::find_program_address(&[b"credit_token", credit_mint.as_ref()], &market_v::ID).0;
+    let user_credit_token_account = get_associated_token_address(&owner, &credit_mint);
+    let state = Pubkey::find_program_address(&[b"state"], &oyster_credits::ID).0;
+    let credit_program_usdc_token_account =
+        Pubkey::find_program_address(&[b"program_usdc"], &oyster_credits::ID).0;
+
+    let signature = program
+        .request()
+        .accounts(SolanaMarketVJobUpdate {
+            market,
+            job: job_id_pa,
+            owner,
+            token_mint,
+            provider_token_account,
+            program_token_account,
+            user_token_account,
+            credit_mint,
+            program_credit_token_account,
+            user_credit_token_account,
+            state,
+            credit_program_usdc_token_account,
+            credit_program: oyster_credits::ID,
+            token_program: token::ID,
+            system_program: system_program::ID,
+        })
+        .args(SolanaMarketVJobUpdateArgs {
+            metadata: serde_json::to_string(&metadata)?,
+            job_index,
+        })
+        .send()
+        .await;
+
+    if let Err(e) = signature {
+        info!("Transaction failed with error: {:?}", e);
+        return Err(anyhow!("Failed to send update transaction: {}", e));
+    }
+
+    info!("Update transaction sent. Transaction hash: {:?}", signature);
+
+    let signature = signature.unwrap();
+
+    let receipt = program
+        .rpc()
+        .get_transaction(&signature, UiTransactionEncoding::Base64)
+        .await?;
+
+    if receipt.transaction.meta.is_none() {
+        return Err(anyhow!("Failed to get transaction meta"));
+    }
+
+    let meta = receipt.transaction.meta.unwrap();
+
+    if meta.err.is_some() {
+        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
+    }
 
     Ok(())
 }

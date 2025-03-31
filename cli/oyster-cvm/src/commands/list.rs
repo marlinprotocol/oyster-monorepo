@@ -1,4 +1,4 @@
-use crate::configs::global::INDEXER_URL;
+use crate::configs::{blockchain::Blockchain, global::INDEXER_URL};
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use clap::Args;
@@ -28,6 +28,7 @@ struct JobData {
     current_balance: f64,
     time_remaining: f64,
     provider: String,
+    chain: String,
 }
 
 pub async fn list_jobs(args: ListArgs) -> Result<()> {
@@ -102,7 +103,8 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
         "RATE (USDC/hour)",
         "BALANCE",
         "TIME REMAINING",
-        "PROVIDER"
+        "PROVIDER",
+        "CHAIN"
     ]);
 
     let processed_jobs: Vec<_> = nodes
@@ -125,7 +127,8 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
             format!("{:.4} USDC", job.rate_per_hour),
             format!("{:.4} USDC", job.current_balance),
             format_time_remaining(job.time_remaining),
-            job.provider
+            job.provider,
+            job.chain
         ]);
     });
 
@@ -138,6 +141,12 @@ fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("N/A")
+        .to_string();
+
+    // Determine blockchain type from job ID
+    let chain = Blockchain::blockchain_from_job_id(id.clone())
+        .unwrap_or(Blockchain::Arbitrum)
+        .as_str()
         .to_string();
 
     debug!(
@@ -218,6 +227,7 @@ fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
         current_balance,
         time_remaining,
         provider,
+        chain,
     })
 }
 

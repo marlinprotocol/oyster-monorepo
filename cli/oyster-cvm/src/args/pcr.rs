@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use serde_json;
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 #[group(multiple = true)]
 pub struct PcrArgs {
     /// Preset PCRs for known enclave images

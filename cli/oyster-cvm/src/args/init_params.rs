@@ -21,7 +21,7 @@ use crate::types::Platform;
 
 use super::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_AMD64, PCRS_BASE_BLUE_V1_0_0_ARM64};
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 #[group(multiple = true)]
 pub struct InitParamsArgs {
     /// Base64 encoded init params

@@ -1,0 +1,1829 @@
+{
+  "address": "DsrQF225MCwBNwKr4DiGFugyE9kwZ73wSPB2utjbvNUe",
+  "metadata": {
+    "name": "market_v",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "job_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "notice_period",
+          "type": "u64"
+        },
+        {
+          "name": "oyster_credit",
+          "type": "pubkey"
+        },
+        {
+          "name": "credit_mint",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "job_close",
+      "discriminator": [
+        135,
+        94,
+        228,
+        49,
+        115,
+        248,
+        186,
+        242
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_credit_token_account",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "job_deposit",
+      "discriminator": [
+        171,
+        141,
+        173,
+        204,
+        95,
+        204,
+        57,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_token_account",
+          "writable": true
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_credit_token_account",
+          "writable": true
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "job_open",
+      "discriminator": [
+        232,
+        70,
+        180,
+        247,
+        236,
+        235,
+        44,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.job_index",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_credit_token_account",
+          "writable": true
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "metadata",
+          "type": "string"
+        },
+        {
+          "name": "provider",
+          "type": "pubkey"
+        },
+        {
+          "name": "rate",
+          "type": "u64"
+        },
+        {
+          "name": "balance",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "job_revise_rate",
+      "discriminator": [
+        164,
+        23,
+        129,
+        74,
+        92,
+        145,
+        202,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        },
+        {
+          "name": "new_rate",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "job_settle",
+      "discriminator": [
+        82,
+        169,
+        166,
+        219,
+        13,
+        31,
+        169,
+        173
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "job_withdraw",
+      "discriminator": [
+        14,
+        93,
+        193,
+        116,
+        79,
+        110,
+        81,
+        165
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "provider_token_account",
+          "writable": true
+        },
+        {
+          "name": "program_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_mint",
+          "writable": true
+        },
+        {
+          "name": "program_credit_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  100,
+                  105,
+                  116,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "credit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_credit_token_account",
+          "writable": true
+        },
+        {
+          "name": "state",
+          "writable": true
+        },
+        {
+          "name": "credit_program_usdc_token_account",
+          "writable": true
+        },
+        {
+          "name": "credit_program",
+          "address": "GSFiwh4mAcbaD2yCU1jZh8YxLLzCkM4snWPQaBtS6GvY"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "provider_add",
+      "discriminator": [
+        228,
+        235,
+        214,
+        167,
+        124,
+        214,
+        9,
+        211
+      ],
+      "accounts": [
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "cp",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "provider_remove",
+      "discriminator": [
+        162,
+        210,
+        19,
+        174,
+        88,
+        172,
+        203,
+        15
+      ],
+      "accounts": [
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "provider_update_with_cp",
+      "discriminator": [
+        90,
+        199,
+        94,
+        64,
+        246,
+        243,
+        122,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "provider",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  118,
+                  105,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_cp",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "update_token",
+      "discriminator": [
+        92,
+        200,
+        25,
+        239,
+        138,
+        254,
+        58,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "market"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_token_mint",
+          "type": "pubkey"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Job",
+      "discriminator": [
+        75,
+        124,
+        80,
+        203,
+        161,
+        180,
+        202,
+        80
+      ]
+    },
+    {
+      "name": "Market",
+      "discriminator": [
+        219,
+        190,
+        213,
+        55,
+        0,
+        227,
+        198,
+        154
+      ]
+    },
+    {
+      "name": "Provider",
+      "discriminator": [
+        164,
+        180,
+        71,
+        17,
+        75,
+        216,
+        80,
+        195
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "JobClosed",
+      "discriminator": [
+        123,
+        63,
+        243,
+        153,
+        174,
+        212,
+        2,
+        55
+      ]
+    },
+    {
+      "name": "JobDeposited",
+      "discriminator": [
+        170,
+        87,
+        254,
+        201,
+        39,
+        96,
+        238,
+        32
+      ]
+    },
+    {
+      "name": "JobOpened",
+      "discriminator": [
+        194,
+        169,
+        75,
+        170,
+        253,
+        153,
+        200,
+        220
+      ]
+    },
+    {
+      "name": "JobRateRevised",
+      "discriminator": [
+        216,
+        120,
+        38,
+        61,
+        174,
+        14,
+        95,
+        89
+      ]
+    },
+    {
+      "name": "JobSettled",
+      "discriminator": [
+        130,
+        105,
+        205,
+        34,
+        87,
+        86,
+        152,
+        27
+      ]
+    },
+    {
+      "name": "JobSettlementWithdrawn",
+      "discriminator": [
+        97,
+        173,
+        28,
+        224,
+        21,
+        74,
+        23,
+        169
+      ]
+    },
+    {
+      "name": "JobWithdrew",
+      "discriminator": [
+        134,
+        6,
+        124,
+        15,
+        242,
+        148,
+        189,
+        125
+      ]
+    },
+    {
+      "name": "ProviderAdded",
+      "discriminator": [
+        206,
+        144,
+        232,
+        247,
+        30,
+        115,
+        117,
+        45
+      ]
+    },
+    {
+      "name": "ProviderRemoved",
+      "discriminator": [
+        192,
+        1,
+        155,
+        196,
+        113,
+        29,
+        126,
+        25
+      ]
+    },
+    {
+      "name": "ProviderUpdatedWithCp",
+      "discriminator": [
+        228,
+        4,
+        165,
+        30,
+        21,
+        123,
+        104,
+        66
+      ]
+    },
+    {
+      "name": "TokenUpdated",
+      "discriminator": [
+        75,
+        194,
+        205,
+        144,
+        160,
+        56,
+        53,
+        139
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ProviderAlreadyExists",
+      "msg": "Provider already exists"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidControlPlaneUrl",
+      "msg": "Invalid control plane URL"
+    },
+    {
+      "code": 6002,
+      "name": "ProviderNotFound",
+      "msg": "Provider not found"
+    },
+    {
+      "code": 6003,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidAmount",
+      "msg": "Invalid amount"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidRate",
+      "msg": "Invalid Rate"
+    },
+    {
+      "code": 6006,
+      "name": "UnchangedRate",
+      "msg": "Rate is unchanged"
+    },
+    {
+      "code": 6007,
+      "name": "InsufficientFundsToReviseRate",
+      "msg": "Insufficient funds to revise rate"
+    },
+    {
+      "code": 6008,
+      "name": "JobNotFound",
+      "msg": "Job not found"
+    },
+    {
+      "code": 6009,
+      "name": "CannotSettle",
+      "msg": "Cannot settle before lastSettled"
+    },
+    {
+      "code": 6010,
+      "name": "InsufficientBalance",
+      "msg": "Insufficient balance"
+    },
+    {
+      "code": 6011,
+      "name": "InvalidMint",
+      "msg": "Invalid mint"
+    }
+  ],
+  "types": [
+    {
+      "name": "Job",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "index",
+            "type": "u128"
+          },
+          {
+            "name": "metadata",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "rate",
+            "type": "u64"
+          },
+          {
+            "name": "balance",
+            "type": "u64"
+          },
+          {
+            "name": "last_settled",
+            "type": "u64"
+          },
+          {
+            "name": "credit_balance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobDeposited",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "from",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobOpened",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "metadata",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "rate",
+            "type": "u64"
+          },
+          {
+            "name": "balance",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobRateRevised",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_rate",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobSettlementWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "token",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobWithdrew",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "oyster_credit",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "credit_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "job_index",
+            "type": "u128"
+          },
+          {
+            "name": "notice_period",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Provider",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cp",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProviderAdded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "cp",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProviderRemoved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProviderUpdatedWithCp",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_cp",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_token_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ]
+}

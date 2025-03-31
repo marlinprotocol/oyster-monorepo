@@ -1,15 +1,35 @@
-use crate::utils::provider::create_provider;
+use crate::configs::blockchain::Blockchain;
+use crate::configs::global::SOLANA_USDC_MINT_ADDRESS;
+use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::{
     primitives::{Address, B256},
     providers::{Provider, WalletProvider},
     sol,
 };
+use anchor_client::solana_sdk::system_program;
+use anchor_lang::declare_program;
+use anchor_lang::prelude::Pubkey;
+use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use solana_transaction_status_client_types::UiTransactionEncoding;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
+
+declare_program!(market_v);
+use market_v::{
+    accounts::Job as SolanaMarketVJob, client::accounts::JobClose as SolanaMarketVJobClose,
+    client::accounts::JobReviseRate as SolanaMarketVJobReviseRate,
+    client::args::JobClose as SolanaMarketVJobCloseArgs,
+    client::args::JobReviseRate as SolanaMarketVJobReviseRateArgs,
+};
+
+declare_program!(oyster_credits);
+
+const SLEEP_FOR_JOB_CLOSE: u64 = 300;
 
 #[derive(Args)]
 pub struct StopArgs {
@@ -35,8 +55,26 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     info!("Stopping oyster instance with:");
     info!("  Job ID: {}", job_id);
 
-    // Setup provider
-    let provider = create_provider(wallet_private_key)
+    let blockchain = Blockchain::blockchain_from_job_id(job_id.clone())?;
+
+    if blockchain == Blockchain::Arbitrum {
+        stop_ethereum_oyster_instance(job_id, wallet_private_key, blockchain).await?;
+    } else if blockchain == Blockchain::Solana {
+        stop_solana_oyster_instance(job_id, wallet_private_key, blockchain).await?;
+    } else {
+        return Err(anyhow!("Unsupported blockchain"));
+    }
+
+    info!("Instance stopped successfully!");
+    Ok(())
+}
+
+async fn stop_ethereum_oyster_instance(
+    job_id: String,
+    wallet_private_key: &str,
+    blockchain: Blockchain,
+) -> Result<()> {
+    let provider = create_ethereum_provider(wallet_private_key, &blockchain)
         .await
         .context("Failed to create provider")?;
 
@@ -102,7 +140,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
 
     // Wait for 5 minutes before closing the job.
     info!("Waiting for 5 minutes before closing the job...");
-    sleep(Duration::from_secs(300)).await;
+    sleep(Duration::from_secs(SLEEP_FOR_JOB_CLOSE)).await;
 
     // Check if job is already closed before attempting to close
     let job = market
@@ -145,6 +183,152 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
         ));
     }
 
-    info!("Instance stopped successfully!");
+    Ok(())
+}
+
+async fn stop_solana_oyster_instance(
+    job_id: String,
+    wallet_private_key: &str,
+    blockchain: Blockchain,
+) -> Result<()> {
+    let provider = create_solana_provider(wallet_private_key, &blockchain)
+        .await
+        .context("Failed to create provider")?;
+
+    let program = provider
+        .program(market_v::ID)
+        .context("Failed to get program")?;
+
+    info!("Signer address: {:?}", program.payer());
+
+    let job_index = job_id.parse::<u128>().context("Failed to parse job ID")?;
+
+    let job_id_pa =
+        Pubkey::find_program_address(&[b"job", job_index.to_le_bytes().as_ref()], &market_v::ID).0;
+
+    let job = program.account::<SolanaMarketVJob>(job_id_pa).await;
+
+    if job.is_err() {
+        return Err(anyhow!("Job {} does not exist", job_id));
+    }
+
+    let job = job.unwrap();
+
+    info!("Found job, initiating rate update to 0...");
+
+    let market = Pubkey::find_program_address(&[b"market"], &market_v::ID).0;
+    let owner = program.payer();
+    let token_mint = Pubkey::from_str(SOLANA_USDC_MINT_ADDRESS)?;
+    let program_token_account =
+        Pubkey::find_program_address(&[b"job_token", token_mint.as_ref()], &market_v::ID).0;
+    let provider_token_account = get_associated_token_address(&job.provider, &token_mint);
+    let credit_mint = Pubkey::find_program_address(&[b"credit_mint"], &oyster_credits::ID).0;
+    let program_credit_token_account =
+        Pubkey::find_program_address(&[b"credit_token", credit_mint.as_ref()], &market_v::ID).0;
+    let state = Pubkey::find_program_address(&[b"state"], &oyster_credits::ID).0;
+    let credit_program_usdc_token_account =
+        Pubkey::find_program_address(&[b"program_usdc"], &oyster_credits::ID).0;
+
+    let signature = program
+        .request()
+        .accounts(SolanaMarketVJobReviseRate {
+            market,
+            job: job_id_pa,
+            owner,
+            token_mint,
+            program_token_account,
+            provider_token_account,
+            credit_mint,
+            program_credit_token_account,
+            state,
+            credit_program_usdc_token_account,
+            credit_program: credit_mint,
+            token_program: token::ID,
+            system_program: system_program::ID,
+        })
+        .args(SolanaMarketVJobReviseRateArgs {
+            job_index,
+            new_rate: 0,
+        })
+        .send()
+        .await;
+
+    let tx_hash = match signature {
+        Ok(signature) => signature,
+        Err(err) => {
+            return Err(anyhow!("Failed to send rate revise transaction: {:?}", err));
+        }
+    };
+
+    info!("Rate revise transaction sent: {:?}", tx_hash);
+
+    let receipt = program
+        .rpc()
+        .get_transaction(&tx_hash, UiTransactionEncoding::Base64)
+        .await?;
+
+    if receipt.transaction.meta.is_none() {
+        return Err(anyhow!("Failed to get transaction meta"));
+    }
+
+    info!("Job rate updated successfully to 0!");
+
+    // Wait for 5 minutes before closing the job.
+    info!("Waiting for 5 minutes before closing the job...");
+    sleep(Duration::from_secs(SLEEP_FOR_JOB_CLOSE)).await;
+
+    let user_token_account = get_associated_token_address(&job.owner, &token_mint);
+    let user_credit_token_account = get_associated_token_address(&job.owner, &credit_mint);
+
+    let signature = program
+        .request()
+        .accounts(SolanaMarketVJobClose {
+            market,
+            job: job_id_pa,
+            token_mint,
+            program_token_account,
+            user_token_account,
+            provider_token_account,
+            credit_mint,
+            program_credit_token_account,
+            user_credit_token_account,
+            owner,
+            state,
+            credit_program_usdc_token_account,
+            credit_program: credit_mint,
+            token_program: token::ID,
+            system_program: system_program::ID,
+        })
+        .args(SolanaMarketVJobCloseArgs { job_index })
+        .send()
+        .await;
+
+    let tx_hash = match signature {
+        Ok(signature) => signature,
+        Err(err) => {
+            return Err(anyhow!("Failed to send stop transaction: {:?}", err));
+        }
+    };
+
+    info!("Stop transaction sent: {:?}", tx_hash);
+
+    let receipt = program
+        .rpc()
+        .get_transaction(&tx_hash, UiTransactionEncoding::Base64)
+        .await?;
+
+    if receipt.transaction.meta.is_none() {
+        return Err(anyhow!("Failed to get transaction meta"));
+    }
+
+    let meta = receipt.transaction.meta.unwrap();
+
+    if !meta.err.is_none() {
+        return Err(anyhow!(
+            "Job close transaction failed: {:?}",
+            meta.err.unwrap()
+        ));
+    }
+
     Ok(())
 }

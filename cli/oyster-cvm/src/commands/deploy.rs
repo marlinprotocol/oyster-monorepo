@@ -1,11 +1,15 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     commands::log::{stream_logs, LogArgs},
-    configs::global::OYSTER_MARKET_ADDRESS,
+    configs::{
+        blockchain::Blockchain,
+        global::{OYSTER_MARKET_ADDRESS, SOLANA_USDC_MINT_ADDRESS},
+    },
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
-        provider::create_provider,
+        provider::{create_ethereum_provider, create_solana_provider},
+        solana::create_all_associated_token_accounts,
         token::approve_total_cost,
         usdc::format_usdc,
     },
@@ -17,14 +21,31 @@ use alloy::{
     sol,
     transports::http::Http,
 };
+use anchor_client::{
+    solana_sdk::{signature::Keypair, system_program},
+    Client as AnchorClient,
+};
+use anchor_lang::{declare_program, prelude::Pubkey};
+use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use solana_transaction_status_client_types::UiTransactionEncoding;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
 use tracing::{error, info};
+
+declare_program!(market_v);
+use market_v::{
+    accounts::{Market as SolanaMarketVMarket, Provider as SolanaMarketVProvider},
+    client::accounts::JobOpen as SolanaMarketVJobOpen,
+    client::args::JobOpen as SolanaMarketVJobOpenArgs,
+};
+
+declare_program!(oyster_credits);
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
@@ -41,15 +62,19 @@ sol!(
     "src/abis/oyster_market_abi.json"
 );
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct DeployArgs {
     /// Preset for parameters (e.g. blue)
     #[arg(long, default_value = "blue")]
     preset: String,
 
     /// Platform architecture (e.g. amd64, arm64)
-    #[arg(long, default_value = "arm64")]
+    #[arg(long, default_value = Platform::ARM64.as_str())]
     arch: Platform,
+
+    /// Select Blockchain
+    #[arg(long, default_value = Blockchain::Arbitrum.as_str())]
+    blockchain: Blockchain,
 
     #[command(flatten)]
     wallet: WalletArgs,
@@ -117,16 +142,99 @@ struct InstanceRate {
 }
 
 pub async fn deploy(args: DeployArgs) -> Result<()> {
-    tracing::info!("Starting deployment...");
+    info!("Starting deployment...");
 
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let result: (String, H256);
+    if args.blockchain == Blockchain::Arbitrum {
+        result = deploy_to_arbitrum(&args).await?;
+    } else if args.blockchain == Blockchain::Solana {
+        result = deploy_to_solana(&args).await?;
+    } else {
+        return Err(anyhow!("Unsupported blockchain: {:?}", args.blockchain));
+    }
+
+    let cp_url = result.0;
+    let job_id = result.1;
+
+    info!("Waiting for 3 minutes for enclave to start...");
+    tokio::time::sleep(StdDuration::from_secs(180)).await;
+
+    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
+    info!("IP address obtained: {}", ip_address);
+
+    if !check_reachability(&ip_address).await {
+        return Err(anyhow!("Reachability check failed after maximum retries"));
+    }
+
+    info!("Enclave is ready! IP address: {}", ip_address);
+
+    if args.debug && !&args.no_stream {
+        info!("Debug mode enabled - starting log streaming...");
+        stream_logs(LogArgs {
+            ip: ip_address,
+            start_from: Some("0".into()),
+            with_log_id: true,
+            quiet: false,
+        })
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn deploy_to_arbitrum(args: &DeployArgs) -> Result<(String, H256)> {
+    let provider =
+        create_ethereum_provider(&args.wallet.load_required()?, &args.blockchain).await?;
 
     // Get CP URL using the configured provider
-    let cp_url = get_operator_cp(&args.operator, provider.clone())
+    let cp_url = get_ethereum_operator_cp(&args.operator, provider.clone())
         .await
         .context("Failed to get CP URL")?;
     info!("CP URL for operator: {}", cp_url);
 
+    let (metadata, total_cost, total_rate) = get_metadata_and_costs(&cp_url, args.clone()).await?;
+
+    approve_total_cost(total_cost, provider.clone()).await?;
+
+    // Create job
+    let job_id = create_new_oyster_job_on_ethereum(
+        metadata,
+        args.operator.parse()?,
+        total_rate,
+        total_cost,
+        provider.clone(),
+    )
+    .await?;
+    info!("Job created with ID: {:?}", job_id);
+
+    Ok((cp_url, job_id))
+}
+
+async fn deploy_to_solana(args: &DeployArgs) -> Result<(String, H256)> {
+    let provider: AnchorClient<Rc<Keypair>> =
+        create_solana_provider(&args.wallet.load_required()?, &args.blockchain).await?;
+
+    let cp_url = get_solana_operator_cp(&args.operator, &provider)
+        .await
+        .context("Failed to get CP URL")?;
+    info!("CP URL for operator: {}", cp_url);
+
+    let (metadata, total_cost, total_rate) = get_metadata_and_costs(&cp_url, args.clone()).await?;
+
+    let job_id = create_new_oyster_job_on_solana(
+        metadata,
+        args.operator.parse()?,
+        total_rate,
+        total_cost,
+        &provider,
+    )
+    .await?;
+    info!("Job created with ID: {:?}", job_id);
+
+    Ok((cp_url, job_id))
+}
+
+async fn get_metadata_and_costs(cp_url: &str, args: DeployArgs) -> Result<(String, U256, U256)> {
     // Fetch operator specs from CP URL
     let spec_url = format!("{}/spec", cp_url);
     let operator_spec = fetch_operator_spec(&spec_url)
@@ -211,46 +319,10 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .unwrap_or("".into()),
     );
 
-    approve_total_cost(total_cost, provider.clone()).await?;
-
-    // Create job
-    let job_id = create_new_oyster_job(
-        metadata,
-        args.operator.parse()?,
-        total_rate,
-        total_cost,
-        provider.clone(),
-    )
-    .await?;
-    info!("Job created with ID: {:?}", job_id);
-
-    info!("Waiting for 3 minutes for enclave to start...");
-    tokio::time::sleep(StdDuration::from_secs(180)).await;
-
-    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
-    info!("IP address obtained: {}", ip_address);
-
-    if !check_reachability(&ip_address).await {
-        return Err(anyhow!("Reachability check failed after maximum retries"));
-    }
-
-    info!("Enclave is ready! IP address: {}", ip_address);
-
-    if args.debug && !args.no_stream {
-        info!("Debug mode enabled - starting log streaming...");
-        stream_logs(LogArgs {
-            ip: ip_address,
-            start_from: Some("0".into()),
-            with_log_id: true,
-            quiet: false,
-        })
-        .await?;
-    }
-
-    Ok(())
+    Ok((metadata, total_cost, total_rate))
 }
 
-async fn create_new_oyster_job(
+async fn create_new_oyster_job_on_ethereum(
     metadata: String,
     provider_addr: Address,
     rate: U256,
@@ -312,6 +384,127 @@ async fn get_receipt_and_job_id(
     Err(anyhow!(
         "Could not find JobOpened event in transaction receipt"
     ))
+}
+
+async fn create_new_oyster_job_on_solana(
+    metadata: String,
+    provider_addr: Pubkey,
+    rate: U256,
+    balance: U256,
+    provider: &AnchorClient<Rc<Keypair>>,
+) -> Result<H256> {
+    let program = provider
+        .program(market_v::ID)
+        .context("Failed to get program")?;
+
+    let market = Pubkey::find_program_address(&[b"market"], &market_v::ID).0;
+    let job_index = program
+        .account::<SolanaMarketVMarket>(market)
+        .await?
+        .job_index;
+    let job =
+        Pubkey::find_program_address(&[b"job", job_index.to_le_bytes().as_ref()], &market_v::ID).0;
+    let owner = program.payer();
+    let token_mint = Pubkey::from_str(SOLANA_USDC_MINT_ADDRESS)?;
+    let program_token_account =
+        Pubkey::find_program_address(&[b"job_token", token_mint.as_ref()], &market_v::ID).0;
+
+    let user_token_account = get_associated_token_address(&owner, &token_mint);
+    let provider_token_account = get_associated_token_address(&provider_addr, &token_mint);
+    let credit_mint = Pubkey::find_program_address(&[b"credit_mint"], &oyster_credits::ID).0;
+    let program_credit_token_account =
+        Pubkey::find_program_address(&[b"credit_token", credit_mint.as_ref()], &market_v::ID).0;
+    let user_credit_token_account = get_associated_token_address(&owner, &credit_mint);
+    let state = Pubkey::find_program_address(&[b"state"], &oyster_credits::ID).0;
+    let credit_program_usdc_token_account =
+        Pubkey::find_program_address(&[b"program_usdc"], &oyster_credits::ID).0;
+
+    create_all_associated_token_accounts(
+        &program.payer(),
+        &provider_addr,
+        &token_mint,
+        &credit_mint,
+        &program,
+    )
+    .await?;
+
+    let signature = program
+        .request()
+        .accounts(SolanaMarketVJobOpen {
+            market,
+            job,
+            owner,
+            token_mint,
+            program_token_account,
+            user_token_account,
+            provider_token_account,
+            credit_mint,
+            program_credit_token_account,
+            user_credit_token_account,
+            state,
+            credit_program_usdc_token_account,
+            token_program: token::ID,
+            credit_program: oyster_credits::ID,
+            system_program: system_program::ID,
+        })
+        .args(SolanaMarketVJobOpenArgs {
+            metadata,
+            provider: provider_addr,
+            rate: rate.to::<u64>(),
+            balance: balance.to::<u64>(),
+        })
+        .send()
+        .await?;
+
+    info!("Job creation signature: {:?}", signature);
+
+    let receipt = program
+        .rpc()
+        .get_transaction(&signature, UiTransactionEncoding::Base64)
+        .await?;
+
+    if receipt.transaction.meta.is_none() {
+        return Err(anyhow!("Failed to get transaction meta"));
+    }
+
+    let meta = receipt.transaction.meta.unwrap();
+
+    if meta.err.is_some() {
+        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
+    }
+
+    if meta.log_messages.is_none() {
+        return Err(anyhow!("No log messages found"));
+    }
+
+    let log_messages = meta.log_messages.unwrap();
+
+    for log in log_messages.iter() {
+        // TODO: Check logs and see if job id is in the logs
+        println!("Log: {}", log);
+        println!(
+            "Job ID: {}",
+            log.split("JobOpened(")
+                .nth(1)
+                .unwrap()
+                .split(",")
+                .nth(0)
+                .unwrap()
+                .parse::<H256>()?
+        );
+        if log.contains("JobOpened") {
+            return Ok(log
+                .split("JobOpened(")
+                .nth(1)
+                .unwrap()
+                .split(",")
+                .nth(0)
+                .unwrap()
+                .parse::<H256>()?);
+        }
+    }
+
+    Err(anyhow!("No JobOpened event found"))
 }
 
 async fn fetch_operator_spec(url: &str) -> Result<Operator> {
@@ -544,7 +737,7 @@ async fn calculate_total_cost(
     Ok((total_cost_scaled, total_rate_scaled))
 }
 
-async fn get_operator_cp(
+async fn get_ethereum_operator_cp(
     provider_address: &str,
     provider: impl Provider<Http<Client>, Ethereum> + WalletProvider,
 ) -> Result<String> {
@@ -562,6 +755,33 @@ async fn get_operator_cp(
         Err(e) => {
             error!("Failed to get CP URL: {:?}", e);
             Err(anyhow!("Failed to get CP URL"))
+        }
+    }
+}
+
+async fn get_solana_operator_cp(
+    provider_address: &str,
+    provider: &AnchorClient<Rc<Keypair>>,
+) -> Result<String> {
+    let Ok(program) = provider.program(market_v::ID) else {
+        return Err(anyhow!("Failed to get program"));
+    };
+
+    let provider_address =
+        Pubkey::from_str(provider_address).context("Failed to parse provider address")?;
+
+    let provider_address_pa =
+        Pubkey::find_program_address(&[b"provider", provider_address.as_ref()], &market_v::ID).0;
+
+    let operator = program
+        .account::<SolanaMarketVProvider>(provider_address_pa)
+        .await;
+
+    match operator {
+        Ok(operator) => Ok(operator.cp),
+        Err(e) => {
+            error!("Failed to get operator. Error: {:?}", e);
+            Err(anyhow!("Failed to get operator"))
         }
     }
 }

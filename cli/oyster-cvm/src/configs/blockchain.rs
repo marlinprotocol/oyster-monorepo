@@ -1,0 +1,64 @@
+use alloy::primitives::U256;
+use anyhow::{anyhow, Result};
+use clap::ValueEnum;
+use std::u64;
+
+// RPC URLs
+const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
+const SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
+
+// Chain IDs
+const ARBITRUM_ONE_CHAIN_ID: u64 = 42161;
+
+// Supported blockchains
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Blockchain {
+    Arbitrum,
+    Solana,
+}
+
+impl Blockchain {
+    pub fn blockchain_from_job_id(job_id: String) -> Result<Self> {
+        let job_id_numeric = job_id.parse::<U256>().expect("Invalid job ID format");
+
+        // Extract chain ID
+        let chain_id: u64 = (job_id_numeric >> 192_u32).to::<u64>();
+
+        match chain_id {
+            ARBITRUM_ONE_CHAIN_ID => Ok(Blockchain::Arbitrum),
+            _ => {
+                // Check if it matches Solana's pattern
+                let mask = U256::from(u64::MAX);
+                if (job_id_numeric >> 64) & mask == mask {
+                    Ok(Blockchain::Solana)
+                } else {
+                    Err(anyhow!("Unsupported job ID format: {}", job_id))
+                }
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Blockchain::Arbitrum => "arbitrum",
+            Blockchain::Solana => "solana",
+        }
+    }
+
+    pub fn rpc_url(&self) -> &'static str {
+        match self {
+            Blockchain::Arbitrum => ARBITRUM_ONE_RPC_URL,
+            Blockchain::Solana => SOLANA_RPC_URL,
+        }
+    }
+}
+
+impl ValueEnum for Blockchain {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Arbitrum, Self::Solana]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(self.as_str().into())
+    }
+}
