@@ -40,7 +40,7 @@ mod job_closed;
 use job_closed::handle_job_closed;
 
 // job logs
-static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address)");
+static JOB_OPENED: [u8; 32] = event!("JobOpened(bytes32,string,address,address,uint256)");
 static JOB_DEPOSITED: [u8; 32] = event!("JobDeposited(bytes32,address,address,uint256)");
 static JOB_RATE_REVISED: [u8; 32] = event!("JobRateRevised(bytes32,uint256)");
 static JOB_SETTLED: [u8; 32] = event!("JobSettled(bytes32,uint256)");
@@ -48,7 +48,7 @@ static JOB_SETTLED_WITHDRAW: [u8; 32] =
     event!("JobSettlementWithdrawn(bytes32,address,address,uint256)");
 static JOB_WITHDRAWN: [u8; 32] = event!("JobWithdrawn(bytes32,address,address,uint256)");
 static JOB_METADATA_UPDATED: [u8; 32] = event!("JobMetadataUpdated(bytes32,string)");
-static JOB_CLOSED: [u8; 32] = event!("JobClosed(bytes32)");
+static JOB_CLOSED: [u8; 32] = event!("JobClosed(bytes32,uint256)");
 
 // provider logs
 static PROVIDER_ADDED: [u8; 32] = event!("ProviderAdded(address,string)");
