@@ -99,6 +99,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -119,6 +120,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -145,26 +147,29 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
-                )
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
+                ),
             ])
         );
-
         // log under test
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
@@ -214,23 +219,27 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
-                )
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
+                ),
             ])
         );
 
@@ -270,6 +279,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -295,11 +305,13 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             )])
         );
 
@@ -352,11 +364,13 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             )])
         );
 
@@ -396,6 +410,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -416,6 +431,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -442,23 +458,27 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
-                )
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
+                ),
             ])
         );
 
@@ -512,22 +532,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
