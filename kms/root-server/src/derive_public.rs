@@ -1,15 +1,16 @@
+use crate::AppState;
 use axum::{
     extract::{Query, State},
-    http::{header, HeaderValue, StatusCode}, response::IntoResponse,
+    http::{header, HeaderValue, StatusCode},
+    response::IntoResponse,
 };
 use kms_derive_utils::{
     derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_solana_address,
-    to_secp256k1_ethereum_address, to_secp256k1_public, to_x25519_public, to_secp256k1_secret,
+    to_secp256k1_ethereum_address, to_secp256k1_public, to_secp256k1_secret, to_x25519_public,
 };
-use serde::Deserialize;
-use sha2::{Sha256, Digest};
 use secp256k1::{Message, Secp256k1, SecretKey};
-use crate::AppState;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Deserialize)]
 pub struct Params {
@@ -42,14 +43,11 @@ impl Params {
     }
 }
 
-// get authorisation public key  
-pub async fn get_public(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-
+// get authorisation public key
+pub async fn get_public(State(state): State<AppState>) -> impl IntoResponse {
     let public = to_secp256k1_public(state.seed);
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
     let message_hash = Sha256::digest(public);
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -69,15 +67,14 @@ pub async fn derive_secp256k1_public(
     State(state): State<AppState>,
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
-
     let Some(path_key) = params.derive_path_seed(state.seed) else {
         return (StatusCode::BAD_REQUEST, [0; 64]).into_response();
     };
     let public = to_secp256k1_public(path_key);
 
     // sign the public key
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp = Secp256k1::new();
     let message_hash = Sha256::digest(public);
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -85,7 +82,7 @@ pub async fn derive_secp256k1_public(
 
     let mut response = (StatusCode::OK, public).into_response();
     response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"), 
+        header::HeaderName::from_static("x-kms-signature"),
         HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
     );
 
@@ -102,8 +99,8 @@ pub async fn derive_secp256k1_address_ethereum(
     };
     let address = to_secp256k1_ethereum_address(path_key);
 
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp = Secp256k1::new();
     let message_hash = Sha256::digest(address.clone());
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -128,8 +125,8 @@ pub async fn derive_ed25519_public(
     };
     let public = to_ed25519_public(path_key);
 
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp = Secp256k1::new();
     let message_hash = Sha256::digest(public);
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -153,9 +150,9 @@ pub async fn derive_ed25519_address_solana(
         return (StatusCode::BAD_REQUEST, String::new()).into_response();
     };
     let address = to_ed25519_solana_address(path_key);
-    
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp = Secp256k1::new();
     let message_hash = Sha256::digest(address.clone());
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -179,9 +176,9 @@ pub async fn derive_x25519_public(
         return (StatusCode::BAD_REQUEST, [0; 32]).into_response();
     };
     let public = to_x25519_public(path_key);
-    
-    let secret_key = SecretKey::from_slice(&to_secp256k1_secret(state.seed))
-    .expect("Invalid private key");
+
+    let secret_key =
+        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
     let secp = Secp256k1::new();
     let message_hash = Sha256::digest(public);
     let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
@@ -195,4 +192,3 @@ pub async fn derive_x25519_public(
 
     response
 }
-

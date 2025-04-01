@@ -25,8 +25,6 @@ mod derive_public;
 mod scallop;
 mod taco;
 
-
-
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -130,16 +128,14 @@ async fn main() -> Result<()> {
     .as_ref()
     .try_into()
     .context("seed is not the right size")?;
-    
+
     let secret: [u8; 32] = read(args.secret_path)
         .await
         .context("failed to read secret file")?
         .try_into()
         .map_err(|_| anyhow!("failed to parse secret file"))?;
 
-
-
-    let scallop_app_state = AppState {seed};
+    let scallop_app_state = AppState { seed };
     let public_app_state = scallop_app_state.clone();
 
     // Panic safety: we simply abort on panics and eschew any handling
