@@ -24,6 +24,8 @@ mod derive;
 mod derive_public;
 mod scallop;
 mod taco;
+use sha2::{Sha256, Digest};
+use secp256k1::{Secp256k1, SecretKey, PublicKey};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -80,6 +82,8 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     seed: [u8; 64],
+    private_key: SecretKey,
+    public_key: PublicKey,
 }
 
 #[tokio::main]
@@ -113,7 +117,7 @@ async fn main() -> Result<()> {
     let encrypted_seed = fs::read(args.seed_path)
         .await
         .context("failed to read seed file")?;
-    let seed = decrypt(
+    let seed: [u8; 64] = decrypt(
         &encrypted_seed,
         args.ritual,
         &taco_nodes,
@@ -128,13 +132,21 @@ async fn main() -> Result<()> {
     .try_into()
     .context("seed is not the right size")?;
 
+
+    let hash = Sha256::digest(seed.clone());
+    let secp = Secp256k1::new();
+
+    let privkey = SecretKey::from_slice(&hash).expect("Valid private key");
+    
+    let pubkey = PublicKey::from_secret_key(&secp, &privkey);
+
     let secret: [u8; 32] = read(args.secret_path)
         .await
         .context("failed to read secret file")?
         .try_into()
         .map_err(|_| anyhow!("failed to parse secret file"))?;
 
-    let scallop_app_state = AppState { seed };
+    let scallop_app_state = AppState {seed, private_key: privkey, public_key: pubkey};
     let public_app_state = scallop_app_state.clone();
 
     // Panic safety: we simply abort on panics and eschew any handling
@@ -229,6 +241,10 @@ async fn run_public_server(app_state: AppState, listen_addr: String) -> Result<(
         .route(
             "/derive/x25519/public",
             get(derive_public::derive_x25519_public),
+        )
+        .route(
+            "/get/public",
+            get(derive_public::get_public),
         )
         // middleware is executed bottom to top here
         // we want timeouts to be first, then size checks
