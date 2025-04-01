@@ -1,6 +1,7 @@
 use alloy::primitives::U256;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
+use std::str::FromStr;
 use std::u64;
 
 // RPC URLs
@@ -19,7 +20,7 @@ pub enum Blockchain {
 
 impl Blockchain {
     pub fn blockchain_from_job_id(job_id: String) -> Result<Self> {
-        let job_id_numeric = job_id.parse::<U256>().expect("Invalid job ID format");
+        let job_id_numeric = U256::from_str(&job_id).context("Invalid job ID format")?;
 
         // Extract chain ID
         let chain_id: u64 = (job_id_numeric >> 192_u32).to::<u64>();

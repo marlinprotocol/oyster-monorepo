@@ -18,7 +18,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::time::sleep;
 use tracing::{debug, info};
 
 declare_program!(market_v);
@@ -412,6 +413,10 @@ async fn withdraw_from_solana_job(
     );
 
     let signature = signature.unwrap();
+
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(Duration::from_secs(20)).await;
 
     let receipt = program
         .rpc()

@@ -242,7 +242,7 @@ async fn stop_solana_oyster_instance(
             program_credit_token_account,
             state,
             credit_program_usdc_token_account,
-            credit_program: credit_mint,
+            credit_program: oyster_credits::ID,
             token_program: token::ID,
             system_program: system_program::ID,
         })
@@ -261,6 +261,10 @@ async fn stop_solana_oyster_instance(
     };
 
     info!("Rate revise transaction sent: {:?}", tx_hash);
+
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(Duration::from_secs(20)).await;
 
     let receipt = program
         .rpc()
@@ -311,6 +315,10 @@ async fn stop_solana_oyster_instance(
     };
 
     info!("Stop transaction sent: {:?}", tx_hash);
+
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(Duration::from_secs(20)).await;
 
     let receipt = program
         .rpc()

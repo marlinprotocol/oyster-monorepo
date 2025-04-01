@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::time::Duration as StdDuration;
 
 use crate::args::wallet::WalletArgs;
 use crate::configs::blockchain::Blockchain;
@@ -18,6 +19,7 @@ use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use solana_transaction_status_client_types::UiTransactionEncoding;
+use tokio::time::sleep;
 use tracing::{error, info};
 
 declare_program!(market_v);
@@ -149,10 +151,7 @@ async fn deposit_to_solana_job(args: DepositArgs, blockchain: Blockchain) -> Res
         .program(market_v::ID)
         .context("Failed to get program")?;
 
-    let job_index = args
-        .job_id
-        .parse::<u128>()
-        .context("Failed to parse job ID")?;
+    let job_index = U256::from_str(&args.job_id).unwrap().to::<u128>();
 
     let job_id_pa =
         Pubkey::find_program_address(&[b"job", job_index.to_le_bytes().as_ref()], &market_v::ID).0;
@@ -210,6 +209,10 @@ async fn deposit_to_solana_job(args: DepositArgs, blockchain: Blockchain) -> Res
     let signature = signature.unwrap();
 
     info!("Deposit transaction hash: {:?}", signature);
+
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(StdDuration::from_secs(20)).await;
 
     let receipt = program
         .rpc()

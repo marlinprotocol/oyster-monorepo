@@ -12,6 +12,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::str::FromStr;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::info;
 
 declare_program!(market_v);
@@ -234,6 +236,10 @@ async fn update_solana_job(args: UpdateArgs, blockchain: Blockchain) -> Result<(
     info!("Update transaction sent. Transaction hash: {:?}", signature);
 
     let signature = signature.unwrap();
+
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(Duration::from_secs(20)).await;
 
     let receipt = program
         .rpc()

@@ -22,7 +22,10 @@ use alloy::{
     transports::http::Http,
 };
 use anchor_client::{
-    solana_sdk::{signature::Keypair, system_program},
+    solana_sdk::{
+        signature::{Keypair, Signature},
+        system_program,
+    },
     Client as AnchorClient,
 };
 use anchor_lang::{declare_program, prelude::Pubkey};
@@ -35,7 +38,7 @@ use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, time::sleep};
 use tracing::{error, info};
 
 declare_program!(market_v);
@@ -229,7 +232,10 @@ async fn deploy_to_solana(args: &DeployArgs) -> Result<(String, H256)> {
         &provider,
     )
     .await?;
-    info!("Job created with ID: {:?}", job_id);
+
+    let job_id_u128 = U256::from_str(&job_id.to_string()).unwrap().to::<u128>();
+
+    info!("Job created with ID: {:?}", job_id_u128);
 
     Ok((cp_url, job_id))
 }
@@ -428,7 +434,7 @@ async fn create_new_oyster_job_on_solana(
     )
     .await?;
 
-    let signature = program
+    let signature: Signature = program
         .request()
         .accounts(SolanaMarketVJobOpen {
             market,
@@ -458,10 +464,21 @@ async fn create_new_oyster_job_on_solana(
 
     info!("Job creation signature: {:?}", signature);
 
+    // sleep for 20 seconds
+    info!("Sleeping for 20 seconds before fetching transaction receipt");
+    sleep(StdDuration::from_secs(20)).await;
+
     let receipt = program
         .rpc()
-        .get_transaction(&signature, UiTransactionEncoding::Base64)
-        .await?;
+        .get_transaction(&signature, UiTransactionEncoding::Json)
+        .await;
+
+    let Ok(receipt) = receipt else {
+        return Err(anyhow!(
+            "Failed to get transaction receipt: {:?}",
+            receipt.unwrap_err()
+        ));
+    };
 
     if receipt.transaction.meta.is_none() {
         return Err(anyhow!("Failed to get transaction meta"));
@@ -473,38 +490,7 @@ async fn create_new_oyster_job_on_solana(
         return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
     }
 
-    if meta.log_messages.is_none() {
-        return Err(anyhow!("No log messages found"));
-    }
-
-    let log_messages = meta.log_messages.unwrap();
-
-    for log in log_messages.iter() {
-        // TODO: Check logs and see if job id is in the logs
-        println!("Log: {}", log);
-        println!(
-            "Job ID: {}",
-            log.split("JobOpened(")
-                .nth(1)
-                .unwrap()
-                .split(",")
-                .nth(0)
-                .unwrap()
-                .parse::<H256>()?
-        );
-        if log.contains("JobOpened") {
-            return Ok(log
-                .split("JobOpened(")
-                .nth(1)
-                .unwrap()
-                .split(",")
-                .nth(0)
-                .unwrap()
-                .parse::<H256>()?);
-        }
-    }
-
-    Err(anyhow!("No JobOpened event found"))
+    Ok(H256::from(U256::from(job_index)))
 }
 
 async fn fetch_operator_spec(url: &str) -> Result<Operator> {
