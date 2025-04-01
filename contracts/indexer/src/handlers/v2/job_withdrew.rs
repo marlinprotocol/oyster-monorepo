@@ -1,6 +1,7 @@
 use std::ops::Sub;
 use std::str::FromStr;
 
+use crate::constants::get_usdc_address;
 use crate::schema::jobs;
 use crate::schema::transactions;
 use alloy::hex::ToHexExt;
@@ -18,7 +19,6 @@ use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
 
-const USDC_ADDRESS: &str = "0xf4137957B53668800CEAb1Eb71ACb91aDdD1D8fe";
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
 pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
@@ -29,7 +29,7 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     let amount = U256::abi_decode(&log.data().data, true)?;
     let amount = BigDecimal::from_str(&amount.to_string())?;
 
-    let is_usdc = token == USDC_ADDRESS;
+    let is_usdc = token == get_usdc_address().to_checksum(None);
 
     let block = log
         .block_number

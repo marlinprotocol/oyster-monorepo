@@ -18,7 +18,8 @@ use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
 
-const USDC_ADDRESS: &str = "0xf4137957B53668800CEAb1Eb71ACb91aDdD1D8fe";
+use crate::constants::get_usdc_address;
+
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
 pub fn handle_job_settlement_withdraw(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
@@ -38,7 +39,7 @@ pub fn handle_job_settlement_withdraw(conn: &mut PgConnection, log: Log) -> Resu
         .ok_or(anyhow!("did not get tx hash from log"))?
         .encode_hex_with_prefix();
 
-    let is_usdc = token == USDC_ADDRESS;
+    let is_usdc = token == get_usdc_address().to_checksum(None);
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed

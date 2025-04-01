@@ -1,7 +1,7 @@
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use diesel::PgConnection;
-use tracing::{info, instrument, warn};
+use tracing::{instrument, warn};
 
 mod v1;
 mod v2;

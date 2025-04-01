@@ -18,7 +18,8 @@ use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
 
-const USDC_ADDRESS: &str = "0xf4137957B53668800CEAb1Eb71ACb91aDdD1D8fe";
+use crate::constants::get_usdc_address;
+
 fn handle_usdc_deposit(
     conn: &mut PgConnection,
     id: &str,
@@ -141,12 +142,12 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
         .ok_or(anyhow!("did not get tx hash from log"))?
         .encode_hex_with_prefix();
 
-    let is_usdc = token == USDC_ADDRESS;
+    let is_usdc = token == get_usdc_address().to_checksum(None);
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, token, ?amount, "depositing into job");
+    info!(id, token, ?amount, is_usdc, "depositing into job");
     if is_usdc {
         handle_usdc_deposit(conn, &id, &amount, block, idx, tx_hash)?;
     } else {
