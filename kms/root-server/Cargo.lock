@@ -2955,6 +2955,7 @@ dependencies = [
  "bincode 2.0.1",
  "chrono",
  "clap",
+ "ed25519-dalek",
  "hex",
  "kms-derive-utils",
  "nucypher-core",
