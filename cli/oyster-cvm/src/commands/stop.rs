@@ -22,9 +22,7 @@ use tracing::info;
 declare_program!(market_v);
 use market_v::{
     accounts::Job as SolanaMarketVJob, client::accounts::JobClose as SolanaMarketVJobClose,
-    client::accounts::JobReviseRate as SolanaMarketVJobReviseRate,
     client::args::JobClose as SolanaMarketVJobCloseArgs,
-    client::args::JobReviseRate as SolanaMarketVJobReviseRateArgs,
 };
 
 declare_program!(oyster_credits);
@@ -104,43 +102,6 @@ async fn stop_ethereum_oyster_instance(
     if job.owner == Address::ZERO {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
-
-    // First, set the job's rate to 0 using the jobReviseRateInitiate call.
-    info!("Found job, initiating rate update to 0...");
-    let revise_send_result = market
-        .jobReviseRate(job_id_bytes, alloy::primitives::U256::from(0))
-        .send()
-        .await;
-    let revise_tx_hash = match revise_send_result {
-        Ok(tx_call_result) => tx_call_result
-            .watch()
-            .await
-            .context("Failed to get transaction hash for rate revise")?,
-        Err(err) => {
-            return Err(anyhow!("Failed to send rate revise transaction: {:?}", err));
-        }
-    };
-
-    info!("Rate revise transaction sent: {:?}", revise_tx_hash);
-
-    // Verify the revise transaction execution.
-    let revise_receipt = market
-        .provider()
-        .get_transaction_receipt(revise_tx_hash)
-        .await
-        .context("Failed to get transaction receipt for rate revise")?
-        .ok_or_else(|| anyhow!("Rate revise transaction receipt not found"))?;
-    if !revise_receipt.status() {
-        return Err(anyhow!(
-            "Rate revise transaction failed - check contract interaction"
-        ));
-    }
-
-    info!("Job rate updated successfully to 0!");
-
-    // Wait for 5 minutes before closing the job.
-    info!("Waiting for 5 minutes before closing the job...");
-    sleep(Duration::from_secs(SLEEP_FOR_JOB_CLOSE)).await;
 
     // Check if job is already closed before attempting to close
     let job = market
@@ -228,58 +189,6 @@ async fn stop_solana_oyster_instance(
     let state = Pubkey::find_program_address(&[b"state"], &oyster_credits::ID).0;
     let credit_program_usdc_token_account =
         Pubkey::find_program_address(&[b"program_usdc"], &oyster_credits::ID).0;
-
-    let signature = program
-        .request()
-        .accounts(SolanaMarketVJobReviseRate {
-            market,
-            job: job_id_pa,
-            owner,
-            token_mint,
-            program_token_account,
-            provider_token_account,
-            credit_mint,
-            program_credit_token_account,
-            state,
-            credit_program_usdc_token_account,
-            credit_program: oyster_credits::ID,
-            token_program: token::ID,
-            system_program: system_program::ID,
-        })
-        .args(SolanaMarketVJobReviseRateArgs {
-            job_index,
-            new_rate: 0,
-        })
-        .send()
-        .await;
-
-    let tx_hash = match signature {
-        Ok(signature) => signature,
-        Err(err) => {
-            return Err(anyhow!("Failed to send rate revise transaction: {:?}", err));
-        }
-    };
-
-    info!("Rate revise transaction sent: {:?}", tx_hash);
-
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(Duration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&tx_hash, UiTransactionEncoding::Base64)
-        .await?;
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    info!("Job rate updated successfully to 0!");
-
-    // Wait for 5 minutes before closing the job.
-    info!("Waiting for 5 minutes before closing the job...");
-    sleep(Duration::from_secs(SLEEP_FOR_JOB_CLOSE)).await;
 
     let user_token_account = get_associated_token_address(&job.owner, &token_mint);
     let user_credit_token_account = get_associated_token_address(&job.owner, &credit_mint);
