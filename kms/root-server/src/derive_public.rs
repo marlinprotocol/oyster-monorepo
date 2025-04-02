@@ -5,12 +5,9 @@ use axum::{
     response::IntoResponse,
 };
 use kms_derive_utils::{
-    derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_solana_address,
-    to_secp256k1_ethereum_address, to_secp256k1_public, to_secp256k1_secret, to_x25519_public,
+    derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_secret, to_ed25519_solana_address, to_secp256k1_ethereum_address, to_secp256k1_public, to_secp256k1_secret, to_x25519_public
 };
-use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 
 #[derive(Deserialize)]
@@ -46,8 +43,8 @@ impl Params {
 
 // get authorisation public key
 pub async fn get_public(State(state): State<AppState>) -> impl IntoResponse {
-    let public = to_secp256k1_public(state.seed);
-    
+    let public = to_ed25519_public(state.seed);
+
     let mut signing_key = state.signing_key.clone();
     let signature  = signing_key
         .sign(&public);
@@ -72,17 +69,15 @@ pub async fn derive_secp256k1_public(
     let public = to_secp256k1_public(path_key);
 
     // sign the public key
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp = Secp256k1::new();
-    let message_hash = Sha256::digest(public);
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    let secret_key = to_ed25519_secret(state.seed);
+    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
+    let signature  = signing_key
+        .sign(&public);
 
     let mut response = (StatusCode::OK, public).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
@@ -98,17 +93,15 @@ pub async fn derive_secp256k1_address_ethereum(
     };
     let address = to_secp256k1_ethereum_address(path_key);
 
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp = Secp256k1::new();
-    let message_hash = Sha256::digest(address.clone());
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    let secret_key = to_ed25519_secret(state.seed);
+    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
+    let signature  = signing_key
+        .sign(&address.clone().into_bytes());
 
     let mut response = (StatusCode::OK, address).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
@@ -124,17 +117,15 @@ pub async fn derive_ed25519_public(
     };
     let public = to_ed25519_public(path_key);
 
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp = Secp256k1::new();
-    let message_hash = Sha256::digest(public);
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    let secret_key = to_ed25519_secret(state.seed);
+    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
+    let signature  = signing_key
+        .sign(&public);
 
     let mut response = (StatusCode::OK, public).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
@@ -150,17 +141,15 @@ pub async fn derive_ed25519_address_solana(
     };
     let address = to_ed25519_solana_address(path_key);
 
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp = Secp256k1::new();
-    let message_hash = Sha256::digest(address.clone());
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    let secret_key = to_ed25519_secret(state.seed);
+    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
+    let signature  = signing_key
+        .sign(&address.clone().into_bytes());
 
     let mut response = (StatusCode::OK, address).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
@@ -176,17 +165,15 @@ pub async fn derive_x25519_public(
     };
     let public = to_x25519_public(path_key);
 
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp = Secp256k1::new();
-    let message_hash = Sha256::digest(public);
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    let secret_key = to_ed25519_secret(state.seed);
+    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
+    let signature  = signing_key
+        .sign(&public);
 
     let mut response = (StatusCode::OK, public).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
