@@ -177,11 +177,13 @@ mod tests {
                 "some metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(1),
-                BigDecimal::from(2),
-                now,
-                now,
+                Some(BigDecimal::from(1)),
+                Some(BigDecimal::from(2)),
+                Some(now),
+                Some(now),
                 false,
+                Some(BigDecimal::from(2)),
+                Some(BigDecimal::from(0)),
             ))
         );
 
@@ -196,7 +198,8 @@ mod tests {
                 keccak256!("some tx").encode_hex_with_prefix(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(2),
-                true,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -228,6 +231,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -241,7 +245,8 @@ mod tests {
                 transactions::job
                     .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::tx_type.eq("deposit"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -254,11 +259,13 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             ))
         );
 
@@ -273,7 +280,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -330,22 +338,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -363,7 +375,8 @@ mod tests {
                     keccak256!("some tx").encode_hex_with_prefix(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(2),
-                    true,
+                    "deposit".to_owned(),
+                    Some(true),
                 ),
                 (
                     123i64,
@@ -371,7 +384,8 @@ mod tests {
                     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     BigDecimal::from(10),
-                    false,
+                    "deposit".to_owned(),
+                    Some(true),
                 )
             ])
         );
@@ -404,6 +418,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -423,6 +438,7 @@ mod tests {
                 jobs::last_settled.eq(&now),
                 jobs::created.eq(&now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(2)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -436,7 +452,8 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::tx_type.eq("deposit"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -453,22 +470,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -484,7 +505,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -540,22 +562,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -571,7 +597,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
