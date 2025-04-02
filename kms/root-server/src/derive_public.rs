@@ -11,6 +11,7 @@ use kms_derive_utils::{
 use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 
 #[derive(Deserialize)]
 pub struct Params {
@@ -46,17 +47,15 @@ impl Params {
 // get authorisation public key
 pub async fn get_public(State(state): State<AppState>) -> impl IntoResponse {
     let public = to_secp256k1_public(state.seed);
-    let secret_key =
-        SecretKey::from_slice(&to_secp256k1_secret(state.seed)).expect("Invalid private key");
-    let secp: Secp256k1<secp256k1::All> = Secp256k1::new();
-    let message_hash = Sha256::digest(public);
-    let msg = Message::from_digest_slice(&message_hash).expect("Failed to create message");
-    let signature = secp.sign_ecdsa(&msg, &secret_key);
+    
+    let mut signing_key = state.signing_key.clone();
+    let signature  = signing_key
+        .sign(&public);
 
     let mut response = (StatusCode::OK, public).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
     );
 
     response
