@@ -26,7 +26,6 @@ tower-http = { version = "0.6.2", features = ["limit", "timeout"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 ed25519-dalek = { version = "2.1.0"}
-hex-literal = "0.4.1"
 
 [profile.release]
 strip = true
