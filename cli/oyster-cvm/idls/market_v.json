@@ -431,6 +431,75 @@
       ]
     },
     {
+      "name": "job_metadata_update",
+      "discriminator": [
+        55,
+        209,
+        110,
+        102,
+        215,
+        55,
+        6,
+        51
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "job",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  111,
+                  98
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "job_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "job_index",
+          "type": "u128"
+        },
+        {
+          "name": "new_metadata",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "job_open",
       "discriminator": [
         232,
@@ -1345,6 +1414,19 @@
       ]
     },
     {
+      "name": "JobMetadataUpdated",
+      "discriminator": [
+        193,
+        101,
+        187,
+        52,
+        22,
+        178,
+        240,
+        50
+      ]
+    },
+    {
       "name": "JobOpened",
       "discriminator": [
         194,
@@ -1522,6 +1604,11 @@
       "code": 6011,
       "name": "InvalidMint",
       "msg": "Invalid mint"
+    },
+    {
+      "code": 6012,
+      "name": "UnchangedMetadata",
+      "msg": "Unchanged metadata"
     }
   ],
   "types": [
@@ -1593,6 +1680,22 @@
           {
             "name": "amount",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "JobMetadataUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "job",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_metadata",
+            "type": "string"
           }
         ]
       }
