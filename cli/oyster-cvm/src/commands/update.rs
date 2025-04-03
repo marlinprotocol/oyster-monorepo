@@ -3,6 +3,7 @@ use crate::configs::blockchain::Blockchain;
 use crate::configs::global::SOLANA_USDC_MINT_ADDRESS;
 use crate::types::Platform;
 use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
+use crate::utils::solana::fetch_transaction_receipt_with_retry;
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::sol;
 use anchor_client::solana_sdk::system_program;
@@ -10,10 +11,7 @@ use anchor_lang::{declare_program, prelude::Pubkey};
 use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::str::FromStr;
-use std::time::Duration;
-use tokio::time::sleep;
 use tracing::info;
 
 declare_program!(market_v);
@@ -237,24 +235,7 @@ async fn update_solana_job(args: UpdateArgs, blockchain: Blockchain) -> Result<(
 
     let signature = signature.unwrap();
 
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(Duration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&signature, UiTransactionEncoding::Base64)
-        .await?;
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    let meta = receipt.transaction.meta.unwrap();
-
-    if meta.err.is_some() {
-        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
-    }
+    fetch_transaction_receipt_with_retry(program, &signature).await?;
 
     Ok(())
 }

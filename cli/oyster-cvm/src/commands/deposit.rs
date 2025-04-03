@@ -1,10 +1,10 @@
 use std::str::FromStr;
-use std::time::Duration as StdDuration;
 
 use crate::args::wallet::WalletArgs;
-use crate::configs::blockchain::Blockchain;
+use crate::configs::blockchain::{Blockchain, SOLANA_TRANSACTION_CONFIG};
 use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS, SOLANA_USDC_MINT_ADDRESS};
 use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
+use crate::utils::solana::fetch_transaction_receipt_with_retry;
 use crate::utils::token::approve_total_cost;
 use crate::utils::usdc::format_usdc;
 use alloy::{
@@ -18,8 +18,6 @@ use anchor_lang::prelude::Pubkey;
 use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use solana_transaction_status_client_types::UiTransactionEncoding;
-use tokio::time::sleep;
 use tracing::{error, info};
 
 declare_program!(market_v);
@@ -198,7 +196,7 @@ async fn deposit_to_solana_job(args: DepositArgs, blockchain: Blockchain) -> Res
             amount: args.amount,
             job_index,
         })
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {
@@ -210,24 +208,7 @@ async fn deposit_to_solana_job(args: DepositArgs, blockchain: Blockchain) -> Res
 
     info!("Deposit transaction hash: {:?}", signature);
 
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(StdDuration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&signature, UiTransactionEncoding::Base64)
-        .await?;
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    let meta = receipt.transaction.meta.unwrap();
-
-    if meta.err.is_some() {
-        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
-    }
+    fetch_transaction_receipt_with_retry(program, &signature).await?;
 
     Ok(())
 }

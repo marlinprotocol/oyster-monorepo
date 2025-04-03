@@ -2,14 +2,14 @@ use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     commands::log::{stream_logs, LogArgs},
     configs::{
-        blockchain::Blockchain,
+        blockchain::{Blockchain, SOLANA_TRANSACTION_CONFIG},
         global::{OYSTER_MARKET_ADDRESS, SOLANA_USDC_MINT_ADDRESS},
     },
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
         provider::{create_ethereum_provider, create_solana_provider},
-        solana::create_all_associated_token_accounts,
+        solana::{create_all_associated_token_accounts, fetch_transaction_receipt_with_retry},
         token::approve_total_cost,
         usdc::format_usdc,
     },
@@ -34,11 +34,10 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
-use tokio::{net::TcpStream, time::sleep};
+use tokio::net::TcpStream;
 use tracing::{error, info};
 
 declare_program!(market_v);
@@ -459,36 +458,11 @@ async fn create_new_oyster_job_on_solana(
             rate: rate.to::<u64>(),
             balance: balance.to::<u64>(),
         })
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await?;
-
     info!("Job creation signature: {:?}", signature);
 
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(StdDuration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&signature, UiTransactionEncoding::Json)
-        .await;
-
-    let Ok(receipt) = receipt else {
-        return Err(anyhow!(
-            "Failed to get transaction receipt: {:?}",
-            receipt.unwrap_err()
-        ));
-    };
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    let meta = receipt.transaction.meta.unwrap();
-
-    if meta.err.is_some() {
-        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
-    }
+    fetch_transaction_receipt_with_retry(program, &signature).await?;
 
     Ok(H256::from(U256::from(job_index)))
 }

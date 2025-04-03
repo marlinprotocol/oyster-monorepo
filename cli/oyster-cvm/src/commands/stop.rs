@@ -1,6 +1,7 @@
 use crate::configs::blockchain::Blockchain;
 use crate::configs::global::SOLANA_USDC_MINT_ADDRESS;
 use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
+use crate::utils::solana::fetch_transaction_receipt_with_retry;
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::{
     primitives::{Address, B256},
@@ -13,10 +14,7 @@ use anchor_lang::prelude::Pubkey;
 use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::str::FromStr;
-use std::time::Duration;
-use tokio::time::sleep;
 use tracing::info;
 
 declare_program!(market_v);
@@ -26,8 +24,6 @@ use market_v::{
 };
 
 declare_program!(oyster_credits);
-
-const SLEEP_FOR_JOB_CLOSE: u64 = 300;
 
 #[derive(Args)]
 pub struct StopArgs {
@@ -115,8 +111,8 @@ async fn stop_ethereum_oyster_instance(
         return Ok(());
     }
 
-    // Only proceed with closing if job still exists
-    info!("Initiating job close...");
+    info!("Found job, closing...");
+
     let send_result = market.jobClose(job_id_bytes).send().await;
     let tx_hash = match send_result {
         Ok(tx_call_result) => tx_call_result
@@ -175,7 +171,7 @@ async fn stop_solana_oyster_instance(
 
     let job = job.unwrap();
 
-    info!("Found job, initiating rate update to 0...");
+    info!("Found job, closing...");
 
     let market = Pubkey::find_program_address(&[b"market"], &market_v::ID).0;
     let owner = program.payer();
@@ -208,7 +204,7 @@ async fn stop_solana_oyster_instance(
             owner,
             state,
             credit_program_usdc_token_account,
-            credit_program: credit_mint,
+            credit_program: oyster_credits::ID,
             token_program: token::ID,
             system_program: system_program::ID,
         })
@@ -225,27 +221,7 @@ async fn stop_solana_oyster_instance(
 
     info!("Stop transaction sent: {:?}", tx_hash);
 
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(Duration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&tx_hash, UiTransactionEncoding::Base64)
-        .await?;
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    let meta = receipt.transaction.meta.unwrap();
-
-    if !meta.err.is_none() {
-        return Err(anyhow!(
-            "Job close transaction failed: {:?}",
-            meta.err.unwrap()
-        ));
-    }
+    fetch_transaction_receipt_with_retry(program, &tx_hash).await?;
 
     Ok(())
 }

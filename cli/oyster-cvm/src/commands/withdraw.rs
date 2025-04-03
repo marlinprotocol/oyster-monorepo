@@ -3,8 +3,11 @@ use crate::configs::blockchain::Blockchain;
 use crate::configs::global::{
     MIN_WITHDRAW_AMOUNT, OYSTER_MARKET_ADDRESS, SOLANA_USDC_MINT_ADDRESS,
 };
-use crate::utils::provider::create_solana_provider;
-use crate::utils::{provider::create_ethereum_provider, usdc::format_usdc};
+use crate::utils::{
+    provider::{create_ethereum_provider, create_solana_provider},
+    solana::fetch_transaction_receipt_with_retry,
+    usdc::format_usdc,
+};
 use alloy::{
     primitives::{Address, U256},
     providers::{Provider, WalletProvider},
@@ -16,10 +19,8 @@ use anchor_lang::prelude::Pubkey;
 use anchor_spl::{associated_token::get_associated_token_address, token};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use solana_transaction_status_client_types::UiTransactionEncoding;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::sleep;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
 declare_program!(market_v);
@@ -414,24 +415,7 @@ async fn withdraw_from_solana_job(
 
     let signature = signature.unwrap();
 
-    // sleep for 20 seconds
-    info!("Sleeping for 20 seconds before fetching transaction receipt");
-    sleep(Duration::from_secs(20)).await;
-
-    let receipt = program
-        .rpc()
-        .get_transaction(&signature, UiTransactionEncoding::Base64)
-        .await?;
-
-    if receipt.transaction.meta.is_none() {
-        return Err(anyhow!("Failed to get transaction meta"));
-    }
-
-    let meta = receipt.transaction.meta.unwrap();
-
-    if meta.err.is_some() {
-        return Err(anyhow!("Transaction failed: {:?}", meta.err.unwrap()));
-    }
+    fetch_transaction_receipt_with_retry(program, &signature).await?;
 
     Ok(())
 }

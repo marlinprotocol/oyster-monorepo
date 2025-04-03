@@ -1,4 +1,6 @@
 use alloy::primitives::U256;
+use anchor_client::solana_client::rpc_config::RpcSendTransactionConfig;
+use anchor_client::solana_sdk::commitment_config::CommitmentLevel;
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use std::str::FromStr;
@@ -10,6 +12,15 @@ const SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
 
 // Chain IDs
 const ARBITRUM_ONE_CHAIN_ID: u64 = 42161;
+
+// Solana Transaction Config
+pub const SOLANA_TRANSACTION_CONFIG: RpcSendTransactionConfig = RpcSendTransactionConfig {
+    skip_preflight: false,
+    preflight_commitment: Some(CommitmentLevel::Confirmed),
+    max_retries: Some(3),
+    encoding: None,
+    min_context_slot: None,
+};
 
 // Supported blockchains
 #[derive(Clone, Debug, PartialEq, Eq)]
