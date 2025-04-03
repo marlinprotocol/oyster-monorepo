@@ -9,6 +9,7 @@ The repository is organized into projects:
 - [attestation/server](./attestation/server/): Attestation server that uses the NSM API to generate attestations.
 - [attestation/server-custom](./attestation/server-custom/): Attestation server that uses the NSM API to generate attestations and accepts query parameters for customizing attestation fields.
 - [attestation/server-custom-mock](./attestation/server-custom-mock/): Attestation server that uses a local root of trust to generate attestations and accepts query parameters for customizing attestation fields.
+- [attestation/server-mock](./attestation/server-mock/): Attestation server that uses a local root of trust to generate attestations.
 - [attestation/verifier](./attestation/verifier/): Attestation verifier server that verifies attestations.
 - [attestation/verifier-enclave](./attestation/verifier-enclave/): Attestation verifier enclave that packages the attestation verifier server.
 - [attestation/verifier-risczero](./attestation/verifier-risczero/): Attestation verifier that generates a ZK proof of attestation verification using RISCZero.
@@ -27,6 +28,7 @@ The repository is organized into projects:
 - [kms/derive-server](./kms/derive-server): KMS derive server with key derivation endpoints meant to be used in end-user enclaves.
 - [kms/derive-server-enclave](./kms/derive-server-enclave): Example KMS derive server enclave mainly used for testing.
 - [kms/derive-utils](./kms/derive-utils): Library with key derivation utilities.
+- [kms/mock-derive-server](./kms/mock-derive-server): KMS mock derive server with key derivation endpoints using a constant seed meant to be used in local enclaves.
 - [kms/root-server](./kms/root-server): KMS root server with key derivation endpoints.
 - [kms/root-server-contract](./kms/root-server-contract): KMS root server with key derivation endpoints that works based on contract approvals.
 - [kms/root-server-enclave](./kms/root-server-enclave): KMS root server enclave.
@@ -39,6 +41,7 @@ The repository is organized into projects:
 - [sdks/rs](./sdks/rs/): Oyster SDK written in Rust.
 - [sdks/go](./sdks/go/): Oyster SDK written in Go.
 - [sdks/docker-enclave](./sdks/docker-enclave/): Enclave that allows docker compose based deployment.
+- [sdks/local-dev-image](./sdks/local-dev-image/): Docker image that allows docker compose based deployment locally.
 - [serverless/executor](./serverless/executor/): Oyster serverless executor to execute serverless requests.
 - [serverless/executor-enclave](./serverless/executor-enclave) : Enclave that packages the Serverless Executor and supporting applications.
 - [serverless/gateway](./serverless/gateway/): Oyster serverless gateway to relay serverless requests and responses between request and common chains.

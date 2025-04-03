@@ -64,16 +64,19 @@ Optional args:
 Simulates the oyster-cvm environment locally inside a docker container.
 
 Required args:
+- `--arch` (platform architecture (e.g. amd64, arm64))
 - `--docker-compose` (path to docker-compose.yml file)
 
 Optional args:
 - `--docker-images` (list of Docker image .tar file paths)
 - `--init-params` (list of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`)
+- `--expose-ports` (application ports to expose out of the local container)
+- `--instance-type` (instance type (e.g. "r6g.large"))
 - `--image-name` (local dev base image name)
 - `--image-tag` (local dev base image tag)
-- `--memory` (memory limit for the local dev container)
-- `--cpu-shares` (cpu shares to allocate to the local dev container)
+- `--container-memory` (memory limit for the local dev container)
 - `--container-name` (local dev container name)
+- `--cleanup` (cleanup base dev image after testing)
 
 #### `build`
 Builds an oyster-cvm image. Only needed for custom enclave images - you can use the base image for standard deployments.
@@ -221,6 +224,20 @@ Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensu
 ./oyster-cvm simulate \
   --docker-compose ./docker-compose.yml \
   --init-params secret:1:0:utf8:hello
+
+# Sample Output:
+[INFO] Simulating oyster local dev environment with:
+[INFO]   Platform: amd64
+[INFO]   Docker compose: ./docker-compose.yml
+[INFO]   Init params: secret:1:0:utf8:hello
+[INFO] Pulling dev base image to local docker daemon
+...
+[INFO] digest path="secret" should_attest=true
+[INFO] Starting the dev container with user specified parameters
+...
+[INFO] Dev container exited with status: exit status: 130
+[INFO] Max container CPU usage: 6.65%
+[INFO] Max container Memory usage: 40.41 MiB
 
 # Deploy using base image (quickstart)
 ./oyster-cvm deploy \

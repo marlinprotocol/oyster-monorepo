@@ -35,8 +35,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .leak::<'static>();
 
     let app = Router::new()
-        .route("/attestation/raw", get(|| async { get_attestation_doc(pub_key, user_data) } ))
-        .route("/attestation/hex", get(|| async { get_hex_attestation_doc(pub_key, user_data)}));
+        .route(
+            "/attestation/raw",
+            get(|| async { get_attestation_doc(pub_key, user_data) }),
+        )
+        .route(
+            "/attestation/hex",
+            get(|| async { get_hex_attestation_doc(pub_key, user_data) }),
+        );
     let listener = tokio::net::TcpListener::bind(&cli.ip_addr).await?;
 
     axum::serve(listener, app).await?;
