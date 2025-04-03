@@ -292,7 +292,7 @@ async fn get_receipt_and_job_id(
         return Err(anyhow!("Transaction failed - check contract interaction"));
     }
 
-    let oyster_job_opened_event = "JobOpened(bytes32,string,address,address)";
+    let oyster_job_opened_event = "JobOpened(bytes32,string,address,address,uint256)";
     let oyster_job_opened_topic = keccak256(oyster_job_opened_event.as_bytes());
 
     // Look for JobOpened event
