@@ -1588,6 +1588,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "hex",
  "httpc-test",
  "rand_core",
  "reqwest",

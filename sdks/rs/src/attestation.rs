@@ -14,6 +14,7 @@ use openssl::x509::{X509VerifyResult, X509};
 use serde_cbor::{self, value, value::Value};
 
 pub const AWS_ROOT_KEY: [u8; 96] = hex_literal::hex!("fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4");
+pub const MOCK_ROOT_KEY: [u8; 96] = hex_literal::hex!("6c79411ebaae7489a4e8355545c0346784b31df5d08cb1f7c0097836a82f67240f2a7201862880a1d09a0bb326637188fbbafab47a10abe3630fcf8c18d35d96532184985e582c0dce3dace8441f37b9cc9211dff935baae69e4872cc3494410");
 
 #[derive(Debug)]
 pub struct AttestationDecoded {
@@ -361,12 +362,14 @@ pub async fn get(endpoint: Uri) -> Result<Box<[u8]>, AttestationError> {
 mod tests {
     use hex_literal::hex;
 
-    use crate::attestation::AttestationExpectations;
+    use crate::attestation::{AttestationExpectations, AWS_ROOT_KEY, MOCK_ROOT_KEY};
 
     use super::verify;
 
+    // generated using `curl <ip>:<port>/attestation/raw`
+    // on the attestation server of a real Nitro enclave
     #[test]
-    fn test_none_specified() {
+    fn test_aws_none_specified() {
         let attestation =
             std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws.bin")
                 .unwrap();
@@ -379,11 +382,13 @@ mod tests {
         assert_eq!(decoded.pcrs[2], hex!("6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"));
         assert_eq!(decoded.user_data, [0u8; 0].into());
         assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
-        assert_eq!(decoded.root_public_key.as_ref(), hex!("fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4"));
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
     }
 
+    // generated using `curl <ip>:<port>/attestation/raw`
+    // on the attestation server of a real Nitro enclave
     #[test]
-    fn test_all_specified() {
+    fn test_aws_all_specified() {
         let attestation =
             std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws.bin")
                 .unwrap();
@@ -403,7 +408,7 @@ mod tests {
                 ]),
                 public_key: Some(&hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb")),
                 user_data: Some(&[0; 0]),
-                root_public_key: Some(&hex!("fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4")),
+                root_public_key: Some(&AWS_ROOT_KEY),
             },
         )
         .unwrap();
@@ -414,6 +419,55 @@ mod tests {
         assert_eq!(decoded.pcrs[2], hex!("6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"));
         assert_eq!(decoded.user_data, [0u8; 0].into());
         assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
-        assert_eq!(decoded.root_public_key.as_ref(), hex!("fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4"));
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
+    // on a custom mock attestation server running locally
+    #[test]
+    fn test_mock_none_specified() {
+        let attestation =
+            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom.bin")
+                .unwrap();
+
+        let decoded = verify(&attestation, Default::default()).unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000193bf444e30);
+        assert_eq!(decoded.pcrs[0], [0; 48]);
+        assert_eq!(decoded.pcrs[1], [1; 48]);
+        assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
+        assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
+        assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
+    // on a custom mock attestation server running locally
+    #[test]
+    fn test_mock_all_specified() {
+        let attestation =
+            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom.bin")
+                .unwrap();
+
+        let decoded = verify(
+            &attestation,
+            AttestationExpectations {
+                timestamp: Some(0x00000193bf444e30),
+                age: Some((300000, 0x00000193bf444e30 + 300000)),
+                pcrs: Some([[0; 48], [1; 48], [2; 48]]),
+                public_key: Some(&hex!("12345678")),
+                user_data: Some(&hex!("abcdef")),
+                root_public_key: Some(&MOCK_ROOT_KEY),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000193bf444e30);
+        assert_eq!(decoded.pcrs[0], [0; 48]);
+        assert_eq!(decoded.pcrs[1], [1; 48]);
+        assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
+        assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
+        assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
     }
 }

@@ -11,6 +11,7 @@ use aws_types::region::Region;
 use rand_core::OsRng;
 use serde_json::Value;
 use ssh2::Session;
+use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
@@ -263,7 +264,6 @@ impl Aws {
         bandwidth: u64,
         debug: bool,
         init_params: &[u8],
-        extra_init_params: &[u8],
     ) -> Result<()> {
         if family != "salmon" && family != "tuna" {
             return Err(anyhow!("unsupported image family"));
@@ -292,7 +292,7 @@ impl Aws {
             // set up iptables rules
             Self::run_fragment_iptables_tuna(sess)?;
             // set up job id in the init server
-            Self::run_fragment_init_server(sess, job_id, init_params, extra_init_params)?;
+            Self::run_fragment_init_server(sess, job_id, init_params)?;
         } else {
             // set up iptables rules
             Self::run_fragment_iptables_salmon(sess)?;
@@ -562,12 +562,8 @@ impl Aws {
     // Goal: set up init server params
     // assumes the .conf has not been modified externally
     // cheap, so just always does `sed`
-    fn run_fragment_init_server(
-        sess: &Session,
-        job_id: &str,
-        init_params: &[u8],
-        extra_init_params: &[u8],
-    ) -> Result<()> {
+    // init params are updated if they have changed
+    fn run_fragment_init_server(sess: &Session, job_id: &str, init_params: &[u8]) -> Result<()> {
         // set job id
         let (_, stderr) = Self::ssh_exec(
             sess,
@@ -579,6 +575,34 @@ impl Aws {
         .context("Failed to set job id for init server")?;
         if !stderr.is_empty() {
             return Err(anyhow!(stderr)).context("Failed to set job id for init server");
+        }
+
+        // Check if init params have changed
+        let params_changed = {
+            // Calculate hash of new params
+            let mut hasher = Sha256::new();
+            hasher.update(init_params);
+            let new_hash = hex::encode(hasher.finalize());
+
+            // get old hash
+            let (old_hash, _) = Self::ssh_exec(
+                sess,
+                "sha256sum /home/ubuntu/init-params 2>/dev/null | cut -d ' ' -f 1",
+            )
+            .context("Failed to set job id for init server")?;
+
+            old_hash.trim() != new_hash
+        };
+
+        if !params_changed {
+            return Ok(());
+        }
+
+        info!("Init parameters changed, terminating enclave for restart");
+        let (_, stderr) = Self::ssh_exec(sess, "nitro-cli terminate-enclave --all")?;
+
+        if !stderr.is_empty() && !stderr.contains("Successfully terminated enclave") {
+            return Err(anyhow!(stderr)).context("Error terminating enclave");
         }
 
         // set init params
@@ -599,29 +623,6 @@ impl Aws {
             .context("failed to wait for eof")?;
         init_params_file.close().context("failed to close")?;
         init_params_file
-            .wait_close()
-            .context("failed to wait for close")?;
-
-        // set extra init params
-        let mut extra_init_params_file = sess
-            .scp_send(
-                Path::new("/home/ubuntu/extra-init-params"),
-                0o644,
-                extra_init_params.len() as u64,
-                None,
-            )
-            .context("failed to scp extra init params")?;
-        extra_init_params_file
-            .write_all(extra_init_params)
-            .context("failed to write extra init params")?;
-        extra_init_params_file
-            .send_eof()
-            .context("failed to send eof")?;
-        extra_init_params_file
-            .wait_eof()
-            .context("failed to wait for eof")?;
-        extra_init_params_file.close().context("failed to close")?;
-        extra_init_params_file
             .wait_close()
             .context("failed to wait for close")?;
 
@@ -1319,7 +1320,6 @@ EOF
         image_url: &str,
         debug: bool,
         init_params: &[u8],
-        extra_init_params: &[u8],
     ) -> Result<()> {
         let (mut exist, mut instance, state) = self
             .get_job_instance_id(job, region)
@@ -1366,7 +1366,6 @@ EOF
             bandwidth,
             debug,
             init_params,
-            extra_init_params,
         )
         .await
         .context("failed to run enclave")
@@ -1524,7 +1523,6 @@ impl InfraProvider for Aws {
         image_url: &str,
         debug: bool,
         init_params: &[u8],
-        extra_init_params: &[u8],
     ) -> Result<()> {
         self.spin_up_impl(
             job,
@@ -1537,7 +1535,6 @@ impl InfraProvider for Aws {
             image_url,
             debug,
             init_params,
-            extra_init_params,
         )
         .await
         .context("could not spin up enclave")

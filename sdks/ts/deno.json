@@ -1,0 +1,23 @@
+{
+  "name": "@marlinorg/oyster-sdk",
+  "version": "0.3.1",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./attestation": "./attestation/mod.ts"
+  },
+  "tasks": {
+    "dev": "deno test --watch mod.ts",
+    "build-npm": "deno run -A scripts/build_npm.ts",
+    "publish-npm": "npm publish npm/ --access public"
+  },
+  "imports": {
+    "@deno/dnt": "jsr:@deno/dnt@^0.41.3",
+    "@std/assert": "jsr:@std/assert@1",
+    "@std/encoding": "jsr:@std/encoding@^1.0.6",
+    "cbor2": "npm:cbor2@^1.8.0"
+  },
+  "exclude": [
+    "npm/"
+  ]
+}

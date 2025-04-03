@@ -217,6 +217,15 @@ async fn run() -> Result<()> {
         .await
         .context("Failed to fetch chain_id")?;
 
+    // Initialize job registry for terminated jobs
+    let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
+
+    // Start periodic job registry persistence task
+    let registry_clone = job_registry.clone();
+    tokio::spawn(async move {
+        registry_clone.run_periodic_save(10).await; // Save every 10 seconds
+    });
+
     let job_id = market::JobId {
         id: B256::ZERO.encode_hex_with_prefix(),
         operator: cli.provider.clone(),
@@ -257,6 +266,7 @@ async fn run() -> Result<()> {
         address_whitelist,
         address_blacklist,
         job_id,
+        job_registry,
     )
     .instrument(info_span!("main"))
     .await;

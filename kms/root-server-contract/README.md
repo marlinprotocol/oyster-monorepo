@@ -89,7 +89,7 @@ GET /derive?address=<address>
 The `address` is expected to refer to a smart contract implementing the following interface:
 ```
 interface IKMSVerifiable {
-    function oysterKMSVerify(bytes32 _key) external returns (bool);
+    function oysterKMSVerify(bytes32 _imageId) external returns (bool);
 }
 ```
 

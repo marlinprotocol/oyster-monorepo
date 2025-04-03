@@ -12,29 +12,20 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct Params {
-    pcr0: String,
-    pcr1: String,
-    pcr2: String,
-    user_data: String,
+    image_id: String,
     path: String,
 }
 
 impl Params {
     fn derive_path_seed(&self, seed: [u8; 64]) -> Option<[u8; 64]> {
-        let Ok(pcr0) = hex::decode(&self.pcr0) else {
-            return None;
-        };
-        let Ok(pcr1) = hex::decode(&self.pcr1) else {
-            return None;
-        };
-        let Ok(pcr2) = hex::decode(&self.pcr2) else {
-            return None;
-        };
-        let Ok(user_data) = hex::decode(&self.user_data) else {
+        let Ok(image_id) = hex::decode(&self.image_id).and_then(|x| {
+            x.try_into()
+                .map_err(|_| hex::FromHexError::InvalidStringLength)
+        }) else {
             return None;
         };
 
-        let enclave_key = derive_enclave_seed(seed, &pcr0, &pcr1, &pcr2, &user_data);
+        let enclave_key = derive_enclave_seed(seed, image_id);
         let path_key = derive_path_seed(enclave_key, self.path.as_bytes());
 
         Some(path_key)

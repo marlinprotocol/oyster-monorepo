@@ -19,20 +19,26 @@ fi
 
 ip=$(cat /app/ip.txt)
 
-# setting an address for loopback
-ifconfig lo $ip mtu 9001
-ip addr add $ip dev lo
+# set up loopback
+ip addr add 127.0.0.1/8 dev lo
+ip link set lo up
+
+# set up bridge
+ip link add name br0 type bridge
+ip addr add $ip/32 dev br0
+ip link set dev br0 mtu 9001
+ip link set dev br0 up
+
+# adding a default route via the bridge
+ip route add default dev br0 src $ip
 
 # localhost dns
 echo "127.0.0.1 localhost" > /etc/hosts
 
-ifconfig
+ip link
 ip addr
+ip route
 cat /etc/hosts
-
-# adding a default route
-ip route add default dev lo src $ip
-route -n
 
 # create ipset with all "internal" (unroutable) addresses
 ipset create internal hash:net

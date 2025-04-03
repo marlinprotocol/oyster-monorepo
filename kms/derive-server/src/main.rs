@@ -25,6 +25,14 @@ struct Args {
     )]
     kms_endpoint: Option<String>,
 
+    /// KMS X25519 pubkey, hex encoded
+    #[arg(
+        long,
+        conflicts_with = "root_server_config",
+        required_unless_present = "root_server_config"
+    )]
+    kms_pubkey: Option<String>,
+
     /// Listening address
     #[arg(long, default_value = "127.0.0.1:1100")]
     listen_addr: String,
@@ -37,44 +45,12 @@ struct Args {
     #[arg(long, default_value = "/app/x25519.sec")]
     secret_path: String,
 
-    /// PCR0 of the root server
-    #[arg(
-        long,
-        conflicts_with = "root_server_config",
-        required_unless_present = "root_server_config"
-    )]
-    pcr0: Option<String>,
-
-    /// PCR1 of the root server
-    #[arg(
-        long,
-        conflicts_with = "root_server_config",
-        required_unless_present = "root_server_config"
-    )]
-    pcr1: Option<String>,
-
-    /// PCR2 of the root server
-    #[arg(
-        long,
-        conflicts_with = "root_server_config",
-        required_unless_present = "root_server_config"
-    )]
-    pcr2: Option<String>,
-
-    /// user data of the root server
-    #[arg(
-        long,
-        conflicts_with = "root_server_config",
-        required_unless_present = "root_server_config"
-    )]
-    user_data: Option<String>,
-
     /// file containing enclave verification contract address in hexadecimal
     #[arg(long)]
     contract_address_file: Option<String>,
 
     /// JSON config file containing the root server's details
-    #[arg(long, required_unless_present_all = ["kms_endpoint", "pcr0", "pcr1", "pcr2", "user_data"])]
+    #[arg(long, required_unless_present_all = ["kms_endpoint", "kms_pubkey"])]
     root_server_config: Option<String>,
 }
 
@@ -99,11 +75,8 @@ async fn main() -> Result<()> {
         url: args.attestation_endpoint,
     };
 
-    let pcr0: [u8; 48];
-    let pcr1: [u8; 48];
-    let pcr2: [u8; 48];
-    let user_data: Box<[u8]>;
     let kms_endpoint: String;
+    let kms_pubkey: [u8; 32];
 
     if let Some(filename) = args.root_server_config {
         let config_content = read_to_string(filename)
@@ -116,47 +89,23 @@ async fn main() -> Result<()> {
             .as_str()
             .context("missing kms_endpoint in config")?
             .to_string();
-        pcr0 = hex::decode(config["pcr0"].as_str().context("missing pcr0 in config")?)
-            .context("failed to decode pcr0")?
-            .try_into()
-            .map_err(|_| anyhow!("incorrect pcr0 size"))?;
-        pcr1 = hex::decode(config["pcr1"].as_str().context("missing pcr1 in config")?)
-            .context("failed to decode pcr1")?
-            .try_into()
-            .map_err(|_| anyhow!("incorrect pcr1 size"))?;
-        pcr2 = hex::decode(config["pcr2"].as_str().context("missing pcr2 in config")?)
-            .context("failed to decode pcr2")?
-            .try_into()
-            .map_err(|_| anyhow!("incorrect pcr2 size"))?;
-        user_data = hex::decode(
-            config["user_data"]
+        kms_pubkey = hex::decode(
+            config["kms_pubkey"]
                 .as_str()
-                .context("missing user_data in config")?,
+                .context("missing kms_pubkey in config")?,
         )
-        .context("failed to decode user data")?
-        .into_boxed_slice();
+        .context("failed to decode kms_pubkey")?
+        .try_into()
+        .map_err(|_| anyhow!("incorrect kms_pubkey size"))?;
     } else {
         kms_endpoint = args.kms_endpoint.unwrap();
-        pcr0 = hex::decode(args.pcr0.unwrap())
-            .context("failed to decode pcr0")?
+        kms_pubkey = hex::decode(args.kms_pubkey.unwrap())
+            .context("failed to decode kms_pubkey")?
             .try_into()
-            .map_err(|_| anyhow!("incorrect pcr0 size"))?;
-        pcr1 = hex::decode(args.pcr1.unwrap())
-            .context("failed to decode pcr1")?
-            .try_into()
-            .map_err(|_| anyhow!("incorrect pcr1 size"))?;
-        pcr2 = hex::decode(args.pcr2.unwrap())
-            .context("failed to decode pcr2")?
-            .try_into()
-            .map_err(|_| anyhow!("incorrect pcr2 size"))?;
-        user_data = hex::decode(args.user_data.unwrap())
-            .context("failed to decode user data")?
-            .into_boxed_slice();
+            .map_err(|_| anyhow!("incorrect kms_pubkey size"))?;
     }
 
-    let auth_store = AuthStore {
-        state: ([pcr0, pcr1, pcr2], user_data),
-    };
+    let auth_store = AuthStore { pubkey: kms_pubkey };
 
     let contract_address = if let Some(contract_address_file) = args.contract_address_file {
         let address = read(contract_address_file)

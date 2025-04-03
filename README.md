@@ -39,6 +39,7 @@ The repository is organized into projects:
 - [operator/quota-monitor-aws](./operator/quota-monitor-aws/): Quota monitor to help Oyster operators manage AWS quotas and resource limits.
 - [operator/setup-aws](./operator/setup-aws/): Setup repository that helps operators prepare their AWS account for participating in Oyster.
 - [sdks/rs](./sdks/rs/): Oyster SDK written in Rust.
+- [sdks/ts](./sdks/ts/): Oyster SDK written in Typescript.
 - [sdks/go](./sdks/go/): Oyster SDK written in Go.
 - [sdks/docker-enclave](./sdks/docker-enclave/): Enclave that allows docker compose based deployment.
 - [sdks/local-dev-image](./sdks/local-dev-image/): Docker image that allows docker compose based deployment locally.

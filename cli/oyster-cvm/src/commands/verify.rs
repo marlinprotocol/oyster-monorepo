@@ -6,8 +6,9 @@ use tracing::info;
 
 use oyster::attestation::{get, AttestationExpectations, AWS_ROOT_KEY};
 
-use crate::args::pcr::PcrArgs;
+use crate::args::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_AMD64, PCRS_BASE_BLUE_V1_0_0_ARM64};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
+use crate::types::Platform;
 
 #[derive(Args)]
 pub struct VerifyArgs {
@@ -37,10 +38,18 @@ pub struct VerifyArgs {
     /// Root public key
     #[arg(short = 'r', long, default_value_t = hex::encode(AWS_ROOT_KEY))]
     root_public_key: String,
+
+    /// Preset for parameters (e.g. blue, debug)
+    #[arg(long)]
+    preset: Option<String>,
+
+    /// Platform architecture (e.g. amd64, arm64)
+    #[arg(long, default_value = "arm64")]
+    arch: Platform,
 }
 
 pub async fn verify(args: VerifyArgs) -> Result<()> {
-    let pcrs = get_pcrs(&args.pcr).context("Failed to load PCR data")?;
+    let pcrs = get_pcrs(&args.pcr, args.preset, args.arch).context("Failed to load PCR data")?;
 
     let attestation_endpoint = format!(
         "http://{}:{}/attestation/raw",
@@ -87,11 +96,39 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
     Ok(())
 }
 
-fn get_pcrs(pcr: &PcrArgs) -> Result<Option<[[u8; 48]; 3]>> {
-    let Some((pcr0, pcr1, pcr2)) = pcr.load()? else {
-        tracing::info!("No PCR values provided - skipping PCR verification");
-        return Ok(None);
-    };
+fn get_pcrs(
+    pcr: &PcrArgs,
+    preset: Option<String>,
+    arch: Platform,
+) -> Result<Option<[[u8; 48]; 3]>> {
+    let (pcr0, pcr1, pcr2) = pcr.load()?.unwrap_or(match preset {
+        Some(preset) => match preset.as_str() {
+            "blue" => match arch {
+                Platform::AMD64 => (
+                    PCRS_BASE_BLUE_V1_0_0_AMD64.0.into(),
+                    PCRS_BASE_BLUE_V1_0_0_AMD64.1.into(),
+                    PCRS_BASE_BLUE_V1_0_0_AMD64.2.into(),
+                ),
+                Platform::ARM64 => (
+                    PCRS_BASE_BLUE_V1_0_0_ARM64.0.into(),
+                    PCRS_BASE_BLUE_V1_0_0_ARM64.1.into(),
+                    PCRS_BASE_BLUE_V1_0_0_ARM64.2.into(),
+                ),
+            },
+            "debug" => (
+                hex::encode([0u8; 48]),
+                hex::encode([0u8; 48]),
+                hex::encode([0u8; 48]),
+            ),
+            _ => {
+                return Err(anyhow::anyhow!("Unknown PCR preset"));
+            }
+        },
+        _ => {
+            tracing::info!("No PCR values provided - skipping PCR verification");
+            return Ok(None);
+        }
+    });
 
     tracing::info!(
         "Loaded PCR data: pcr0: {}, pcr1: {}, pcr2: {}",
