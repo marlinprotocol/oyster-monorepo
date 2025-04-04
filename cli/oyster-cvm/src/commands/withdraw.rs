@@ -1,5 +1,5 @@
 use crate::args::wallet::WalletArgs;
-use crate::configs::blockchain::Blockchain;
+use crate::configs::blockchain::{Blockchain, SOLANA_TRANSACTION_CONFIG};
 use crate::configs::global::{
     MIN_WITHDRAW_AMOUNT, OYSTER_MARKET_ADDRESS, SOLANA_USDC_MINT_ADDRESS,
 };
@@ -400,7 +400,7 @@ async fn withdraw_from_solana_job(
             amount: amount_u256.to::<u64>(),
             job_index,
         })
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {

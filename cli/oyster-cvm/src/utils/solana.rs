@@ -14,6 +14,8 @@ use solana_transaction_status_client_types::UiTransactionEncoding;
 use tokio::time::sleep;
 use tracing::{error, info};
 
+use crate::configs::blockchain::SOLANA_TRANSACTION_CONFIG;
+
 pub async fn create_all_associated_token_accounts(
     user_address: &Pubkey,
     operator_address: &Pubkey,
@@ -27,7 +29,7 @@ pub async fn create_all_associated_token_accounts(
     let signature = program
         .request()
         .instruction(user_token_account)
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {
@@ -47,7 +49,7 @@ pub async fn create_all_associated_token_accounts(
     let signature = program
         .request()
         .instruction(provider_token_account)
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {
@@ -70,7 +72,7 @@ pub async fn create_all_associated_token_accounts(
     let signature = program
         .request()
         .instruction(user_credit_token_account)
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {

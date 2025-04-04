@@ -1,4 +1,4 @@
-use crate::configs::blockchain::Blockchain;
+use crate::configs::blockchain::{Blockchain, SOLANA_TRANSACTION_CONFIG};
 use crate::configs::global::SOLANA_USDC_MINT_ADDRESS;
 use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
 use crate::utils::solana::fetch_transaction_receipt_with_retry;
@@ -209,7 +209,7 @@ async fn stop_solana_oyster_instance(
             system_program: system_program::ID,
         })
         .args(SolanaMarketVJobCloseArgs { job_index })
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     let tx_hash = match signature {

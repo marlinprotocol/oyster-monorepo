@@ -1,5 +1,5 @@
 use crate::args::init_params::InitParamsArgs;
-use crate::configs::blockchain::Blockchain;
+use crate::configs::blockchain::{Blockchain, SOLANA_TRANSACTION_CONFIG};
 use crate::types::Platform;
 use crate::utils::provider::{create_ethereum_provider, create_solana_provider};
 use crate::utils::solana::fetch_transaction_receipt_with_retry;
@@ -194,7 +194,7 @@ async fn update_solana_job(args: UpdateArgs, blockchain: Blockchain) -> Result<(
             new_metadata: serde_json::to_string(&metadata)?,
             job_index,
         })
-        .send()
+        .send_with_spinner_and_config(SOLANA_TRANSACTION_CONFIG)
         .await;
 
     if let Err(e) = signature {
