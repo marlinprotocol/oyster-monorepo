@@ -23,3 +23,7 @@ ureq = "3.0.6"
 prettytable-rs = "0.10"
 chrono = "0.4.40"
 lazy_static = "1.5.0"
+anchor-client = { version = "0.31.0", features = ["async"] }
+anchor-lang = "0.31.0"
+anchor-spl = "0.31.0"
+solana-transaction-status-client-types = "2.2.6"

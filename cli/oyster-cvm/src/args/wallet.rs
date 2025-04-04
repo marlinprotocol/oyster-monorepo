@@ -3,7 +3,7 @@ use std::fs;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 #[group(multiple = true)]
 pub struct WalletArgs {
     /// Wallet private key for transaction signing
