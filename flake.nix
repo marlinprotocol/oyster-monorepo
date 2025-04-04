@@ -41,6 +41,9 @@
       attestation.server-custom-mock = import ./attestation/server-custom-mock {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      attestation.server-mock = import ./attestation/server-mock {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       attestation.verifier = import ./attestation/verifier {
         inherit nixpkgs systemConfig fenix naersk;
       };
@@ -85,6 +88,9 @@
         inherit nixpkgs systemConfig fenix naersk;
       };
       kms.derive-server = import ./kms/derive-server {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
+      kms.mock-derive-server = import ./kms/mock-derive-server {
         inherit nixpkgs systemConfig fenix naersk;
       };
       kms.derive-server-enclave = import ./kms/derive-server-enclave {
@@ -178,6 +184,13 @@
         derive-server = kms.derive-server.compressed;
         init-params-manager = initialization.init-params-manager.compressed;
         kernels = kernels.tuna;
+      };
+      sdks.local-dev-image = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./sdks/local-dev-image {
+        inherit nixpkgs systemConfig;
+        supervisord = external.supervisord.compressed;
+        keygen = initialization.keygen.compressed;
+        attestation-server-mock = attestation.server-mock.compressed;
+        mock-derive-server = kms.mock-derive-server.compressed;
       };
       enclaves.blue = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/blue {
         inherit nixpkgs systemConfig nitro-util;

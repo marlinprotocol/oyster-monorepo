@@ -1,0 +1,36 @@
+services:
+  # llama proxy service
+  llama_proxy:
+    image: kalpita888/ollama_amd64:0.0.1                        # For arm64 system use kalpita888/ollama_arm64:0.0.1 and for amd64 system use kalpita888/ollama_amd64:0.0.1
+    container_name: llama_proxy
+    init: true
+    network_mode: host
+    volumes:
+      - /app/ecdsa.sec:/app/secp.sec
+
+  # Ollama service
+  ollama_server:
+    image: ollama/ollama:0.6.0
+    container_name: ollama_server
+    init: true
+    network_mode: host
+    healthcheck:
+      test: ["CMD-SHELL", "ollama --version"]
+      interval: 10s
+      retries: 3
+
+  # Ollama model run
+  ollama_model:
+    image: ollama/ollama:0.6.0
+    container_name: ollama_model_llama3.2
+    command: pull llama3.2
+    init: true
+    network_mode: host
+    depends_on:
+      ollama_server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ollama show llama3.2"]
+      start_period: 2m30s
+      interval: 30s
+      retries: 3
