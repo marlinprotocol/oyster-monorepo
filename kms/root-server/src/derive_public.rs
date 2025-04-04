@@ -5,12 +5,15 @@ use axum::{
     response::IntoResponse,
 };
 use kms_derive_utils::{
-    derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_secret, to_ed25519_solana_address, to_secp256k1_ethereum_address, to_secp256k1_public, to_secp256k1_secret, to_x25519_public
+    derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_solana_address, to_secp256k1_ethereum_address, to_secp256k1_public, to_secp256k1_secret, to_x25519_public
 };
-use serde::Deserialize;
-use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
+use serde::{Deserialize, Serialize};
+use secp256k1::{ecdsa::Signature, Message, Secp256k1, SecretKey};
+use secp256k1::hashes::{sha256, Hash};
 
-#[derive(Deserialize)]
+const PRIVATE_KEY_PATH: &[u8; 20] = b"oyster.kms.secp256k1";
+
+#[derive(Serialize, Deserialize)]
 pub struct Params {
     pcr0: String,
     pcr1: String,
@@ -41,20 +44,30 @@ impl Params {
     }
 }
 
-// get authorisation public key
-pub async fn get_public(State(state): State<AppState>) -> impl IntoResponse {
-    let public = to_ed25519_public(state.seed);
+// common function to sign a sha256 message hash using secp256k1
+pub fn sign_message(secret_key: [u8; 32], params: Params, message: &[u8]) -> Signature {
+    // Serialize Params to JSON bytes.
+    let params_bytes = serde_json::to_vec(&params).expect("Failed to serialize params");
 
-    let mut signing_key = state.signing_key.clone();
-    let signature  = signing_key
-        .sign(&public);
+    // Combine the original message with the serialized Params.
+    let mut combined_data = Vec::new();
+    combined_data.extend_from_slice(message);
+    combined_data.extend_from_slice(&params_bytes);
 
-    let mut response = (StatusCode::OK, public).into_response();
+    let secret_key = SecretKey::from_slice(&secret_key).expect("Invalid private key");    
+    let secp = Secp256k1::new();
+    let message_hash = sha256::Hash::hash(&combined_data);
+    let msg = Message::from_digest(message_hash.to_byte_array());
+    secp.sign_ecdsa(&msg, &secret_key)
+}
+
+// Common function to generate response with signed data
+pub fn generate_signed_response<T: IntoResponse>(status: StatusCode, data: T, signature: Signature) -> impl IntoResponse {
+    let mut response = (status, data).into_response();
     response.headers_mut().insert(
         header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
+        HeaderValue::from_str(&hex::encode(signature.serialize_compact())).unwrap(),
     );
-
     response
 }
 
@@ -64,23 +77,11 @@ pub async fn derive_secp256k1_public(
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
     let Some(path_key) = params.derive_path_seed(state.seed) else {
-        return (StatusCode::BAD_REQUEST, [0; 64]).into_response();
+        return generate_signed_response(StatusCode::BAD_REQUEST, [0; 64], Signature::from_compact(&[0; 64]).unwrap());
     };
     let public = to_secp256k1_public(path_key);
-
-    // sign the public key
-    let secret_key = to_ed25519_secret(state.seed);
-    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-    let signature  = signing_key
-        .sign(&public);
-
-    let mut response = (StatusCode::OK, public).into_response();
-    response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
-    );
-
-    response
+    let signature = sign_message(to_secp256k1_secret(derive_path_seed(state.seed, PRIVATE_KEY_PATH)),params , &public);
+    generate_signed_response(StatusCode::OK, public, signature)
 }
 
 // derive address based on params
@@ -89,22 +90,11 @@ pub async fn derive_secp256k1_address_ethereum(
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
     let Some(path_key) = params.derive_path_seed(state.seed) else {
-        return (StatusCode::BAD_REQUEST, String::new()).into_response();
+        return generate_signed_response(StatusCode::BAD_REQUEST, String::new(), Signature::from_compact(&[0; 64]).unwrap());
     };
     let address = to_secp256k1_ethereum_address(path_key);
-
-    let secret_key = to_ed25519_secret(state.seed);
-    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-    let signature  = signing_key
-        .sign(&address.clone().into_bytes());
-
-    let mut response = (StatusCode::OK, address).into_response();
-    response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
-    );
-
-    response
+    let signature = sign_message(to_secp256k1_secret(derive_path_seed(state.seed, PRIVATE_KEY_PATH)), params,&address.clone().into_bytes());
+    generate_signed_response(StatusCode::OK, address, signature)
 }
 
 // derive public key based on params
@@ -113,22 +103,11 @@ pub async fn derive_ed25519_public(
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
     let Some(path_key) = params.derive_path_seed(state.seed) else {
-        return (StatusCode::BAD_REQUEST, [0; 32]).into_response();
+        return generate_signed_response(StatusCode::BAD_REQUEST, [0; 32], Signature::from_compact(&[0; 64]).unwrap());
     };
     let public = to_ed25519_public(path_key);
-
-    let secret_key = to_ed25519_secret(state.seed);
-    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-    let signature  = signing_key
-        .sign(&public);
-
-    let mut response = (StatusCode::OK, public).into_response();
-    response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
-    );
-
-    response
+    let signature = sign_message(to_secp256k1_secret(derive_path_seed(state.seed, PRIVATE_KEY_PATH)), params, &public);
+    generate_signed_response(StatusCode::OK, public, signature)
 }
 
 // derive address based on params
@@ -137,22 +116,11 @@ pub async fn derive_ed25519_address_solana(
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
     let Some(path_key) = params.derive_path_seed(state.seed) else {
-        return (StatusCode::BAD_REQUEST, String::new()).into_response();
+        return generate_signed_response(StatusCode::BAD_REQUEST, String::new(), Signature::from_compact(&[0; 64]).unwrap());
     };
     let address = to_ed25519_solana_address(path_key);
-
-    let secret_key = to_ed25519_secret(state.seed);
-    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-    let signature  = signing_key
-        .sign(&address.clone().into_bytes());
-
-    let mut response = (StatusCode::OK, address).into_response();
-    response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
-    );
-
-    response
+    let signature = sign_message(to_secp256k1_secret(derive_path_seed(state.seed, PRIVATE_KEY_PATH)), params,&address.clone().into_bytes());
+    generate_signed_response(StatusCode::OK, address, signature)
 }
 
 // derive public key based on params
@@ -161,20 +129,9 @@ pub async fn derive_x25519_public(
     Query(params): Query<Params>,
 ) -> impl IntoResponse {
     let Some(path_key) = params.derive_path_seed(state.seed) else {
-        return (StatusCode::BAD_REQUEST, [0; 32]).into_response();
+        return generate_signed_response(StatusCode::BAD_REQUEST, [0; 32], Signature::from_compact(&[0; 64]).unwrap());
     };
     let public = to_x25519_public(path_key);
-
-    let secret_key = to_ed25519_secret(state.seed);
-    let mut signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-    let signature  = signing_key
-        .sign(&public);
-
-    let mut response = (StatusCode::OK, public).into_response();
-    response.headers_mut().insert(
-        header::HeaderName::from_static("x-kms-signature"),
-        HeaderValue::from_str(&hex::encode(signature.to_bytes())).unwrap(),
-    );
-
-    response
+    let signature = sign_message(to_secp256k1_secret(derive_path_seed(state.seed, PRIVATE_KEY_PATH)), params, &public);
+    generate_signed_response(StatusCode::OK, public, signature)
 }

@@ -19,7 +19,6 @@ use tokio::{
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-use ed25519_dalek::SigningKey;
 
 mod derive;
 mod derive_public;
@@ -76,16 +75,11 @@ struct Args {
     /// Initial delay to allow for attestation verification
     #[arg(long, default_value = "1800")]
     delay: u64,
-
-    /// Path to enclave sec key file
-    #[arg(long, default_value = "/app/id.sec")]
-    id_secret_path: String,
 }
 
 #[derive(Clone)]
 struct AppState {
     seed: [u8; 64],
-    signing_key: SigningKey,
 }
 
 #[tokio::main]
@@ -97,7 +91,6 @@ async fn main() -> Result<()> {
     // sleep to allow attestation verification
     // taco decryption will only work after the signer is
     // verified on chain
-
     sleep(Duration::from_secs(args.delay)).await;
 
     let taco_nodes = taco::get_taco_nodes(&args)
@@ -120,7 +113,7 @@ async fn main() -> Result<()> {
     let encrypted_seed = fs::read(args.seed_path)
         .await
         .context("failed to read seed file")?;
-    let seed: [u8; 64] = decrypt(
+    let seed = decrypt(
         &encrypted_seed,
         args.ritual,
         &taco_nodes,
@@ -141,16 +134,7 @@ async fn main() -> Result<()> {
         .try_into()
         .map_err(|_| anyhow!("failed to parse secret file"))?;
 
-    let key_bytes = read(args.id_secret_path).await.context("Failed to read key file")?;
-    if key_bytes.len() < 32 {
-        return Err(anyhow::anyhow!("Key file is too short, expected at least 32 bytes"));
-    }
-    let secret_key: [u8; 32] = key_bytes[..32]
-        .try_into()
-        .context("Failed to convert key bytes into [u8; 32]")?;
-    let signing_key: SigningKey = SigningKey::from_bytes(&secret_key);
-
-    let scallop_app_state = AppState { seed, signing_key };
+    let scallop_app_state = AppState { seed };
     let public_app_state = scallop_app_state.clone();
 
     // Panic safety: we simply abort on panics and eschew any handling
@@ -245,10 +229,6 @@ async fn run_public_server(app_state: AppState, listen_addr: String) -> Result<(
         .route(
             "/derive/x25519/public",
             get(derive_public::derive_x25519_public),
-        )
-        .route(
-            "/get/public",
-            get(derive_public::get_public),
         )
         // middleware is executed bottom to top here
         // we want timeouts to be first, then size checks

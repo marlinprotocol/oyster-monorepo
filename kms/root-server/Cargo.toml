@@ -25,7 +25,7 @@ tokio = { version = "1.44.1", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["limit", "timeout"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-ed25519-dalek = { version = "2.1.0"}
+secp256k1 = { version = "0.30.0", features = ["hashes"] }
 
 [profile.release]
 strip = true
