@@ -2,10 +2,12 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -26,6 +28,15 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
         std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
     );
+
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
+    let idx = log.log_index.ok_or(anyhow!("did not get index from log"))?;
+    let tx_hash = log
+        .transaction_hash
+        .ok_or(anyhow!("did not get tx hash from log"))?
+        .encode_hex_with_prefix();
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
@@ -61,6 +72,22 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we error out for now, can consider just moving on
         return Err(anyhow::anyhow!("could not find job"));
     }
+
+    // target sql:
+    // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", "settle", true);
+    diesel::insert_into(transactions::table)
+        .values((
+            transactions::block.eq(block as i64),
+            transactions::idx.eq(idx as i64),
+            transactions::tx_hash.eq(tx_hash),
+            transactions::job.eq(&id),
+            transactions::amount.eq(&amount),
+            transactions::tx_type.eq("settle"),
+            transactions::is_usdc.eq(true),
+        ))
+        .execute(conn)
+        .context("failed to create usdc settle transaction")?;
 
     info!(id, ?amount, ?timestamp, "settled job");
 
@@ -262,6 +289,21 @@ mod tests {
             ])
         );
 
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                42i64,
+                69i64,
+                keccak256!("some tx").encode_hex_with_prefix(),
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(5),
+                "settle".to_owned(),
+                Some(true),
+            ))
+        );
         Ok(())
     }
 
@@ -444,6 +486,22 @@ mod tests {
                     Some(BigDecimal::from(0)),
                 )
             ])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                42i64,
+                69i64,
+                keccak256!("some tx").encode_hex_with_prefix(),
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(0),
+                "settle".to_owned(),
+                Some(true),
+            ))
         );
 
         Ok(())
