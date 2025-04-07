@@ -6,7 +6,6 @@ set -e
 cat /etc/supervisord.conf
 /app/supervisord &
 SUPERVISOR_PID=$!
-sleep 1
 echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf status
 
@@ -18,12 +17,8 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
-sleep 2
-
 # start mock derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
-
-sleep 10
 
 if [ -e "/app/docker-compose.yml" ]; then 
     # Start the Docker daemon

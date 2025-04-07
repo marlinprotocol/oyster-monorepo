@@ -32,7 +32,7 @@
   keygenX25519 = "${keygen}/bin/keygen-x25519";
   attestationServerMock = "${attestation-server-mock}/bin/oyster-attestation-server-mock";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
-  deriveServerMock = "${mock-derive-server}/bin/mock-derive-server";
+  deriveServerMock = "${mock-derive-server}/bin/kms-mock-derive-server";
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
 
