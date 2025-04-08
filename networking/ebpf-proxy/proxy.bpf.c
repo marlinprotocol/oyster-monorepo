@@ -16,8 +16,7 @@
 // This struct will be sent to userspace via the perf buffer.
 struct pkt_event {
   __u32 pkt_len;               // Original packet length
-  __u8 pkt_data[MAX_PKT_SIZE]; // Captured packet data (truncated if >
-                               // MAX_PKT_SIZE)
+  __u8 pkt_data[MAX_PKT_SIZE]; // Captured packet data
 };
 // Force emitting struct pkt_event into the ELF.
 const struct pkt_event *unused __attribute__((unused));
@@ -32,13 +31,27 @@ struct {
   __uint(max_entries, 1024); // Should be >= number of CPUs
 } perf_output SEC(".maps");
 
+// --- Per-CPU Temporary Buffer Map ---
+// Map to construct the singular pkt_event, too big to put on stack
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(key_size, sizeof(__u32));              // Key is just 0
+  __uint(value_size, sizeof(struct pkt_event)); // Value holds our data
+  __uint(max_entries, 1);                       // Only one entry needed
+} pkt_event_buffer SEC(".maps");
+
 // --- TC Egress Program ---
 SEC("tc/egress")
 int capture_egress_packets(struct __sk_buff *skb) {
   void *data = (void *)(long)skb->data;
   void *data_end = (void *)(long)skb->data_end;
   struct ethhdr *eth;
-  struct pkt_event event = {}; // Use struct on stack
+  __u32 zero = 0; // blergh
+  // Load pointer to temporary packet
+  struct pkt_event *event = bpf_map_lookup_elem(&pkt_event_buffer, &zero);
+  if (!event) {
+    return TC_ACT_SHOT; // Init issue? drop
+  }
 
   // Check if packets are too big
   if (skb->len > MAX_PKT_SIZE + sizeof(struct ethhdr)) {
@@ -60,12 +73,12 @@ int capture_egress_packets(struct __sk_buff *skb) {
   }
 
   // Prepare data for userspace
-  event.pkt_len = skb->len - sizeof(struct ethhdr); // Store length
+  event->pkt_len = skb->len - sizeof(struct ethhdr); // Store length
 
   // Copy packet data into the event struct, after ethernet header
   // bpf_skb_load_bytes is safer than direct pointer access for larger reads
-  int ret = bpf_skb_load_bytes(skb, sizeof(struct ethhdr), &event.pkt_data,
-                               event.pkt_len);
+  int ret = bpf_skb_load_bytes(skb, sizeof(struct ethhdr), event->pkt_data,
+                               event->pkt_len);
   if (ret < 0) {
     // Failed to load bytes, can this happen? Drop.
     return TC_ACT_SHOT;
@@ -79,8 +92,8 @@ int capture_egress_packets(struct __sk_buff *skb) {
   // The fourth is the data pointer.
   // The fifth is the size of the data.
   // Ignore return value since we are dropping anyway
-  bpf_perf_event_output(skb, &perf_output, BPF_F_CURRENT_CPU, &event,
-                        sizeof(event));
+  bpf_perf_event_output(skb, &perf_output, BPF_F_CURRENT_CPU, event,
+                        sizeof(*event));
 
   // No point continuing, just drop
   return TC_ACT_SHOT;
