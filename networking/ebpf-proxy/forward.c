@@ -9,6 +9,9 @@
 #include <net/if.h>
 
 #include <bpf/bpf.h>
+#include <linux/vm_sockets.h> // For VSOCK specifics
+#include <sys/socket.h>       // For socket functions
+
 #include <bpf/libbpf.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
@@ -88,13 +91,25 @@ int main(int argc, char **argv) {
   int ifindex;
   struct bpf_tc_hook tc_hook = {};
   struct bpf_tc_opts tc_opts = {};
+  unsigned int vsock_cid;
+  unsigned int vsock_port;
+  struct sockaddr_vm vsock_addr = {0};
 
-  if (argc != 2) {
-    fprintf(stderr, "Usage: %s <interface_name>\n", argv[0]);
+  if (argc != 3) {
+    fprintf(stderr, "Usage: %s <interface_name> <vsock_cid>:<vsock_port>\n",
+            argv[0]);
     return 1;
   }
 
   const char *ifname = argv[1];
+  const char *vsock_target = argv[2];
+
+  // Parse VSOCK target string
+  if (sscanf(vsock_target, "%u:%u", &vsock_cid, &vsock_port) != 2) {
+    fprintf(stderr, "ERROR: Invalid VSOCK target format. Use <cid>:<port>\n");
+    return 1;
+  }
+
   ifindex = if_nametoindex(ifname);
   if (!ifindex) {
     perror("if_nametoindex failed");
@@ -103,6 +118,28 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
+
+  // --- VSOCK Setup ---
+  vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
+  if (vsock_fd < 0) {
+    perror("ERROR: Failed to create VSOCK socket");
+    goto cleanup; // Use goto for centralized cleanup
+  }
+
+  vsock_addr.svm_family = AF_VSOCK;
+  vsock_addr.svm_port = vsock_port;
+  vsock_addr.svm_cid = vsock_cid;
+
+  printf("Attempting to connect to vsock cid %u port %u...\n", vsock_cid,
+         vsock_port);
+  if (connect(vsock_fd, (struct sockaddr *)&vsock_addr, sizeof(vsock_addr)) <
+      0) {
+    perror("ERROR: Failed to connect VSOCK socket");
+    err = -errno; // Store error code for return
+    goto cleanup;
+  }
+  printf("Successfully connected to vsock endpoint.\n");
+  // --- End VSOCK Setup ---
 
   skel = intercept_bpf__open();
   if (!skel) {
@@ -193,6 +230,12 @@ cleanup:
     perf_buffer__free(pb);
   }
   intercept_bpf__destroy(skel);
+
+  if (vsock_fd >= 0) {
+    printf("Closing VSOCK socket (fd %d)\n", vsock_fd);
+    close(vsock_fd);
+    vsock_fd = -1; // Mark as closed
+  }
 
   printf(
       "Cleanup complete. You may need to manually remove the clsact qdisc:\n");
