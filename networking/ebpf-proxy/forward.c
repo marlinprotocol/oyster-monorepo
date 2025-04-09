@@ -181,6 +181,8 @@ int bpf_init(int ifindex, struct intercept_bpf *skel,
     tc_opts->sz = sizeof(*tc_opts);
     tc_opts->prog_fd = bpf_program__fd(skel->progs.capture_egress_packets);
     tc_opts->flags = BPF_TC_F_REPLACE;
+    tc_opts->priority = 1;
+    tc_opts->handle = 1;
 
     err = bpf_tc_attach(tc_hook, tc_opts);
     if (err) {
