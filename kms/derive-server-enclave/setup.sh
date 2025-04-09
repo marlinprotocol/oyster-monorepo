@@ -10,10 +10,6 @@ cat /app/ip.txt
 /app/vet --url vsock://3:1300/oyster/job > /app/job.txt
 cat /app/job.txt
 
-# query init params for enclave and store
-/app/vet --url vsock://3:1300/oyster/init-params > /app/init-params
-/app/vet --url vsock://3:1300/oyster/extra-init-params > /app/extra-init-params
-
 ip=$(cat /app/ip.txt)
 
 # setting an address for loopback

@@ -61,6 +61,8 @@ $ curl <ip:port>/generate
 544d4b69000100009293c43099822c1c52b001c0a...
 ```
 
+The response follows this format (with || denoting concatenation) - `<encrypted seed>||<64-byte secp256k1 public key>||<32 byte x25519 public key>||<65-byte signature>`. The public keys correspond to keys derived from the seed using specific derivation paths and can be used to prove knowledge of the decrypted seed.
+
 ## License
 
 This project is licensed under the GNU AGPLv3 or any later version. See [LICENSE.txt](./LICENSE.txt).

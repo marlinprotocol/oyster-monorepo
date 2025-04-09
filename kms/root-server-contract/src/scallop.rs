@@ -43,9 +43,9 @@ impl ScallopAuthStore for AuthStore {
         }
 
         let mut hasher = Sha256::new();
-        hasher.update(hex::decode(decoded.pcrs[0]).unwrap());
-        hasher.update(hex::decode(decoded.pcrs[1]).unwrap());
-        hasher.update(hex::decode(decoded.pcrs[2]).unwrap());
+        hasher.update(decoded.pcrs[0]);
+        hasher.update(decoded.pcrs[1]);
+        hasher.update(decoded.pcrs[2]);
         hasher.update((decoded.user_data.len() as u16).to_be_bytes());
         hasher.update(decoded.user_data);
         let image_id = hasher.finalize().into();
