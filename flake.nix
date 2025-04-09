@@ -229,6 +229,9 @@
         inherit nixpkgs systemConfig fenix naersk;
       };
       serverless.workerd = ./. + "/serverless/executor/runtime/workerd";
+      networking.ebpf-proxy = import ./networking/ebpf-proxy {
+        inherit nixpkgs systemConfig;
+      };
     };
   in {
     formatter = {
