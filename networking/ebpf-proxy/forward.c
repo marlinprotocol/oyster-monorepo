@@ -59,14 +59,16 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
 void handle_lost_events(void *ctx, int cpu, __u64 lost_cnt) {}
 
 void bpf_teardown(struct intercept_bpf *skel, struct bpf_tc_hook *tc_hook,
-                  bool *existing_hook, struct bpf_tc_opts *tc_opts,
+                  bool existing_hook, struct bpf_tc_opts *tc_opts,
                   struct perf_buffer *pb) {
   perf_buffer__free(pb);
   bpf_tc_detach(tc_hook, tc_opts);
-  if (!*existing_hook)
+  if (!existing_hook)
     bpf_tc_hook_destroy(tc_hook);
   intercept_bpf__destroy(skel);
 }
+
+void vsock_teardown(int vsock_fd) { close(vsock_fd); }
 
 // Helper to attach clsact qdisc if not present
 int ensure_clsact_qdisc(int ifindex) {
