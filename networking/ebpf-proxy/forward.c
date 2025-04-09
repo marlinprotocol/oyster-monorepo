@@ -86,7 +86,7 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
     *vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
     if (*vsock_fd < 0) {
       perror("ERROR: Failed to create VSOCK socket");
-      goto vsock_connect_cleanup;
+      goto vsock_connect_socket_cleanup;
     }
 
     printf("Attempting to connect to vsock cid %u port %u...\n",
@@ -95,13 +95,15 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
         connect(*vsock_fd, (struct sockaddr *)vsock_addr, sizeof(*vsock_addr));
     if (err < 0) {
       perror("ERROR: Failed to connect VSOCK socket");
-      goto vsock_connect_cleanup;
+      goto vsock_connect_connect_cleanup;
     }
 
     printf("Successfully connected to vsock endpoint.\n");
     return 0;
 
-  vsock_connect_cleanup:
+  vsock_connect_connect_cleanup:
+    close(*vsock_fd);
+  vsock_connect_socket_cleanup:
     // sleep in multiples of 100ms to handle signals
     for (int i = 0; i < 20 && !exiting; i++) {
       usleep(100000);
