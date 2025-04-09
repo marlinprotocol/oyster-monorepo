@@ -81,6 +81,13 @@ int ensure_clsact_qdisc(int ifindex) {
   return 0;
 }
 
+void sleep_100ms(int n) {
+  // sleep in multiples of 100ms to handle signals
+  for (int i = 0; i < n && !exiting; i++) {
+    usleep(100000);
+  }
+}
+
 int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
   while (!exiting) {
     *vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
@@ -104,10 +111,7 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
   vsock_connect_connect_cleanup:
     close(*vsock_fd);
   vsock_connect_socket_cleanup:
-    // sleep in multiples of 100ms to handle signals
-    for (int i = 0; i < 20 && !exiting; i++) {
-      usleep(100000);
-    }
+    sleep_100ms(10);
   }
 
   // should only get here on exit signals
