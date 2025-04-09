@@ -79,11 +79,11 @@ void vsock_teardown() {
 
 // Helper to attach clsact qdisc if not present
 int ensure_clsact_qdisc(int ifindex) {
-  struct bpf_tc_hook hook = {
-      .sz = sizeof(hook),
-      .ifindex = ifindex,
-      .attach_point = BPF_TC_INGRESS,
-  };
+  struct bpf_tc_hook hook;
+  memset(&hook, 0, sizeof(hook));
+  hook.sz = sizeof(hook);
+  hook.ifindex = ifindex;
+  hook.attach_point = BPF_TC_INGRESS;
   int err;
 
   err = bpf_tc_hook_create(&hook);
