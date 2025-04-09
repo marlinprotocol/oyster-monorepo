@@ -110,8 +110,8 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
 
     printf("Attempting to connect to vsock cid %u port %u...\n",
            vsock_addr->svm_cid, vsock_addr->svm_port);
-    int err =
-        connect(*vsock_fd, (struct sockaddr *)vsock_addr, sizeof(*vsock_addr));
+    int err = connect(*vsock_fd, (struct sockaddr const *)vsock_addr,
+                      sizeof(*vsock_addr));
     if (err < 0) {
       perror("ERROR: Failed to connect VSOCK socket");
       goto vsock_connect_connect_cleanup;
@@ -244,7 +244,11 @@ int main(int argc, char **argv) {
   int ifindex;
   struct sockaddr_vm vsock_addr = {0};
   struct intercept_bpf *skel = NULL;
+  struct bpf_tc_hook tc_hook = {};
+  bool existing_hook = false;
+  struct bpf_tc_opts tc_opts = {};
   struct perf_buffer *pb = NULL;
+  int vsock_fd;
 
   if (argc != 3) {
     fprintf(stderr, "Usage: %s <interface_name> <vsock_cid>:<vsock_port>\n",
@@ -265,50 +269,46 @@ int main(int argc, char **argv) {
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
 
-  pb = perf_buffer__new(bpf_map__fd(skel->maps.perf_output), 8, handle_event,
-                        handle_lost_events, NULL, NULL);
-  if (!pb) {
-    err = -errno;
-    fprintf(stderr, "ERROR: Failed to set up perf buffer: %s\n",
-            strerror(errno));
-    goto cleanup;
+  err = bpf_init(ifindex, skel, &tc_hook, &existing_hook, &tc_opts, pb);
+  if (err) {
+    // should only be happening on exit signals
+    return err;
   }
 
-  printf("Listening for egress IP packet events on %d\n", ifindex);
+  err = vsock_connect(&vsock_addr, &vsock_fd);
+  if (err) {
+    // should only be happening on exit signals
+    bpf_teardown(skel, &tc_hook, existing_hook, &tc_opts, pb);
+    return err;
+  }
 
   while (!exiting) {
     err = perf_buffer__poll(pb, 100);
     if (err < 0 && err != -EINTR) {
-      fprintf(stderr, "ERROR: Polling perf buffer failed: %s\n",
-              strerror(-err));
-      goto cleanup;
+      goto main_bpf_error;
     }
-    err = 0;
+    continue;
+  main_bpf_error:
+    bpf_teardown(skel, &tc_hook, existing_hook, &tc_opts, pb);
+    sleep_100ms(10);
+    err = bpf_init(ifindex, skel, &tc_hook, &existing_hook, &tc_opts, pb);
+    if (err) {
+      // should only be happening on exit signals
+      vsock_teardown(vsock_fd);
+      return err;
+    }
+    continue;
+  main_vsock_error:
+    vsock_teardown(vsock_fd);
+    sleep_100ms(10);
+    err = vsock_connect(&vsock_addr, &vsock_fd);
+    if (err) {
+      // should only be happening on exit signals
+      bpf_teardown(skel, &tc_hook, existing_hook, &tc_opts, pb);
+      return err;
+    }
+    continue;
   }
 
-cleanup:
-  printf("\nCleaning up...\n");
-
-  if (tc_opts.prog_fd > 0) {
-    tc_opts.flags = 0;
-    tc_opts.prog_fd = 0;
-    tc_opts.prog_id = 0;
-  }
-
-  if (pb) {
-    perf_buffer__free(pb);
-  }
-  intercept_bpf__destroy(skel);
-
-  if (vsock_fd >= 0) {
-    printf("Closing VSOCK socket (fd %d)\n", vsock_fd);
-    close(vsock_fd);
-    vsock_fd = -1; // Mark as closed
-  }
-
-  printf(
-      "Cleanup complete. You may need to manually remove the clsact qdisc:\n");
-  printf("  sudo tc qdisc del dev %s clsact\n", ifname);
-
-  return err ? 1 : 0;
+  return 0;
 }
