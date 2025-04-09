@@ -114,6 +114,68 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
   return 2;
 }
 
+int bpf_init(int ifindex, struct intercept_bpf *skel,
+             struct bpf_tc_hook *tc_hook, bool *existing_hook) {
+  *existing_hook = false;
+  int err = 0;
+  struct bpf_tc_opts tc_opts = {};
+
+  skel = intercept_bpf__open();
+  if (!skel) {
+    fprintf(stderr, "ERROR: Failed to open BPF skeleton\n");
+    return 1;
+  }
+
+  err = intercept_bpf__load(skel);
+  if (err) {
+    fprintf(stderr, "ERROR: Failed to load and verify BPF skeleton\n");
+    goto bpf_init_load_cleanup;
+  }
+
+  err = ensure_clsact_qdisc(ifindex);
+  if (err) {
+    goto bpf_init_load_cleanup;
+  }
+
+  tc_hook->sz = sizeof(*tc_hook);
+  tc_hook->ifindex = ifindex;
+  tc_hook->attach_point = BPF_TC_EGRESS;
+
+  err = bpf_tc_hook_create(tc_hook);
+  if (err && errno != EEXIST) {
+    fprintf(stderr, "ERROR: Failed to create TC hook: %s\n", strerror(errno));
+    goto bpf_init_load_cleanup;
+  }
+  if (!err) {
+    printf("Created TC hook for egress on ifindex %d\n", ifindex);
+  } else {
+    printf("TC hook for egress on ifindex %d already exists\n", ifindex);
+    err = 0;
+    *existing_hook = true;
+  }
+
+  tc_opts.sz = sizeof(tc_opts);
+  tc_opts.prog_fd = bpf_program__fd(skel->progs.capture_egress_packets);
+  tc_opts.flags = BPF_TC_F_REPLACE;
+
+  err = bpf_tc_attach(tc_hook, &tc_opts);
+  if (err) {
+    fprintf(stderr, "ERROR: Failed to attach TC program: %s\n",
+            strerror(errno));
+    goto bpf_init_attach_cleanup;
+  }
+  printf("Successfully attached TC program to %d egress\n", ifindex);
+  return 0;
+
+bpf_init_attach_cleanup:
+  if (!*existing_hook)
+    bpf_tc_hook_destroy(tc_hook);
+bpf_init_load_cleanup:
+  intercept_bpf__destroy(skel);
+
+  return 1;
+}
+
 // Signal handler for graceful shutdown
 void sig_handler(int sig) { exiting = true; }
 
@@ -151,8 +213,6 @@ int main(int argc, char **argv) {
   struct sockaddr_vm vsock_addr = {0};
   struct intercept_bpf *skel = NULL;
   struct perf_buffer *pb = NULL;
-  struct bpf_tc_hook tc_hook = {};
-  struct bpf_tc_opts tc_opts = {};
 
   if (argc != 3) {
     fprintf(stderr, "Usage: %s <interface_name> <vsock_cid>:<vsock_port>\n",
@@ -173,52 +233,6 @@ int main(int argc, char **argv) {
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
 
-  skel = intercept_bpf__open();
-  if (!skel) {
-    fprintf(stderr, "ERROR: Failed to open BPF skeleton\n");
-    return 1;
-  }
-
-  err = intercept_bpf__load(skel);
-  if (err) {
-    fprintf(stderr, "ERROR: Failed to load and verify BPF skeleton\n");
-    goto cleanup;
-  }
-
-  err = ensure_clsact_qdisc(ifindex);
-  if (err) {
-    goto cleanup;
-  }
-
-  tc_hook.sz = sizeof(tc_hook);
-  tc_hook.ifindex = ifindex;
-  tc_hook.attach_point = BPF_TC_EGRESS;
-
-  err = bpf_tc_hook_create(&tc_hook);
-  if (err && errno != EEXIST) {
-    fprintf(stderr, "ERROR: Failed to create TC hook: %s\n", strerror(errno));
-    goto cleanup;
-  }
-  if (!err) {
-    printf("Created TC hook for egress on ifindex %d\n", ifindex);
-  } else {
-    printf("TC hook for egress on ifindex %d already exists\n", ifindex);
-    err = 0;
-  }
-
-  tc_opts.sz = sizeof(tc_opts);
-  tc_opts.prog_fd = bpf_program__fd(skel->progs.capture_egress_packets);
-  tc_opts.flags = BPF_TC_F_REPLACE;
-
-  err = bpf_tc_attach(&tc_hook, &tc_opts);
-  if (err) {
-    fprintf(stderr, "ERROR: Failed to attach TC program: %s\n",
-            strerror(errno));
-    goto cleanup;
-  }
-  printf("Successfully attached TC program to %s (ifindex %d) egress\n", ifname,
-         ifindex);
-
   pb = perf_buffer__new(bpf_map__fd(skel->maps.perf_output), 8, handle_event,
                         handle_lost_events, NULL, NULL);
   if (!pb) {
@@ -228,9 +242,7 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
-  printf("Listening for egress IP packet events (<1500 bytes frame size) on "
-         "%s... Press Ctrl+C to exit.\n",
-         ifname);
+  printf("Listening for egress IP packet events on %d\n", ifindex);
 
   while (!exiting) {
     err = perf_buffer__poll(pb, 100);
@@ -249,13 +261,6 @@ cleanup:
     tc_opts.flags = 0;
     tc_opts.prog_fd = 0;
     tc_opts.prog_id = 0;
-    err = bpf_tc_detach(&tc_hook, &tc_opts);
-    if (err) {
-      fprintf(stderr, "WARN: Failed to detach TC program: %s\n",
-              strerror(errno));
-    } else {
-      printf("Detached TC program from %s egress\n", ifname);
-    }
   }
 
   if (pb) {
