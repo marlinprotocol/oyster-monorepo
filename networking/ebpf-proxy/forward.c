@@ -22,6 +22,8 @@
 
 // Global flag to handle termination
 static volatile bool exiting = false;
+// Global vsock fd
+static volatile int vsock_fd = -1;
 
 // --- Constants ---
 // Max packet data size
@@ -37,20 +39,6 @@ struct pkt_event {
 // Callback function for handling received packet data
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
   struct pkt_event *event = (struct pkt_event *)data;
-  struct iphdr *ip;
-  char src_ip_str[INET_ADDRSTRLEN];
-  char dst_ip_str[INET_ADDRSTRLEN];
-
-  ip = (struct iphdr *)
-           event->pkt_data; // pkt_data starts directly with IP header
-
-  // Check IP version (optional sanity check)
-  if (ip->version != 4) {
-    return;
-  }
-
-  inet_ntop(AF_INET, &ip->saddr, src_ip_str, sizeof(src_ip_str));
-  inet_ntop(AF_INET, &ip->daddr, dst_ip_str, sizeof(dst_ip_str));
 
   // TODO: send to vsock
 }
@@ -68,7 +56,10 @@ void bpf_teardown(struct intercept_bpf *skel, struct bpf_tc_hook *tc_hook,
   intercept_bpf__destroy(skel);
 }
 
-void vsock_teardown(int vsock_fd) { close(vsock_fd); }
+void vsock_teardown() {
+  close(vsock_fd);
+  vsock_fd = -1;
+}
 
 // Helper to attach clsact qdisc if not present
 int ensure_clsact_qdisc(int ifindex) {
@@ -100,17 +91,17 @@ void sleep_100ms(int n) {
   }
 }
 
-int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
+int vsock_connect(struct sockaddr_vm const *vsock_addr) {
   while (!exiting) {
-    *vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
-    if (*vsock_fd < 0) {
+    vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
+    if (vsock_fd < 0) {
       perror("ERROR: Failed to create VSOCK socket");
       goto vsock_connect_socket_cleanup;
     }
 
     printf("Attempting to connect to vsock cid %u port %u...\n",
            vsock_addr->svm_cid, vsock_addr->svm_port);
-    int err = connect(*vsock_fd, (struct sockaddr const *)vsock_addr,
+    int err = connect(vsock_fd, (struct sockaddr const *)vsock_addr,
                       sizeof(*vsock_addr));
     if (err < 0) {
       perror("ERROR: Failed to connect VSOCK socket");
@@ -121,7 +112,7 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
     return 0;
 
   vsock_connect_connect_cleanup:
-    close(*vsock_fd);
+    close(vsock_fd);
   vsock_connect_socket_cleanup:
     sleep_100ms(10);
   }
@@ -248,7 +239,6 @@ int main(int argc, char **argv) {
   bool existing_hook = false;
   struct bpf_tc_opts tc_opts = {};
   struct perf_buffer *pb = NULL;
-  int vsock_fd;
 
   if (argc != 3) {
     fprintf(stderr, "Usage: %s <interface_name> <vsock_cid>:<vsock_port>\n",
@@ -275,7 +265,7 @@ int main(int argc, char **argv) {
     return err;
   }
 
-  err = vsock_connect(&vsock_addr, &vsock_fd);
+  err = vsock_connect(&vsock_addr);
   if (err) {
     // should only be happening on exit signals
     bpf_teardown(skel, &tc_hook, existing_hook, &tc_opts, pb);
@@ -294,14 +284,14 @@ int main(int argc, char **argv) {
     err = bpf_init(ifindex, skel, &tc_hook, &existing_hook, &tc_opts, pb);
     if (err) {
       // should only be happening on exit signals
-      vsock_teardown(vsock_fd);
+      vsock_teardown();
       return err;
     }
     continue;
   main_vsock_error:
-    vsock_teardown(vsock_fd);
+    vsock_teardown();
     sleep_100ms(10);
-    err = vsock_connect(&vsock_addr, &vsock_fd);
+    err = vsock_connect(&vsock_addr);
     if (err) {
       // should only be happening on exit signals
       bpf_teardown(skel, &tc_hook, existing_hook, &tc_opts, pb);
