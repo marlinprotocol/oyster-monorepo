@@ -40,7 +40,22 @@ struct pkt_event {
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
   struct pkt_event *event = (struct pkt_event *)data;
 
-  // TODO: send to vsock
+  if (vsock_fd == -1) {
+    // should never happen
+    return;
+  }
+
+  int total_sent = 0;
+  while (total_sent < event->pkt_len) {
+    int res = send(vsock_fd, event->pkt_data + total_sent,
+                   event->pkt_len - total_sent, 0);
+    if (res < 0) {
+      // TODO: set error flag
+      return;
+    }
+
+    total_sent += res;
+  }
 }
 
 // Callback function for handling lost event notifications
@@ -113,6 +128,7 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr) {
 
   vsock_connect_connect_cleanup:
     close(vsock_fd);
+    vsock_fd = -1;
   vsock_connect_socket_cleanup:
     sleep_100ms(10);
   }
