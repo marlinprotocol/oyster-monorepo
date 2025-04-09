@@ -120,7 +120,7 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
 
 int bpf_init(int ifindex, struct intercept_bpf *skel,
              struct bpf_tc_hook *tc_hook, bool *existing_hook,
-             struct bpf_tc_opts *tc_opts) {
+             struct bpf_tc_opts *tc_opts, struct perf_buffer *pb) {
   while (!exiting) {
     *existing_hook = false;
     int err = 0;
@@ -169,8 +169,20 @@ int bpf_init(int ifindex, struct intercept_bpf *skel,
       goto bpf_init_attach_cleanup;
     }
     printf("Successfully attached TC program to %d egress\n", ifindex);
+
+    pb = perf_buffer__new(bpf_map__fd(skel->maps.perf_output), 8, handle_event,
+                          handle_lost_events, NULL, NULL);
+    if (!pb) {
+      fprintf(stderr, "ERROR: Failed to set up perf buffer: %s\n",
+              strerror(errno));
+      goto bpf_init_pb_cleanup;
+    }
+
+    printf("Listening for egress IP packet events on %d\n", ifindex);
     return 0;
 
+  bpf_init_pb_cleanup:
+    bpf_tc_detach(tc_hook, tc_opts);
   bpf_init_attach_cleanup:
     if (!*existing_hook)
       bpf_tc_hook_destroy(tc_hook);
