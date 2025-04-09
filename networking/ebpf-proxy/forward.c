@@ -84,6 +84,23 @@ int ensure_clsact_qdisc(int ifindex) {
   return 0;
 }
 
+int vsock_addr_init(char const *vsock_target, struct sockaddr_vm *vsock_addr) {
+  unsigned int vsock_cid;
+  unsigned int vsock_port;
+
+  // Parse VSOCK target string
+  if (sscanf(vsock_target, "%u:%u", &vsock_cid, &vsock_port) != 2) {
+    fprintf(stderr, "ERROR: Invalid VSOCK target format. Use <cid>:<port>\n");
+    return 1;
+  }
+
+  vsock_addr->svm_family = AF_VSOCK;
+  vsock_addr->svm_port = vsock_port;
+  vsock_addr->svm_cid = vsock_cid;
+
+  return 0;
+}
+
 int main(int argc, char **argv) {
   struct intercept_bpf *skel = NULL;
   struct perf_buffer *pb = NULL;
@@ -91,8 +108,6 @@ int main(int argc, char **argv) {
   int ifindex;
   struct bpf_tc_hook tc_hook = {};
   struct bpf_tc_opts tc_opts = {};
-  unsigned int vsock_cid;
-  unsigned int vsock_port;
   struct sockaddr_vm vsock_addr = {0};
 
   if (argc != 3) {
@@ -104,16 +119,16 @@ int main(int argc, char **argv) {
   const char *ifname = argv[1];
   const char *vsock_target = argv[2];
 
-  // Parse VSOCK target string
-  if (sscanf(vsock_target, "%u:%u", &vsock_cid, &vsock_port) != 2) {
-    fprintf(stderr, "ERROR: Invalid VSOCK target format. Use <cid>:<port>\n");
-    return 1;
-  }
-
+  // Get interface index
   ifindex = if_nametoindex(ifname);
   if (!ifindex) {
     perror("if_nametoindex failed");
     return 1;
+  }
+
+  err = vsock_addr_init(vsock_target, &vsock_addr);
+  if (err) {
+    return err;
   }
 
   signal(SIGINT, sig_handler);
@@ -125,10 +140,6 @@ int main(int argc, char **argv) {
     perror("ERROR: Failed to create VSOCK socket");
     goto cleanup; // Use goto for centralized cleanup
   }
-
-  vsock_addr.svm_family = AF_VSOCK;
-  vsock_addr.svm_port = vsock_port;
-  vsock_addr.svm_cid = vsock_cid;
 
   printf("Attempting to connect to vsock cid %u port %u...\n", vsock_cid,
          vsock_port);
