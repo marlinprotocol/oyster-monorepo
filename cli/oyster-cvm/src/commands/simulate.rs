@@ -262,7 +262,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
                     mount_args.append(&mut vec![
                         "-v".to_string(),
                         format!(
-                            "{}:/app/init-params/{}",
+                            "{}:/init-params/{}",
                             init_param_host_path.display(),
                             param_components[0]
                         ),
@@ -275,7 +275,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
                     mount_args.append(&mut vec![
                         "-v".to_string(),
                         format!(
-                            "{}:/app/init-params/{}",
+                            "{}:/init-params/{}",
                             init_param_host_path.display(),
                             param_components[0]
                         ),

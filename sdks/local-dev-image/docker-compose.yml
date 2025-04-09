@@ -34,3 +34,4 @@ services:
       start_period: 2m30s
       interval: 30s
       retries: 3
+      
