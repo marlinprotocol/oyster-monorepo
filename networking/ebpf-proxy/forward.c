@@ -84,6 +84,17 @@ int ensure_clsact_qdisc(int ifindex) {
   return 0;
 }
 
+int if_index_init(char const *ifname, int *ifindex) {
+  // Get interface index
+  *ifindex = if_nametoindex(ifname);
+  if (!*ifindex) {
+    perror("if_nametoindex failed");
+    return 1;
+  }
+
+  return 0;
+}
+
 int vsock_addr_init(char const *vsock_target, struct sockaddr_vm *vsock_addr) {
   unsigned int vsock_cid;
   unsigned int vsock_port;
@@ -116,17 +127,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  const char *ifname = argv[1];
-  const char *vsock_target = argv[2];
-
-  // Get interface index
-  ifindex = if_nametoindex(ifname);
-  if (!ifindex) {
-    perror("if_nametoindex failed");
-    return 1;
+  err = if_index_init(argv[1], &ifindex);
+  if (err) {
+    return err;
   }
 
-  err = vsock_addr_init(vsock_target, &vsock_addr);
+  err = vsock_addr_init(argv[2], &vsock_addr);
   if (err) {
     return err;
   }
