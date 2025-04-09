@@ -72,6 +72,13 @@ int capture_egress_packets(struct __sk_buff *skb) {
     return TC_ACT_SHOT; // Not IPv4, drop
   }
 
+  // Check if packet is too small
+  // Not needed, verifier wants it for the subtraction
+  // Equality needed to make it non zero for the load
+  if (skb->len <= sizeof(struct ethhdr)) {
+    return TC_ACT_SHOT; // Too small, drop
+  }
+
   // Prepare data for userspace
   event->pkt_len = skb->len - sizeof(struct ethhdr); // Store length
 
