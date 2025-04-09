@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -24,6 +23,8 @@
 static volatile bool exiting = false;
 // Global vsock fd
 static volatile int vsock_fd = -1;
+// Global vsock err flag
+static volatile bool vsock_err = false;
 
 // --- Constants ---
 // Max packet data size
@@ -40,7 +41,7 @@ struct pkt_event {
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
   struct pkt_event *event = (struct pkt_event *)data;
 
-  if (vsock_fd == -1) {
+  if (vsock_fd < 0) {
     // should never happen
     return;
   }
@@ -50,7 +51,7 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
     int res = send(vsock_fd, event->pkt_data + total_sent,
                    event->pkt_len - total_sent, 0);
     if (res < 0) {
-      // TODO: set error flag
+      vsock_err = true;
       return;
     }
 
@@ -292,6 +293,10 @@ int main(int argc, char **argv) {
     err = perf_buffer__poll(pb, 100);
     if (err < 0 && err != -EINTR) {
       goto main_bpf_error;
+    }
+    if (vsock_err) {
+      vsock_err = false;
+      goto main_vsock_error;
     }
     continue;
   main_bpf_error:
