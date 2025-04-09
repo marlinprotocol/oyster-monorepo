@@ -58,9 +58,6 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz) {
 // Callback function for handling lost event notifications
 void handle_lost_events(void *ctx, int cpu, __u64 lost_cnt) {}
 
-// Signal handler for graceful shutdown
-void sig_handler(int sig) { exiting = true; }
-
 // Helper to attach clsact qdisc if not present
 int ensure_clsact_qdisc(int ifindex) {
   struct bpf_tc_hook hook = {
@@ -83,6 +80,40 @@ int ensure_clsact_qdisc(int ifindex) {
   printf("Ensured clsact qdisc exists on ifindex %d\n", ifindex);
   return 0;
 }
+
+int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
+  while (!exiting) {
+    *vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
+    if (*vsock_fd < 0) {
+      perror("ERROR: Failed to create VSOCK socket");
+      goto vsock_connect_cleanup;
+    }
+
+    printf("Attempting to connect to vsock cid %u port %u...\n",
+           vsock_addr->svm_cid, vsock_addr->svm_port);
+    int err =
+        connect(*vsock_fd, (struct sockaddr *)vsock_addr, sizeof(*vsock_addr));
+    if (err < 0) {
+      perror("ERROR: Failed to connect VSOCK socket");
+      goto vsock_connect_cleanup;
+    }
+
+    printf("Successfully connected to vsock endpoint.\n");
+    return 0;
+
+  vsock_connect_cleanup:
+    // sleep in multiples of 100ms to handle signals
+    for (int i = 0; i < 20 && !exiting; i++) {
+      usleep(100000);
+    }
+  }
+
+  // should only get here on exit signals
+  return 2;
+}
+
+// Signal handler for graceful shutdown
+void sig_handler(int sig) { exiting = true; }
 
 int if_index_init(char const *ifname, int *ifindex) {
   // Get interface index
@@ -113,13 +144,13 @@ int vsock_addr_init(char const *vsock_target, struct sockaddr_vm *vsock_addr) {
 }
 
 int main(int argc, char **argv) {
-  struct intercept_bpf *skel = NULL;
-  struct perf_buffer *pb = NULL;
   int err = 0;
   int ifindex;
+  struct sockaddr_vm vsock_addr = {0};
+  struct intercept_bpf *skel = NULL;
+  struct perf_buffer *pb = NULL;
   struct bpf_tc_hook tc_hook = {};
   struct bpf_tc_opts tc_opts = {};
-  struct sockaddr_vm vsock_addr = {0};
 
   if (argc != 3) {
     fprintf(stderr, "Usage: %s <interface_name> <vsock_cid>:<vsock_port>\n",
@@ -139,24 +170,6 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, sig_handler);
   signal(SIGTERM, sig_handler);
-
-  // --- VSOCK Setup ---
-  vsock_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
-  if (vsock_fd < 0) {
-    perror("ERROR: Failed to create VSOCK socket");
-    goto cleanup; // Use goto for centralized cleanup
-  }
-
-  printf("Attempting to connect to vsock cid %u port %u...\n", vsock_cid,
-         vsock_port);
-  if (connect(vsock_fd, (struct sockaddr *)&vsock_addr, sizeof(vsock_addr)) <
-      0) {
-    perror("ERROR: Failed to connect VSOCK socket");
-    err = -errno; // Store error code for return
-    goto cleanup;
-  }
-  printf("Successfully connected to vsock endpoint.\n");
-  // --- End VSOCK Setup ---
 
   skel = intercept_bpf__open();
   if (!skel) {
