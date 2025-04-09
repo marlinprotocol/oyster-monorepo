@@ -119,64 +119,68 @@ int vsock_connect(struct sockaddr_vm const *vsock_addr, int *vsock_fd) {
 }
 
 int bpf_init(int ifindex, struct intercept_bpf *skel,
-             struct bpf_tc_hook *tc_hook, bool *existing_hook) {
-  *existing_hook = false;
-  int err = 0;
-  struct bpf_tc_opts tc_opts = {};
+             struct bpf_tc_hook *tc_hook, bool *existing_hook,
+             struct bpf_tc_opts *tc_opts) {
+  while (!exiting) {
+    *existing_hook = false;
+    int err = 0;
 
-  skel = intercept_bpf__open();
-  if (!skel) {
-    fprintf(stderr, "ERROR: Failed to open BPF skeleton\n");
-    return 1;
+    skel = intercept_bpf__open();
+    if (!skel) {
+      fprintf(stderr, "ERROR: Failed to open BPF skeleton\n");
+      goto bpf_init_open_cleanup;
+    }
+
+    err = intercept_bpf__load(skel);
+    if (err) {
+      fprintf(stderr, "ERROR: Failed to load and verify BPF skeleton\n");
+      goto bpf_init_load_cleanup;
+    }
+
+    err = ensure_clsact_qdisc(ifindex);
+    if (err) {
+      goto bpf_init_load_cleanup;
+    }
+
+    tc_hook->sz = sizeof(*tc_hook);
+    tc_hook->ifindex = ifindex;
+    tc_hook->attach_point = BPF_TC_EGRESS;
+
+    err = bpf_tc_hook_create(tc_hook);
+    if (err && errno != EEXIST) {
+      fprintf(stderr, "ERROR: Failed to create TC hook: %s\n", strerror(errno));
+      goto bpf_init_load_cleanup;
+    }
+    if (!err) {
+      printf("Created TC hook for egress on ifindex %d\n", ifindex);
+    } else {
+      printf("TC hook for egress on ifindex %d already exists\n", ifindex);
+      *existing_hook = true;
+    }
+
+    tc_opts->sz = sizeof(*tc_opts);
+    tc_opts->prog_fd = bpf_program__fd(skel->progs.capture_egress_packets);
+    tc_opts->flags = BPF_TC_F_REPLACE;
+
+    err = bpf_tc_attach(tc_hook, tc_opts);
+    if (err) {
+      fprintf(stderr, "ERROR: Failed to attach TC program: %s\n",
+              strerror(errno));
+      goto bpf_init_attach_cleanup;
+    }
+    printf("Successfully attached TC program to %d egress\n", ifindex);
+    return 0;
+
+  bpf_init_attach_cleanup:
+    if (!*existing_hook)
+      bpf_tc_hook_destroy(tc_hook);
+  bpf_init_load_cleanup:
+    intercept_bpf__destroy(skel);
+  bpf_init_open_cleanup:
+    sleep_100ms(10);
   }
 
-  err = intercept_bpf__load(skel);
-  if (err) {
-    fprintf(stderr, "ERROR: Failed to load and verify BPF skeleton\n");
-    goto bpf_init_load_cleanup;
-  }
-
-  err = ensure_clsact_qdisc(ifindex);
-  if (err) {
-    goto bpf_init_load_cleanup;
-  }
-
-  tc_hook->sz = sizeof(*tc_hook);
-  tc_hook->ifindex = ifindex;
-  tc_hook->attach_point = BPF_TC_EGRESS;
-
-  err = bpf_tc_hook_create(tc_hook);
-  if (err && errno != EEXIST) {
-    fprintf(stderr, "ERROR: Failed to create TC hook: %s\n", strerror(errno));
-    goto bpf_init_load_cleanup;
-  }
-  if (!err) {
-    printf("Created TC hook for egress on ifindex %d\n", ifindex);
-  } else {
-    printf("TC hook for egress on ifindex %d already exists\n", ifindex);
-    err = 0;
-    *existing_hook = true;
-  }
-
-  tc_opts.sz = sizeof(tc_opts);
-  tc_opts.prog_fd = bpf_program__fd(skel->progs.capture_egress_packets);
-  tc_opts.flags = BPF_TC_F_REPLACE;
-
-  err = bpf_tc_attach(tc_hook, &tc_opts);
-  if (err) {
-    fprintf(stderr, "ERROR: Failed to attach TC program: %s\n",
-            strerror(errno));
-    goto bpf_init_attach_cleanup;
-  }
-  printf("Successfully attached TC program to %d egress\n", ifindex);
-  return 0;
-
-bpf_init_attach_cleanup:
-  if (!*existing_hook)
-    bpf_tc_hook_destroy(tc_hook);
-bpf_init_load_cleanup:
-  intercept_bpf__destroy(skel);
-
+  // should only get here on exit signals
   return 1;
 }
 
