@@ -70,7 +70,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     // First, set the job's rate to 0 using the jobReviseRateInitiate call.
     info!("Found job, initiating rate update to 0...");
     let revise_send_result = market
-        .jobReviseRateInitiate(job_id_bytes, alloy::primitives::U256::from(0))
+        .jobReviseRate(job_id_bytes, alloy::primitives::U256::from(0))
         .send()
         .await;
     let revise_tx_hash = match revise_send_result {
