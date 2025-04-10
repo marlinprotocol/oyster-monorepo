@@ -163,6 +163,7 @@
         dnsproxy = external.dnsproxy.compressed;
         keygen = initialization.keygen.compressed;
         raw-proxy = networking.raw-proxy.compressed;
+        ebpf-proxy = networking.ebpf-proxy.compressed;
         attestation-server = attestation.server.compressed;
         vet = initialization.vet.compressed;
         kernels = kernels.tuna;

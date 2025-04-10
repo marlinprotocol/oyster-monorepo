@@ -12,20 +12,26 @@ cat /app/job.txt
 
 ip=$(cat /app/ip.txt)
 
-# setting an address for loopback
-ifconfig lo $ip mtu 9001
-ip addr add $ip dev lo
+# set up loopback
+ip addr add 127.0.0.1/8 dev lo
+ip link set lo up
+
+# set up bridge
+ip link add name br0 type bridge
+ip addr add $ip/32 dev br0
+ip link set dev br0 mtu 9001
+ip link set dev br0 up
+
+# adding a default route via the bridge
+ip route add default dev br0 src $ip
 
 # localhost dns
 echo "127.0.0.1 localhost" > /etc/hosts
 
-ifconfig
+ip link
 ip addr
+ip route
 cat /etc/hosts
-
-# adding a default route
-ip route add default dev lo src $ip
-route -n
 
 # create ipset with all "internal" (unroutable) addresses
 ipset create internal hash:net
@@ -54,9 +60,11 @@ ipset add portfilter 80
 ipset add portfilter 443
 
 # iptables rules to route traffic to a nfqueue to be picked up by the proxy
-iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
+# iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
 iptables -t nat -vL
 iptables -vL
+
+tc qdisc add dev br0 clsact
 
 # generate identity key
 /app/keygen-ed25519 --secret /app/id.sec --public /app/id.pub

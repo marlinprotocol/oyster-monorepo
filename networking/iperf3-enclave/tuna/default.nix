@@ -6,6 +6,7 @@
   dnsproxy,
   keygen,
   raw-proxy,
+  ebpf-proxy,
   attestation-server,
   vet,
   kernels,
@@ -19,6 +20,7 @@
   keygenEd25519 = "${keygen}/bin/keygen-ed25519";
   itvroProxy = "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
   vtiriProxy = "${raw-proxy}/bin/vsock-to-ip-raw-incoming";
+  ebpfProxy = "${ebpf-proxy}/bin/proxy";
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
   vet' = "${vet}/bin/vet";
   kernel = kernels.kernel;
@@ -37,6 +39,7 @@
     cp ${keygenEd25519} $out/app/keygen-ed25519
     cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
     cp ${vtiriProxy} $out/app/vsock-to-ip-raw-incoming
+    cp ${ebpfProxy} $out/app/ebpf-proxy
     cp ${attestationServer} $out/app/attestation-server
     cp ${dnsproxy'} $out/app/dnsproxy
     cp ${vet'} $out/app/vet
