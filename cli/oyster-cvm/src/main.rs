@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, doctor::DoctorArgs, image_id::ImageArgs, list::ListArgs, log::LogArgs, simulate::SimulateArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs, verify::VerifyArgs, withdraw::WithdrawArgs
+    build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, doctor::DoctorArgs,
+    image_id::ImageArgs, list::ListArgs, log::LogArgs, simulate::SimulateArgs, stop::StopArgs,
+    update::UpdateArgs, upload::UploadArgs, verify::VerifyArgs, withdraw::WithdrawArgs,
 };
 
 mod args;

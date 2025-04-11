@@ -1,8 +1,8 @@
 ![Marlin Oyster Logo](./logo.svg)
 
-# KMS Mock Derive Server
+# KMS Derive Server Mock
 
-The KMS Mock Derive Server provides derivation endpoints to derive secrets using a constant zero seed. It is meant to be mainly used for testing in local enclaves and used by applications there to derive secrets like wallets.
+The KMS Derive Server Mock provides derivation endpoints to derive secrets using a constant zero seed. It is meant to be mainly used for testing in local enclaves and used by applications there to derive secrets like wallets.
 
 ## Build
 
@@ -15,7 +15,7 @@ cargo build --release
 Reproducible builds can be done using Nix. The monorepo provides a Nix flake which includes this project and can be used to trigger builds:
 
 ```bash
-nix build -v .#<flavor>.kms.mock-derive-server.<output>
+nix build -v .#<flavor>.kms.derive-server-mock.<output>
 ```
 
 Supported flavors:
@@ -30,8 +30,8 @@ Supported outputs:
 ## Usage
 
 ```
-$ ./target/release/kms-mock-derive-server --help
-Usage: kms-mock-derive-server [OPTIONS]
+$ ./target/release/kms-derive-server-mock --help
+Usage: kms-derive-server-mock [OPTIONS]
 
 Options:
       --listen-addr <LISTEN_ADDR>  Listening address [default: 127.0.0.1:1100]

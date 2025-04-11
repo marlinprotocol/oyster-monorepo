@@ -28,7 +28,7 @@ The repository is organized into projects:
 - [kms/derive-server](./kms/derive-server): KMS derive server with key derivation endpoints meant to be used in end-user enclaves.
 - [kms/derive-server-enclave](./kms/derive-server-enclave): Example KMS derive server enclave mainly used for testing.
 - [kms/derive-utils](./kms/derive-utils): Library with key derivation utilities.
-- [kms/mock-derive-server](./kms/mock-derive-server): KMS mock derive server with key derivation endpoints using a constant seed meant to be used in local enclaves.
+- [kms/derive-server-mock](./kms/derive-server-mock): KMS mock derive server with key derivation endpoints using a constant seed meant to be used in local enclaves.
 - [kms/root-server](./kms/root-server): KMS root server with key derivation endpoints.
 - [kms/root-server-contract](./kms/root-server-contract): KMS root server with key derivation endpoints that works based on contract approvals.
 - [kms/root-server-enclave](./kms/root-server-enclave): KMS root server enclave.

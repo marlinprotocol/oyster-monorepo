@@ -119,9 +119,12 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     info!("Simulating oyster local dev environment with:");
     info!("  Platform: {}", args.arch.as_str());
 
-    if args.docker_compose.is_some() {
-        info!("  Docker compose: {}", args.docker_compose.clone().unwrap());
-    }
+    let Some(docker_compose) = args.docker_compose else {
+        return Err(anyhow!(
+            "Docker-compose file must be provided for simulation!"
+        ));
+    };
+    info!("  Docker compose: {}", docker_compose);
 
     let docker_images_list = args.docker_images.join(" ");
     if !docker_images_list.is_empty() {
@@ -164,74 +167,72 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     // Define mount args for the container
     let mut mount_args: Vec<String> = Vec::new();
 
-    if let Some(docker_compose) = args.docker_compose {
-        // Mount the docker-compose file into the container
-        let docker_compose_host_path =
-            fs::canonicalize(&docker_compose).context("Invalid docker-compose path")?;
-        mount_args.append(&mut vec![
-            "-v".to_string(),
-            format!(
-                "{}:/app/docker-compose.yml",
-                docker_compose_host_path.display()
-            ),
-        ]);
+    // Mount the docker-compose file into the container
+    let docker_compose_host_path =
+        fs::canonicalize(&docker_compose).context("Invalid docker-compose path")?;
+    mount_args.append(&mut vec![
+        "-v".to_string(),
+        format!(
+            "{}:/app/docker-compose.yml",
+            docker_compose_host_path.display()
+        ),
+    ]);
 
-        // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
-        let docker_images_temp_dir = "docker-images-temp";
-        let docker_compose_images = get_required_images(&docker_compose)?;
+    // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
+    let docker_images_temp_dir = "docker-images-temp";
+    let docker_compose_images = get_required_images(&docker_compose)?;
 
-        if !args.dry_run && !docker_compose_images.is_empty() {
-            let local_docker_images = Command::new("docker")
-                .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
-                .output()
-                .context("Failed to fetch local docker images")?;
-            let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
+    if !args.dry_run && !docker_compose_images.is_empty() {
+        let local_docker_images = Command::new("docker")
+            .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+            .output()
+            .context("Failed to fetch local docker images")?;
+        let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
 
-            let local_docker_compose_images = docker_images_stdout
-                .lines()
-                .map(String::from)
-                .filter(|image| docker_compose_images.contains(image))
-                .collect::<Vec<String>>();
+        let local_docker_compose_images = docker_images_stdout
+            .lines()
+            .map(String::from)
+            .filter(|image| docker_compose_images.contains(image))
+            .collect::<Vec<String>>();
 
-            if !local_docker_compose_images.is_empty() {
-                fs::create_dir_all(docker_images_temp_dir)
-                    .context("Failed to create docker-images-temp directory")?;
-                temp_dirs.push(docker_images_temp_dir);
+        if !local_docker_compose_images.is_empty() {
+            fs::create_dir_all(docker_images_temp_dir)
+                .context("Failed to create docker-images-temp directory")?;
+            temp_dirs.push(docker_images_temp_dir);
 
-                let mut save_handles = vec![];
+            let mut save_handles = vec![];
 
-                for image in local_docker_compose_images {
-                    let image_tar_path = format!(
-                        "{}/{}.tar",
-                        docker_images_temp_dir,
-                        image.replace("/", "_").replace(":", "_")
-                    );
+            for image in local_docker_compose_images {
+                let image_tar_path = format!(
+                    "{}/{}.tar",
+                    docker_images_temp_dir,
+                    image.replace("/", "_").replace(":", "_")
+                );
 
-                    let handle = thread::spawn(move || {
-                        info!("Saving {} to {}", image, image_tar_path);
-                        let _ = Command::new("docker")
-                            .args(["save", "-o", &image_tar_path, &image])
-                            .status()
-                            .map_err(|err| {
-                                info!("Failed to save image {}: {}", &image, err);
-                                err
-                            });
-                    });
+                let handle = thread::spawn(move || {
+                    info!("Saving {} to {}", image, image_tar_path);
+                    let _ = Command::new("docker")
+                        .args(["save", "-o", &image_tar_path, &image])
+                        .status()
+                        .map_err(|err| {
+                            info!("Failed to save image {}: {}", &image, err);
+                            err
+                        });
+                });
 
-                    save_handles.push(handle);
-                }
-
-                for handle in save_handles {
-                    let _ = handle.join();
-                }
-
-                let docker_images_host_path = fs::canonicalize(docker_images_temp_dir)
-                    .context("Invalid docker images temp directory path")?;
-                mount_args.append(&mut vec![
-                    "-v".to_string(),
-                    format!("{}:/app/docker-images", docker_images_host_path.display(),),
-                ]);
+                save_handles.push(handle);
             }
+
+            for handle in save_handles {
+                let _ = handle.join();
+            }
+
+            let docker_images_host_path = fs::canonicalize(docker_images_temp_dir)
+                .context("Invalid docker images temp directory path")?;
+            mount_args.append(&mut vec![
+                "-v".to_string(),
+                format!("{}:/app/docker-images", docker_images_host_path.display(),),
+            ]);
         }
     }
 

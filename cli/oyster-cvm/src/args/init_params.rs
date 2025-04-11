@@ -288,10 +288,7 @@ pub struct InitParamsList {
     params: Vec<InitParam>,
 }
 
-fn fetch_encryption_key_with_pcr(
-    endpoint: &str,
-    image_id: &str,
-) -> Result<[u8; 32]> {
+fn fetch_encryption_key_with_pcr(endpoint: &str, image_id: &str) -> Result<[u8; 32]> {
     ureq::get(endpoint.to_owned() + "/derive/x25519/public")
         .query("image_id", image_id)
         .query("path", "oyster.init-params")

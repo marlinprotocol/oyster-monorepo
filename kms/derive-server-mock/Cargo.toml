@@ -1,5 +1,5 @@
 [package]
-name = "kms-mock-derive-server"
+name = "kms-derive-server-mock"
 version = "0.1.0"
 edition = "2021"
 

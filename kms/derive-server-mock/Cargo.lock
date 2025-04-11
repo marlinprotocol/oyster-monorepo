@@ -632,6 +632,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kms-derive-server-mock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "kms-derive-utils",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kms-derive-utils"
 version = "0.1.0"
 dependencies = [
@@ -644,20 +658,6 @@ dependencies = [
  "sha2",
  "sha3",
  "x25519-dalek",
-]
-
-[[package]]
-name = "kms-mock-derive-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "kms-derive-utils",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

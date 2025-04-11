@@ -90,7 +90,7 @@
       kms.derive-server = import ./kms/derive-server {
         inherit nixpkgs systemConfig fenix naersk;
       };
-      kms.mock-derive-server = import ./kms/mock-derive-server {
+      kms.derive-server-mock = import ./kms/derive-server-mock {
         inherit nixpkgs systemConfig fenix naersk;
       };
       kms.derive-server-enclave = import ./kms/derive-server-enclave {
@@ -190,7 +190,7 @@
         supervisord = external.supervisord.compressed;
         keygen = initialization.keygen.compressed;
         attestation-server-mock = attestation.server-mock.compressed;
-        mock-derive-server = kms.mock-derive-server.compressed;
+        derive-server-mock = kms.derive-server-mock.compressed;
       };
       enclaves.blue = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/blue {
         inherit nixpkgs systemConfig nitro-util;

@@ -4,7 +4,7 @@
   supervisord,
   keygen, 
   attestation-server-mock, 
-  mock-derive-server,
+  derive-server-mock,
   compose ? ./. + builtins.getEnv "COMPOSE",
   dockerImages ? let
     envValue = builtins.getEnv "DOCKER_IMAGES";
@@ -32,7 +32,7 @@
   keygenX25519 = "${keygen}/bin/keygen-x25519";
   attestationServerMock = "${attestation-server-mock}/bin/oyster-attestation-server-mock";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
-  deriveServerMock = "${mock-derive-server}/bin/kms-mock-derive-server";
+  deriveServerMock = "${derive-server-mock}/bin/kms-derive-server-mock";
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
 
