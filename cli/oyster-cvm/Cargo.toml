@@ -1,6 +1,6 @@
 [package]
 name = "oyster-cvm"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2021"
 
 [dependencies]
@@ -15,7 +15,7 @@ anyhow = "1.0.72"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"]}
 alloy = {version = "0.9.1", features = ["full"]}
-oyster-sdk = "0.15.1"
+oyster-sdk = "0.16.2"
 hex = "0.4.3"
 futures-util = "0.3"
 libsodium-sys-stable = "1.22.2"
@@ -24,4 +24,4 @@ ureq = "3.0.6"
 prettytable-rs = "0.10"
 chrono = "0.4.40"
 lazy_static = "1.5.0"
-sha2 = "0.10.8"
+k256 = "0.13.4"

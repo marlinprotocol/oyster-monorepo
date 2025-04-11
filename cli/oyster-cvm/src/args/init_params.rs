@@ -17,9 +17,9 @@ use libsodium_sys::{crypto_box_SEALBYTES, crypto_box_seal, sodium_init};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::types::Platform;
+use crate::{args::pcr::preset_to_pcr_preset, types::Platform};
 
-use super::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_AMD64, PCRS_BASE_BLUE_V1_0_0_ARM64};
+use super::pcr::PcrArgs;
 
 #[derive(Args, Debug)]
 #[group(multiple = true)]
@@ -37,6 +37,10 @@ pub struct InitParamsArgs {
     /// KMS endpoint for fetching public key for encryption
     #[arg(short = 'k', long)]
     pub kms_endpoint: Option<String>,
+
+    /// KMS response signature verification key
+    #[arg(long)]
+    pub kms_verification_key: Option<String>,
 
     /// Expected PCRs of the decryptor
     #[command(flatten)]
@@ -161,29 +165,8 @@ impl InitParamsArgs {
         // use pcrs of the blue base image by default
         let pcrs = self
             .pcrs
-            .load()
-            .context("Failed to load PCRs")?
-            .map(Result::Ok)
-            .unwrap_or(match preset.as_str() {
-                "blue" => match arch {
-                    Platform::AMD64 => Ok((
-                        PCRS_BASE_BLUE_V1_0_0_AMD64.0.into(),
-                        PCRS_BASE_BLUE_V1_0_0_AMD64.1.into(),
-                        PCRS_BASE_BLUE_V1_0_0_AMD64.2.into(),
-                    )),
-                    Platform::ARM64 => Ok((
-                        PCRS_BASE_BLUE_V1_0_0_ARM64.0.into(),
-                        PCRS_BASE_BLUE_V1_0_0_ARM64.1.into(),
-                        PCRS_BASE_BLUE_V1_0_0_ARM64.2.into(),
-                    )),
-                },
-                "debug" => Ok((
-                    hex::encode([0u8; 48]),
-                    hex::encode([0u8; 48]),
-                    hex::encode([0u8; 48]),
-                )),
-                _ => Err(anyhow!("PCRs are required")),
-            })?;
+            .load_required(preset_to_pcr_preset(&preset, &arch))
+            .context("Failed to load PCRs")?;
 
         // calculate the image id
         let mut hasher = Sha256::new();
@@ -193,12 +176,15 @@ impl InitParamsArgs {
         hasher.update((digest.len() as u16).to_be_bytes());
         hasher.update(digest);
         let image_id: [u8; 32] = hasher.finalize().into();
-
+        info!(image_id = hex::encode(image_id), "Computed image id");
         // fetch key
         let pk = fetch_encryption_key_with_pcr(
             self.kms_endpoint
                 .as_ref()
                 .unwrap_or(&"http://image-v3.kms.box:1101".into()),
+            self.kms_verification_key
+                .as_ref()
+                .unwrap_or(&"2c7cc79f1c356334ca484b66ded16f779f69352560640dae072d2937d6f3dc6e7e34466466309015673412bdec2f1ef9b508b0d87799173d4da77f2da91c4c85".into()),
             &hex::encode(image_id),
         )
         .context("failed to fetch key")?;
@@ -288,31 +274,70 @@ pub struct InitParamsList {
     params: Vec<InitParam>,
 }
 
-fn fetch_encryption_key_with_pcr(endpoint: &str, image_id: &str) -> Result<[u8; 32]> {
-    ureq::get(endpoint.to_owned() + "/derive/x25519/public")
-        .query("image_id", image_id)
-        .query("path", "oyster.init-params")
+fn fetch_encryption_key_with_pcr(
+    endpoint: &str,
+    kms_verification_key: &str,
+    image_id: &str,
+) -> Result<[u8; 32]> {
+    let uri = format!(
+        "/derive/x25519/public?image_id={}&path=oyster.init-params",
+        image_id
+    );
+    let mut response = ureq::get(endpoint.to_owned() + uri.as_str())
         .call()
-        .context("failed to call derive server")?
+        .context("failed to call derive server")?;
+
+    if response.status() != 200 {
+        bail!("failed to get encryption key from kms root server");
+    }
+    // get the header from response
+    let signature_bytes = hex::decode(
+        response
+            .headers()
+            .get("x-marlin-kms-signature")
+            .context("failed to get signature for encryption key from kms root server")?,
+    )
+    .context("failed to decode signature")?;
+
+    let body_bytes = response
         .body_mut()
         .read_to_vec()
-        .context("failed to read body")?
+        .context("failed to read body")?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(uri);
+    hasher.update(&body_bytes);
+    let digest: [u8; 32] = hasher.finalize().into();
+
+    let signature = k256::ecdsa::Signature::from_slice(&signature_bytes[0..64])
+        .context("failed to parse signature for encryption key from kms root server")?;
+    let recovery_id = k256::ecdsa::RecoveryId::from_byte(signature_bytes[64] - 27)
+        .context("failed to parse recovery id from kms root server signature")?;
+    let verifying_key =
+        k256::ecdsa::VerifyingKey::recover_from_prehash(&digest, &signature, recovery_id)
+            .context("failed to recover pubkey from kms root server signature")?;
+    let pubkey = hex::encode(&verifying_key.to_encoded_point(false).as_bytes()[1..]);
+
+    if pubkey != kms_verification_key.to_lowercase() {
+        bail!("signature verifaction failed: unexpected signer");
+    }
+
+    body_bytes
         .as_slice()
         .try_into()
         .context("failed to parse reponse")
 }
 
 lazy_static! {
-    static ref KMS_ROOT_SERVERS: HashMap<u64, &'static str> = {
+    static ref KMS_ROOT_SERVERS: HashMap<u64, String> = {
         let mut root_servers = HashMap::new();
         root_servers.insert(
             42161,
-            r#"
-                {
-                    "kms_endpoint": "arbone-v3.kms.box:1100",
-                    "kms_pubkey": "ddba991e640f24f4cac8cf4c3596d99eea83f37cb7ad6fb68061fca1ef110e08",
-                }
-            "#,
+            serde_json::json!({
+                "kms_endpoint": "arbone-v3.kms.box:1100",
+                "kms_pubkey": "ddba991e640f24f4cac8cf4c3596d99eea83f37cb7ad6fb68061fca1ef110e08"
+            })
+            .to_string(),
         );
         root_servers
     };

@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "oyster-sdk"
-version = "0.16.0"
+version = "0.16.2"
 dependencies = [
  "aws-nitro-enclaves-cose",
  "axum",

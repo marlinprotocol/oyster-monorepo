@@ -1,12 +1,12 @@
 use alloy::primitives::Address;
 use alloy::providers::ProviderBuilder;
+use alloy::signers::k256::sha2::{Digest, Sha256};
 use alloy::sol;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
