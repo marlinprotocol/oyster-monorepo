@@ -27,55 +27,65 @@ sol!(
     "src/abis/oyster_market_abi.json"
 );
 
-const DEFAULT_OPERATOR_ADDRESS: &str = "0xe10fa12f580e660ecd593ea4119cebc90509d642";
-
-#[derive(Args)]
+#[derive(Args, Default)]
 pub struct SimulateArgs {
+    /// Preset for parameters (e.g. blue)
+    #[arg(long, default_value = "blue")]
+    pub preset: String,
+
     /// Platform architecture (e.g. amd64, arm64)
-    #[arg(long, default_value = "amd64")]
-    arch: Platform,
+    #[arg(long, default_value = "arm64")]
+    pub arch: Platform,
 
     /// Path to docker-compose.yml file
     #[arg(short = 'c', long)]
-    docker_compose: String,
+    pub docker_compose: Option<String>,
 
     /// List of Docker image .tar file paths
     #[arg(short = 'd', long)]
-    docker_images: Vec<String>,
+    pub docker_images: Vec<String>,
 
     /// Init params list, supports the following forms:
     /// `<enclave path>:<should attest, 0 or 1>:<should encrypt, 0 or 1>:utf8:<string>`
     /// `<enclave path>:<should attest, 0 or 1>:<should encrypt, 0 or 1>:file:<local path>`
     #[arg(short = 'i', long)]
-    init_params: Vec<String>,
+    pub init_params: Vec<String>,
 
     /// Application ports to expose out of the local container
     #[arg(short = 'p', long)]
-    expose_ports: Vec<String>,
+    pub expose_ports: Vec<String>,
+
+    /// Operator address
+    #[arg(long, default_value = "0xe10fa12f580e660ecd593ea4119cebc90509d642")]
+    pub operator: String,
+
+    /// Region for deployment
+    #[arg(long, default_value = "ap-south-1")]
+    pub region: String,
 
     /// Instance type (e.g. "r6g.large")
     #[arg(long)]
-    instance_type: Option<String>,
+    pub instance_type: Option<String>,
 
-    /// Local dev base image name
-    #[arg(short, long, default_value = "ayushkyadav/local-dev-image")]
-    image_name: String,
-
-    /// Local dev base image tag
-    #[arg(short, long, default_value = "latest")]
-    image_tag: String,
+    /// Local dev base image
+    #[arg(short, long, default_value = "ayushkyadav/local-dev-image:latest")]
+    pub base_image: String,
 
     /// Memory limit for the local dev container
-    #[arg(short, long, conflicts_with = "instance_type")]
-    container_memory: Option<String>,
+    #[arg(long, conflicts_with = "instance_type")]
+    pub container_memory: Option<String>,
 
-    /// Local dev container name
+    /// Job and Local dev container name
     #[arg(short, long, default_value = "oyster_local_dev_container")]
-    container_name: String,
+    pub job_name: String,
 
     /// Cleanup base dev image after testing
-    #[arg(short, long)]
-    cleanup: bool,
+    #[arg(long)]
+    pub cleanup: bool,
+
+    /// Dry run the image locally
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -108,7 +118,10 @@ struct DockerStats {
 pub async fn simulate(args: SimulateArgs) -> Result<()> {
     info!("Simulating oyster local dev environment with:");
     info!("  Platform: {}", args.arch.as_str());
-    info!("  Docker compose: {}", args.docker_compose);
+
+    if args.docker_compose.is_some() {
+        info!("  Docker compose: {}", args.docker_compose.clone().unwrap());
+    }
 
     let docker_images_list = args.docker_images.join(" ");
     if !docker_images_list.is_empty() {
@@ -121,13 +134,16 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     }
 
     // Pull the base dev image
-    let full_image_name = format!("{}:{}", args.image_name, args.image_tag);
+    let mut base_image = args.base_image;
+    if !base_image.contains(':') {
+        base_image.push_str(":latest");
+    }
     info!(
         "Pulling dev base image {} to local docker daemon",
-        full_image_name
+        base_image
     );
     let mut pull_image = Command::new("docker")
-        .args(["pull", &full_image_name])
+        .args(["pull", &base_image])
         .stdout(Stdio::inherit())
         .spawn()
         .context("Failed to pull docker image")?;
@@ -144,19 +160,80 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
         port_args.append(&mut vec!["-p".to_string(), format!("{}:{}", &port, &port)]);
     }
 
+    let mut temp_dirs = Vec::new();
     // Define mount args for the container
     let mut mount_args: Vec<String> = Vec::new();
 
-    // Mount the docker-compose file into the container
-    let docker_compose_host_path =
-        fs::canonicalize(&args.docker_compose).context("Invalid docker-compose path")?;
-    mount_args.append(&mut vec![
-        "-v".to_string(),
-        format!(
-            "{}:/app/docker-compose.yml",
-            docker_compose_host_path.display()
-        ),
-    ]);
+    if let Some(docker_compose) = args.docker_compose {
+        // Mount the docker-compose file into the container
+        let docker_compose_host_path =
+            fs::canonicalize(&docker_compose).context("Invalid docker-compose path")?;
+        mount_args.append(&mut vec![
+            "-v".to_string(),
+            format!(
+                "{}:/app/docker-compose.yml",
+                docker_compose_host_path.display()
+            ),
+        ]);
+
+        // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
+        let docker_images_temp_dir = "docker-images-temp";
+        let docker_compose_images = get_required_images(&docker_compose)?;
+
+        if !args.dry_run && !docker_compose_images.is_empty() {
+            let local_docker_images = Command::new("docker")
+                .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+                .output()
+                .context("Failed to fetch local docker images")?;
+            let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
+
+            let local_docker_compose_images = docker_images_stdout
+                .lines()
+                .map(String::from)
+                .filter(|image| docker_compose_images.contains(image))
+                .collect::<Vec<String>>();
+
+            if !local_docker_compose_images.is_empty() {
+                fs::create_dir_all(docker_images_temp_dir)
+                    .context("Failed to create docker-images-temp directory")?;
+                temp_dirs.push(docker_images_temp_dir);
+
+                let mut save_handles = vec![];
+
+                for image in local_docker_compose_images {
+                    let image_tar_path = format!(
+                        "{}/{}.tar",
+                        docker_images_temp_dir,
+                        image.replace("/", "_").replace(":", "_")
+                    );
+
+                    let handle = thread::spawn(move || {
+                        info!("Saving {} to {}", image, image_tar_path);
+                        let _ = Command::new("docker")
+                            .args(["save", "-o", &image_tar_path, &image])
+                            .status()
+                            .map_err(|err| {
+                                info!("Failed to save image {}: {}", &image, err);
+                                err
+                            });
+                    });
+
+                    save_handles.push(handle);
+                }
+
+                for handle in save_handles {
+                    let _ = handle.join();
+                }
+
+                let docker_images_host_path = fs::canonicalize(docker_images_temp_dir)
+                    .context("Invalid docker images temp directory path")?;
+                mount_args.append(&mut vec![
+                    "-v".to_string(),
+                    format!("{}:/app/docker-images", docker_images_host_path.display(),),
+                ]);
+            }
+        }
+    }
 
     // Mount the docker images provided by user onto the container
     for local_image in args.docker_images {
@@ -172,56 +249,11 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
         ]);
     }
 
-    // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
-    let docker_images_temp_dir = "docker-images-temp";
-    let docker_compose_images = get_required_images(&args.docker_compose)?;
-
-    if !docker_compose_images.is_empty() {
-        let local_docker_images = Command::new("docker")
-            .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
-            .output()
-            .context("Failed to fetch local docker images")?;
-        let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
-
-        let local_docker_compose_images = docker_images_stdout
-            .lines()
-            .map(String::from)
-            .filter(|image| docker_compose_images.contains(image))
-            .collect::<Vec<String>>();
-
-        if !local_docker_compose_images.is_empty() {
-            fs::create_dir_all(docker_images_temp_dir)
-                .context("Failed to create docker-images-temp directory")?;
-
-            for image in local_docker_compose_images {
-                let image_tar_path = format!(
-                    "{}/{}.tar",
-                    docker_images_temp_dir,
-                    image.replace("/", "_").replace(":", "_")
-                );
-                info!("Saving {} to {}", image, image_tar_path);
-                let _ = Command::new("docker")
-                    .args(["save", "-o", &image_tar_path, &image])
-                    .status()
-                    .map_err(|err| {
-                        info!("Failed to save image {}: {}", &image, err);
-                        err
-                    });
-            }
-
-            let docker_images_host_path = fs::canonicalize(docker_images_temp_dir)
-                .context("Invalid docker images temp directory path")?;
-            mount_args.append(&mut vec![
-                "-v".to_string(),
-                format!("{}:/app/docker-images", docker_images_host_path.display(),),
-            ]);
-        }
-    }
-
     // Mount the init params into the container (create temporary files for the utf8 params)
     let init_params_utf_temp_dir = "init-params-utf-temp";
     fs::create_dir_all(init_params_utf_temp_dir)
         .context("Failed to create init-params-utf-temp directory")?;
+    temp_dirs.push(init_params_utf_temp_dir);
 
     let digest = args
         .init_params
@@ -334,7 +366,8 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     if args.container_memory.is_some() {
         config_args.push(format!("--memory={}", args.container_memory.unwrap()));
     } else {
-        match fetch_instance_memory(args.instance_type, args.arch).await {
+        match fetch_instance_memory(args.instance_type, args.arch, args.operator, args.region).await
+        {
             Ok(memory) => config_args.push(format!("--memory={}MB", memory)),
             Err(err) => info!("Failed to fetch instance memory: {}", err),
         }
@@ -346,14 +379,14 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
         .args(&port_args)
         .args(&mount_args)
         .args(&config_args)
-        .args(["--name", &args.container_name])
-        .arg(&full_image_name)
+        .args(["--name", &args.job_name])
+        .arg(&base_image)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .context("Failed to start container")?;
 
-    let monitor_stats_task = thread::spawn(move || monitor_container_stats(&args.container_name));
+    let monitor_stats_task = thread::spawn(move || monitor_container_stats(&args.job_name));
 
     let exit_status = run_container
         .wait()
@@ -365,25 +398,17 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     if args.cleanup {
         info!("Removing dev image...");
         let remove_status = Command::new("docker")
-            .args(["rmi", &full_image_name])
+            .args(["rmi", &base_image])
             .status()
             .context("Failed to remove the pulled dev image")?;
         info!("Dev image removed with status: {}", remove_status);
     }
 
     // Clean up the temporary files and directories created for simulation
-    if let Err(err) = fs::remove_dir_all(docker_images_temp_dir) {
-        info!(
-            "Failed to remove {} directory: {}",
-            docker_images_temp_dir, err
-        );
-    }
-
-    if let Err(err) = fs::remove_dir_all(init_params_utf_temp_dir) {
-        info!(
-            "Failed to remove {} directory: {}",
-            init_params_utf_temp_dir, err
-        );
+    for dir in temp_dirs {
+        if let Err(err) = fs::remove_dir_all(dir) {
+            info!("Failed to remove {} directory: {}", dir, err);
+        }
     }
 
     if let Err(err) = fs::remove_file(digest_file_path) {
@@ -418,7 +443,12 @@ fn get_required_images(docker_compose: &str) -> Result<HashSet<String>> {
 }
 
 // Fetch memory corresponding to the instance type and platform
-async fn fetch_instance_memory(instance_type: Option<String>, arch: Platform) -> Result<u32> {
+async fn fetch_instance_memory(
+    instance_type: Option<String>,
+    arch: Platform,
+    operator: String,
+    region: String,
+) -> Result<u32> {
     let provider = ProviderBuilder::new().on_http(
         ARBITRUM_ONE_RPC_URL
             .parse()
@@ -427,8 +457,8 @@ async fn fetch_instance_memory(instance_type: Option<String>, arch: Platform) ->
 
     let market_address = Address::from_str(OYSTER_MARKET_ADDRESS)
         .context("Failed to parse oyster market address")?;
-    let provider_address = Address::from_str(DEFAULT_OPERATOR_ADDRESS)
-        .context("Failed to parse default operator address")?;
+    let provider_address =
+        Address::from_str(&operator).context("Failed to parse default operator address")?;
     let market = OysterMarket::new(market_address, provider);
 
     let cp_url = market
@@ -453,6 +483,10 @@ async fn fetch_instance_memory(instance_type: Option<String>, arch: Platform) ->
     });
 
     for min_rate in operator.min_rates {
+        if min_rate.region != region {
+            continue;
+        }
+
         for instance in min_rate.rate_cards {
             if instance.instance == instance_type {
                 return Ok(instance.memory);

@@ -1,8 +1,9 @@
 use clap::ValueEnum;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Platform {
     AMD64,
+    #[default]
     ARM64,
 }
 

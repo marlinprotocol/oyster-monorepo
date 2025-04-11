@@ -2,12 +2,23 @@
 
 set -e
 
+# store ip
+ip route | awk '/default/ { print $3 }' > /app/ip.txt
+cat /app/ip.txt && echo
+
+# store job id as container id
+cat /etc/hostname > /app/job.txt
+cat /app/job.txt && echo
+
 # Run supervisor first, no programs should be running yet
 cat /etc/supervisord.conf
 /app/supervisord &
 SUPERVISOR_PID=$!
 echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf status
+
+# Start the Docker daemon
+/app/supervisord ctl -c /etc/supervisord.conf start docker
 
 # generate identity keys
 /app/keygen-x25519 --secret /app/id.sec --public /app/id.pub
@@ -21,9 +32,6 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 
 if [ -e "/app/docker-compose.yml" ]; then 
-    # Start the Docker daemon
-    /app/supervisord ctl -c /etc/supervisord.conf start docker
-
     # Wait for Docker daemon to be ready
     until docker info >/dev/null 2>&1; do
         echo "[setup.sh] Waiting for Docker daemon..."
