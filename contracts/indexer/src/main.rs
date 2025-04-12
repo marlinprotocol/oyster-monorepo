@@ -8,6 +8,7 @@ use diesel_migrations::EmbeddedMigrations;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 
+use oyster_indexer::constants::set_usdc_address;
 use oyster_indexer::event_loop;
 use oyster_indexer::start_from;
 use oyster_indexer::AlloyProvider;
@@ -27,6 +28,10 @@ struct Args {
     #[arg(short, long)]
     contract: String,
 
+    /// USDC Token contract
+    #[arg(short, long)]
+    usdc_contract: String,
+
     /// Start block for log parsing
     #[arg(short, long)]
     start_block: u64,
@@ -44,6 +49,10 @@ fn run() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let mut conn = PgConnection::establish(&database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url));
+
+    // Set the USDC address from command line argument
+    let usdc_address = args.usdc_contract.parse()?;
+    set_usdc_address(usdc_address);
 
     // apply pending migrations
     info!("Applying pending migrations");
