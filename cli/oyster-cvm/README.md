@@ -68,15 +68,18 @@ Required args:
 - `--docker-compose` (path to docker-compose.yml file)
 
 Optional args:
+- `--preset`: (preset for parameters (e.g. blue) [default: blue])
 - `--docker-images` (list of Docker image .tar file paths)
 - `--init-params` (list of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`)
 - `--expose-ports` (application ports to expose out of the local container)
-- `--instance-type` (instance type (e.g. "r6g.large"))
-- `--image-name` (local dev base image name)
-- `--image-tag` (local dev base image tag)
+- `--operator`: (operator address [default: 0xe10fa12f580e660ecd593ea4119cebc90509d642])
+- `--region`: (region for deployment (defaults to ap-south-1))
+- `--instance-type` (instance type (e.g. "r6g.large") [oyster deployment instance type to mimic in the local environment container])
+- `--base-image` (local dev base image in format `<image_name>:<image_tag>`)
 - `--container-memory` (memory limit for the local dev container)
-- `--container-name` (local dev container name)
-- `--cleanup` (cleanup base dev image after testing)
+- `--job-name` (job and local dev container name)
+- `--cleanup` (cleanup base dev image and local cache after testing)
+- `--dry-run` (dry run the oyster blue deployment locally [all docker images should be publicly available on docker hub])
 
 #### `build`
 Builds an oyster-cvm image. Only needed for custom enclave images - you can use the base image for standard deployments.
@@ -303,7 +306,8 @@ Required args:
 # Simulate oyster-cvm environment locally
 ./oyster-cvm simulate \
   --docker-compose ./docker-compose.yml \
-  --init-params secret:1:0:utf8:hello
+  --init-params secret:1:0:utf8:hello \
+  --expose-ports 5000
 
 # Sample Output:
 [INFO] Simulating oyster local dev environment with:
@@ -357,6 +361,17 @@ Required args:
 [INFO] TCP connection established successfully
 [INFO] Attestation check successful
 [INFO] Enclave is ready! IP address: 192.168.1.100
+
+# Dry run the oyster blue deployment locally
+./oyster-cvm deploy \
+  --preset "blue" \
+  --operator "0x..." \
+  --instance-type "m5a.2xlarge" \
+  --duration-in-minutes 60 \  
+  --job-name "my-custom-job" \
+  --init-params secret:1:0:utf8:hello \
+  --docker-compose ./docker-compose.yml \
+  --dry-run \ 
 
 # Update an existing job
 ./oyster-cvm update \

@@ -1,11 +1,10 @@
 use alloy::primitives::Address;
 use alloy::providers::ProviderBuilder;
 use alloy::signers::k256::sha2::{Digest, Sha256};
-use alloy::sol;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_yaml::Value;
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -13,19 +12,16 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Component, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tracing::info;
 
 use crate::configs::global::{ARBITRUM_ONE_RPC_URL, OYSTER_MARKET_ADDRESS};
 use crate::types::Platform;
+use crate::utils::market::{Operator, OysterMarket};
 
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
+const DOCKER_IMAGE_CACHE_PATH: &str = "docker_images_cache";
 
 #[derive(Args, Default)]
 pub struct SimulateArgs {
@@ -79,34 +75,13 @@ pub struct SimulateArgs {
     #[arg(short, long, default_value = "oyster_local_dev_container")]
     pub job_name: String,
 
-    /// Cleanup base dev image after testing
+    /// Cleanup base dev image and local cache after testing
     #[arg(long)]
     pub cleanup: bool,
 
     /// Dry run the image locally
     #[arg(long)]
     pub dry_run: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Operator {
-    allowed_regions: Vec<String>,
-    min_rates: Vec<RateCard>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RateCard {
-    region: String,
-    rate_cards: Vec<InstanceRate>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct InstanceRate {
-    instance: String,
-    min_rate: String,
-    cpu: u32,
-    memory: u32,
-    arch: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,12 +140,12 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
 
     let mut temp_dirs = Vec::new();
     // Define mount args for the container
-    let mut mount_args: Vec<String> = Vec::new();
+    let mount_args: Arc<Mutex<Vec<String>>> = Mutex::new(Vec::new()).into();
 
     // Mount the docker-compose file into the container
     let docker_compose_host_path =
         fs::canonicalize(&docker_compose).context("Invalid docker-compose path")?;
-    mount_args.append(&mut vec![
+    mount_args.lock().unwrap().append(&mut vec![
         "-v".to_string(),
         format!(
             "{}:/app/docker-compose.yml",
@@ -178,61 +153,78 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
         ),
     ]);
 
-    // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
-    let docker_images_temp_dir = "docker-images-temp";
-    let docker_compose_images = get_required_images(&docker_compose)?;
+    if !args.dry_run {
+        // Load and mount the docker images required by the docker compose available in the local docker daemon to the container
+        let docker_compose_images = get_required_images(&docker_compose)?;
 
-    if !args.dry_run && !docker_compose_images.is_empty() {
-        let local_docker_images = Command::new("docker")
-            .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
-            .output()
-            .context("Failed to fetch local docker images")?;
-        let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
+        if !docker_compose_images.is_empty() {
+            let local_docker_images = Command::new("docker")
+                .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+                .output()
+                .context("Failed to fetch local docker images")?;
+            let docker_images_stdout = String::from_utf8_lossy(&local_docker_images.stdout);
 
-        let local_docker_compose_images = docker_images_stdout
-            .lines()
-            .map(String::from)
-            .filter(|image| docker_compose_images.contains(image))
-            .collect::<Vec<String>>();
+            let local_docker_compose_images = docker_images_stdout
+                .lines()
+                .map(String::from)
+                .filter(|image| docker_compose_images.contains(image))
+                .collect::<Vec<String>>();
 
-        if !local_docker_compose_images.is_empty() {
-            fs::create_dir_all(docker_images_temp_dir)
-                .context("Failed to create docker-images-temp directory")?;
-            temp_dirs.push(docker_images_temp_dir);
+            if !local_docker_compose_images.is_empty() {
+                if !PathBuf::from(DOCKER_IMAGE_CACHE_PATH).exists() {
+                    fs::create_dir_all(DOCKER_IMAGE_CACHE_PATH).context(format!(
+                        "Failed to create {} cache directory",
+                        DOCKER_IMAGE_CACHE_PATH
+                    ))?;
+                }
 
-            let mut save_handles = vec![];
+                let mut save_handles = vec![];
 
-            for image in local_docker_compose_images {
-                let image_tar_path = format!(
-                    "{}/{}.tar",
-                    docker_images_temp_dir,
-                    image.replace("/", "_").replace(":", "_")
-                );
+                for image in local_docker_compose_images {
+                    let mount_args_clone = mount_args.clone();
 
-                let handle = thread::spawn(move || {
-                    info!("Saving {} to {}", image, image_tar_path);
-                    let _ = Command::new("docker")
-                        .args(["save", "-o", &image_tar_path, &image])
-                        .status()
-                        .map_err(|err| {
-                            info!("Failed to save image {}: {}", &image, err);
+                    let handle = thread::spawn(move || {
+                        let Ok(image_id) = get_local_image_id(&image).map_err(|err| {
+                            info!("{}", err);
                             err
-                        });
-                });
+                        }) else {
+                            return;
+                        };
 
-                save_handles.push(handle);
+                        if !is_present_in_cache(&image, &image_id) {
+                            let _ = load_image_in_cache(&image, &image_id).map_err(|err| {
+                                info!("{}", err);
+                                err
+                            });
+                        }
+
+                        let Ok(local_image_host_path) =
+                            fs::canonicalize(get_local_image_path(&image, &image_id))
+                                .context("Invalid local docker image path")
+                                .map_err(|err| {
+                                    info!("{}", err);
+                                    err
+                                })
+                        else {
+                            return;
+                        };
+                        mount_args_clone.lock().unwrap().append(&mut vec![
+                            "-v".to_string(),
+                            format!(
+                                "{}:/app/docker-images/{}",
+                                local_image_host_path.display(),
+                                local_image_host_path.file_name().unwrap().to_str().unwrap()
+                            ),
+                        ]);
+                    });
+
+                    save_handles.push(handle);
+                }
+
+                for handle in save_handles {
+                    let _ = handle.join();
+                }
             }
-
-            for handle in save_handles {
-                let _ = handle.join();
-            }
-
-            let docker_images_host_path = fs::canonicalize(docker_images_temp_dir)
-                .context("Invalid docker images temp directory path")?;
-            mount_args.append(&mut vec![
-                "-v".to_string(),
-                format!("{}:/app/docker-images", docker_images_host_path.display(),),
-            ]);
         }
     }
 
@@ -240,7 +232,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     for local_image in args.docker_images {
         let local_image_host_path =
             fs::canonicalize(local_image).context("Invalid local docker image path")?;
-        mount_args.append(&mut vec![
+        mount_args.lock().unwrap().append(&mut vec![
             "-v".to_string(),
             format!(
                 "{}:/app/docker-images/{}",
@@ -292,7 +284,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
 
                     let init_param_host_path =
                         fs::canonicalize(&temp_file_path).context("Invalid init param path")?;
-                    mount_args.append(&mut vec![
+                    mount_args.lock().unwrap().append(&mut vec![
                         "-v".to_string(),
                         format!(
                             "{}:/init-params/{}",
@@ -305,7 +297,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
                 "file" => {
                     let init_param_host_path =
                         fs::canonicalize(param_components[4]).context("Invalid init param path")?;
-                    mount_args.append(&mut vec![
+                    mount_args.lock().unwrap().append(&mut vec![
                         "-v".to_string(),
                         format!(
                             "{}:/init-params/{}",
@@ -354,7 +346,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
 
     let init_param_digest_host_path =
         fs::canonicalize(&digest_file_path).context("Invalid init param digest path")?;
-    mount_args.append(&mut vec![
+    mount_args.lock().unwrap().append(&mut vec![
         "-v".to_string(),
         format!(
             "{}:/app/init-params-digest",
@@ -378,7 +370,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
     let mut run_container = Command::new("docker")
         .args(["run", "--privileged", "--rm", "-it"])
         .args(&port_args)
-        .args(&mount_args)
+        .args(&*mount_args.lock().unwrap())
         .args(&config_args)
         .args(["--name", &args.job_name])
         .arg(&base_image)
@@ -403,6 +395,13 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
             .status()
             .context("Failed to remove the pulled dev image")?;
         info!("Dev image removed with status: {}", remove_status);
+
+        if let Err(err) = fs::remove_dir_all(DOCKER_IMAGE_CACHE_PATH) {
+            info!(
+                "Failed to remove {} directory: {}",
+                DOCKER_IMAGE_CACHE_PATH, err
+            );
+        }
     }
 
     // Clean up the temporary files and directories created for simulation
@@ -441,6 +440,86 @@ fn get_required_images(docker_compose: &str) -> Result<HashSet<String>> {
                 .collect()
         })
         .unwrap_or_default())
+}
+
+fn get_local_image_id(image_name: &str) -> Result<String> {
+    let output = Command::new("docker")
+        .args(&["image", "inspect", image_name, "--format", "{{.Id}}"])
+        .output()
+        .context("Failed to call docker inspect")?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+
+    Err(anyhow!(
+        "Failed to fetch image ID for image: {} from local Daemon",
+        image_name
+    ))
+}
+
+fn get_local_image_path(image_name: &str, image_id: &str) -> String {
+    format!(
+        "{}/{}_{}.tar",
+        DOCKER_IMAGE_CACHE_PATH,
+        image_name.replace([':', '/'], "_"),
+        image_id.split(':').nth(1).unwrap_or(image_id)
+    )
+}
+
+fn is_present_in_cache(image_name: &str, image_id: &str) -> bool {
+    let path = PathBuf::from(get_local_image_path(image_name, image_id));
+    return path.exists();
+}
+
+fn load_image_in_cache(image_name: &str, image_id: &str) -> Result<()> {
+    if let Err(err) = remove_outdated_images(image_name) {
+        info!("Failed to remove outdated cache: {}", err);
+    }
+
+    info!("Saving image {} to local cache", image_name);
+    let path = PathBuf::from(get_local_image_path(image_name, image_id));
+    let status = Command::new("docker")
+        .args(["save", "-o"])
+        .arg(&path)
+        .arg(image_name)
+        .status()
+        .context("Failed to save image")?;
+
+    if !status.success() {
+        return Err(anyhow!("Failed status for saving the .tar file"));
+    }
+
+    info!(
+        "Image {} saved to local cache at path: {}",
+        image_name,
+        path.display()
+    );
+    Ok(())
+}
+
+fn remove_outdated_images(image_name: &str) -> Result<()> {
+    for entry in fs::read_dir(DOCKER_IMAGE_CACHE_PATH).context("Failed to read cache dir")? {
+        let Ok(entry) = entry else {
+            info!("Failed to read entry: {}", entry.unwrap_err());
+            continue;
+        };
+
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
+                if file_name.starts_with(&image_name.replace([':', '/'], "_")) {
+                    if let Err(err) = fs::remove_file(&path) {
+                        info!("Failed to remove an outdated cached image: {}", err);
+                        continue;
+                    };
+
+                    info!("Cache file deleted: {}", path.display());
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // Fetch memory corresponding to the instance type and platform

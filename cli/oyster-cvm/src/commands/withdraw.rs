@@ -1,10 +1,10 @@
 use crate::args::wallet::WalletArgs;
 use crate::configs::global::{MIN_WITHDRAW_AMOUNT, OYSTER_MARKET_ADDRESS};
+use crate::utils::market::OysterMarket;
 use crate::utils::{provider::create_provider, usdc::format_usdc};
 use alloy::{
     primitives::{Address, U256},
     providers::{Provider, WalletProvider},
-    sol,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -32,13 +32,6 @@ pub struct WithdrawArgs {
 // Withdrawal Settings
 const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
 const SCALING_FACTOR: u128 = 1_000_000_000_000; // 1e12 scaling factor for contract values
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
 
 /// Calculate the current balance after accounting for time elapsed since last settlement
 fn calculate_current_balance(balance: U256, rate: U256, last_settled: U256) -> Result<U256> {

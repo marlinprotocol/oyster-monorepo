@@ -21,6 +21,14 @@ impl Platform {
             Platform::ARM64 => "aarch64-linux",
         }
     }
+
+    // TODO: Add default marlin local dev base images
+    pub fn base_dev_image(&self) -> &'static str {
+        match self {
+            Platform::AMD64 => "ayushkyadav/local-dev-image:latest",
+            Platform::ARM64 => "",
+        }
+    }
 }
 
 impl ValueEnum for Platform {

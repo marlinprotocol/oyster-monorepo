@@ -1,5 +1,6 @@
 use crate::args::wallet::WalletArgs;
 use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
+use crate::utils::market::OysterMarket;
 use crate::utils::{
     provider::create_provider,
     usdc::{approve_usdc, format_usdc},
@@ -7,7 +8,6 @@ use crate::utils::{
 use alloy::{
     primitives::{Address, U256},
     providers::Provider,
-    sol,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -26,13 +26,6 @@ pub struct DepositArgs {
     #[command(flatten)]
     wallet: WalletArgs,
 }
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
 
 pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     info!("Starting deposit...");
