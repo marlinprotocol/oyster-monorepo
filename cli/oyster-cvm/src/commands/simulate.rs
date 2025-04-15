@@ -177,6 +177,7 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
                         DOCKER_IMAGE_CACHE_PATH
                     ))?;
                 }
+                temp_dirs.push(DOCKER_IMAGE_CACHE_PATH);
 
                 let mut save_handles = vec![];
 
@@ -395,13 +396,6 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
             .status()
             .context("Failed to remove the pulled dev image")?;
         info!("Dev image removed with status: {}", remove_status);
-
-        if let Err(err) = fs::remove_dir_all(DOCKER_IMAGE_CACHE_PATH) {
-            info!(
-                "Failed to remove {} directory: {}",
-                DOCKER_IMAGE_CACHE_PATH, err
-            );
-        }
     }
 
     // Clean up the temporary files and directories created for simulation

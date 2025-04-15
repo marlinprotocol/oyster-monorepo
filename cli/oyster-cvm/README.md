@@ -372,6 +372,7 @@ Required args:
   --init-params secret:1:0:utf8:hello \
   --docker-compose ./docker-compose.yml \
   --dry-run \ 
+  --expose-ports 5000
 
 # Update an existing job
 ./oyster-cvm update \
