@@ -1,10 +1,14 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    commands::log::{stream_logs, LogArgs},
+    commands::{
+        log::{stream_logs, LogArgs},
+        simulate::{simulate, SimulateArgs},
+    },
     configs::global::OYSTER_MARKET_ADDRESS,
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
+        market::{InstanceRate, Operator, OysterMarket},
         provider::create_provider,
         usdc::{approve_usdc, format_usdc},
     },
@@ -20,7 +24,6 @@ use alloy::{
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
@@ -39,13 +42,6 @@ sol!(
     #[sol(rpc)]
     USDC,
     "src/abis/token_abi.json"
-);
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
 );
 
 #[derive(Args, Debug)]
@@ -100,30 +96,26 @@ pub struct DeployArgs {
     /// Init params
     #[command(flatten)]
     init_params: InitParamsArgs,
-}
 
-#[derive(Serialize, Deserialize)]
-struct Operator {
-    allowed_regions: Vec<String>,
-    min_rates: Vec<RateCard>,
-}
+    /// Dry run the image locally
+    #[arg(long, conflicts_with = "image_url")]
+    dry_run: bool,
 
-#[derive(Serialize, Deserialize)]
-struct RateCard {
-    region: String,
-    rate_cards: Vec<InstanceRate>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct InstanceRate {
-    instance: String,
-    min_rate: String,
-    cpu: u32,
-    memory: u32,
-    arch: String,
+    /// Application ports to expose out of the local oyster simulation
+    #[arg(long, requires = "dry_run")]
+    expose_ports: Vec<String>,
 }
 
 pub async fn deploy(args: DeployArgs) -> Result<()> {
+    // Start simulation if dry_run flag is opted
+    if args.dry_run {
+        if args.preset == "blue" {
+            return start_simulation(args).await;
+        } else {
+            return Err(anyhow!("Dry run is only supported for blue images!"));
+        }
+    }
+
     tracing::info!("Starting deployment...");
 
     let provider = create_provider(&args.wallet.load_required()?).await?;
@@ -256,6 +248,25 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn start_simulation(args: DeployArgs) -> Result<()> {
+    let simulate_args = SimulateArgs {
+        preset: args.preset,
+        arch: args.arch.clone(),
+        docker_compose: args.init_params.docker_compose,
+        init_params: args.init_params.init_params.unwrap_or_default(),
+        expose_ports: args.expose_ports,
+        operator: args.operator,
+        region: args.region,
+        instance_type: args.instance_type,
+        job_name: args.job_name,
+        dry_run: true,
+        base_image: args.arch.base_dev_image().to_string(),
+        ..Default::default()
+    };
+
+    return simulate(simulate_args).await;
 }
 
 async fn create_new_oyster_job(

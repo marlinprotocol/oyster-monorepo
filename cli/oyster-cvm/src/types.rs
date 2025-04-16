@@ -1,8 +1,9 @@
 use clap::ValueEnum;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Platform {
     AMD64,
+    #[default]
     ARM64,
 }
 
@@ -18,6 +19,14 @@ impl Platform {
         match self {
             Platform::AMD64 => "x86_64-linux",
             Platform::ARM64 => "aarch64-linux",
+        }
+    }
+
+    // TODO: Add default marlin local dev base images
+    pub fn base_dev_image(&self) -> &'static str {
+        match self {
+            Platform::AMD64 => "ayushkyadav/local_dev_image_amd64:latest",
+            Platform::ARM64 => "ayushkyadav/local_dev_image_arm64:latest",
         }
     }
 }

@@ -1,8 +1,8 @@
 use crate::args::init_params::InitParamsArgs;
 use crate::types::Platform;
+use crate::utils::market::OysterMarket;
 use crate::utils::provider::create_provider;
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
-use alloy::sol;
 use anyhow::{Context, Result};
 use clap::Args;
 use tracing::info;
@@ -36,13 +36,6 @@ pub struct UpdateArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 }
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
 
 pub async fn update_job(args: UpdateArgs) -> Result<()> {
     let wallet_private_key = &args.wallet.load_required()?;

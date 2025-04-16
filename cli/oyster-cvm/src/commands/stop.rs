@@ -1,9 +1,9 @@
+use crate::utils::market::OysterMarket;
 use crate::utils::provider::create_provider;
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::{
     primitives::{Address, B256},
     providers::{Provider, WalletProvider},
-    sol,
 };
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -20,13 +20,6 @@ pub struct StopArgs {
     #[command(flatten)]
     wallet: WalletArgs,
 }
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
 
 pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     let job_id = args.job_id;
