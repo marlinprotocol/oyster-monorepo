@@ -64,7 +64,11 @@ pub struct SimulateArgs {
     pub instance_type: Option<String>,
 
     /// Local dev base image
-    #[arg(short, long, default_value = "ayushkyadav/local-dev-image:latest")]
+    #[arg(
+        short,
+        long,
+        default_value = "ayushkyadav/local_dev_image_arm64:latest"
+    )]
     pub base_image: String,
 
     /// Memory limit for the local dev container

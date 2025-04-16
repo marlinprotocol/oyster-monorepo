@@ -25,8 +25,8 @@ impl Platform {
     // TODO: Add default marlin local dev base images
     pub fn base_dev_image(&self) -> &'static str {
         match self {
-            Platform::AMD64 => "ayushkyadav/local-dev-image:latest",
-            Platform::ARM64 => "",
+            Platform::AMD64 => "ayushkyadav/local_dev_image_amd64:latest",
+            Platform::ARM64 => "ayushkyadav/local_dev_image_arm64:latest",
         }
     }
 }
