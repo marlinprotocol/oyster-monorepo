@@ -1,46 +1,29 @@
-use std::{
-    ops::Deref,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::ops::Deref;
 
 use anyhow::{Context, Result};
-use oyster::{
-    attestation::{self, AttestationExpectations, AWS_ROOT_KEY},
-    scallop::{Key, ScallopAuthStore, ScallopAuther},
-};
+use oyster::scallop::{Key, ScallopAuthStore, ScallopAuther};
 
 #[derive(Clone)]
 pub struct AuthStore {
-    pub state: ([[u8; 48]; 3], Box<[u8]>),
+    pub pubkey: Key,
 }
 
 impl ScallopAuthStore for AuthStore {
     type State = ();
 
-    fn verify(&mut self, attestation: &[u8], key: Key) -> Option<Self::State> {
-        let Ok(now) = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|x| x.as_millis() as usize)
-        else {
-            return None;
-        };
+    // directly compare against the expected key for an early approve/reject
+    fn contains(&mut self, key: &Key) -> oyster::scallop::ContainsResponse<Self::State> {
+        use oyster::scallop::ContainsResponse::*;
+        if key == &self.pubkey {
+            Approved(())
+        } else {
+            Rejected
+        }
+    }
 
-        let Ok(_) = attestation::verify(
-            attestation,
-            AttestationExpectations {
-                // TODO: hardcoded, make it a param
-                age: Some((300000, now)),
-                root_public_key: Some(&AWS_ROOT_KEY),
-                pcrs: Some(self.state.0),
-                user_data: Some(&self.state.1),
-                public_key: Some(&key),
-                ..Default::default()
-            },
-        ) else {
-            return None;
-        };
-
-        return Some(());
+    // should never be called since we never return NotFound above
+    fn verify(&mut self, _attestation: &[u8], _key: Key) -> Option<Self::State> {
+        unimplemented!()
     }
 }
 

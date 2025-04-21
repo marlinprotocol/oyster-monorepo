@@ -10,6 +10,7 @@ use hyper_util::rt::TokioExecutor;
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNumContext;
 use openssl::ec::{EcKey, PointConversionForm};
+use openssl::sha::Sha256;
 use openssl::x509::{X509VerifyResult, X509};
 use serde_cbor::{self, value, value::Value};
 
@@ -23,6 +24,7 @@ pub struct AttestationDecoded {
     pub root_public_key: Box<[u8]>,
     pub public_key: Box<[u8]>,
     pub user_data: Box<[u8]>,
+    pub image_id: [u8; 32],
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -46,6 +48,7 @@ pub struct AttestationExpectations<'a> {
     pub public_key: Option<&'a [u8]>,
     pub user_data: Option<&'a [u8]>,
     pub root_public_key: Option<&'a [u8]>,
+    pub image_id: Option<&'a [u8; 32]>,
 }
 
 pub fn verify(
@@ -58,6 +61,7 @@ pub fn verify(
         root_public_key: Default::default(),
         public_key: Default::default(),
         user_data: Default::default(),
+        image_id: Default::default(),
     };
 
     // parse attestation doc
@@ -122,6 +126,25 @@ pub fn verify(
     if let Some(user_data) = expectations.user_data {
         if result.user_data.as_ref() != user_data {
             return Err(AttestationError::VerifyFailed("user data mismatch".into()));
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(result.pcrs.as_flattened());
+    hasher.update(
+        &u16::try_from(result.user_data.len())
+            .map_err(|_| {
+                AttestationError::VerifyFailed("user data too big to compute image id".into())
+            })?
+            .to_be_bytes(),
+    );
+    hasher.update(result.user_data.as_ref());
+    result.image_id = hasher.finish();
+
+    // check image id if exists
+    if let Some(image_id) = expectations.image_id {
+        if &result.image_id != image_id {
+            return Err(AttestationError::VerifyFailed("image id mismatch".into()));
         }
     }
 
@@ -383,6 +406,10 @@ mod tests {
         assert_eq!(decoded.user_data, [0u8; 0].into());
         assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
         assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")
+        );
     }
 
     // generated using `curl <ip>:<port>/attestation/raw`
@@ -409,6 +436,7 @@ mod tests {
                 public_key: Some(&hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb")),
                 user_data: Some(&[0; 0]),
                 root_public_key: Some(&AWS_ROOT_KEY),
+                image_id: Some(&hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")),
             },
         )
         .unwrap();
@@ -420,6 +448,10 @@ mod tests {
         assert_eq!(decoded.user_data, [0u8; 0].into());
         assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
         assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")
+        );
     }
 
     // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
@@ -439,6 +471,10 @@ mod tests {
         assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
         assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
         assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372")
+        );
     }
 
     // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
@@ -458,6 +494,9 @@ mod tests {
                 public_key: Some(&hex!("12345678")),
                 user_data: Some(&hex!("abcdef")),
                 root_public_key: Some(&MOCK_ROOT_KEY),
+                image_id: Some(&hex!(
+                    "79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372"
+                )),
             },
         )
         .unwrap();
@@ -469,5 +508,9 @@ mod tests {
         assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
         assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
         assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372")
+        );
     }
 }

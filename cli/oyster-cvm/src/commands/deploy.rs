@@ -191,11 +191,11 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .unwrap_or(match args.preset.as_str() {
             "blue" => match args.arch {
                 Platform::AMD64 => Ok(
-                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v1.0.0_linux_amd64.eif"
+                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v2.0.0_linux_amd64.eif"
                         .into(),
                 ),
                 Platform::ARM64 => Ok(
-                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v1.0.0_linux_arm64.eif"
+                    "https://artifacts.marlin.org/oyster/eifs/base-blue_v2.0.0_linux_arm64.eif"
                         .into(),
                 ),
             },

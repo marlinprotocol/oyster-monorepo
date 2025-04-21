@@ -4,11 +4,12 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
-use anyhow::{anyhow, Context, Result};
-use axum::{routing::get, Router};
+use anyhow::{Context, Result};
+use axum::{middleware, routing::get, Router};
 use clap::Parser;
+use kms_derive_utils::{derive_path_seed, to_secp256k1_secret, to_x25519_secret};
 use oyster::axum::{ScallopListener, ScallopState};
-use scallop::{AuthStore, AuthStoreState, Auther};
+use scallop::{AuthStore, AuthStoreState};
 use taco::decrypt;
 use tokio::{
     fs::{self, read},
@@ -16,6 +17,7 @@ use tokio::{
     spawn,
     time::sleep,
 };
+use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -59,14 +61,6 @@ struct Args {
     #[arg(long, default_value = "https://polygon-rpc.com")]
     rpc: String,
 
-    /// Attestation endpoint
-    #[arg(long, default_value = "http://127.0.0.1:1301/attestation/raw")]
-    attestation_endpoint: String,
-
-    /// Path to X25519 secret file
-    #[arg(long, default_value = "/app/x25519.sec")]
-    secret_path: String,
-
     /// DKG threshold
     #[arg(long, default_value = "16")]
     threshold: u16,
@@ -87,6 +81,7 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     seed: [u8; 64],
+    signing_key: PrivateKeySigner,
     rpc: String,
     // this could be fetched from the RPC
     // we still hardcode this to limit impact of malicious RPCs
@@ -139,14 +134,16 @@ async fn main() -> Result<()> {
     .try_into()
     .context("seed is not the right size")?;
 
-    let secret: [u8; 32] = read(args.secret_path)
-        .await
-        .context("failed to read secret file")?
-        .try_into()
-        .map_err(|_| anyhow!("failed to parse secret file"))?;
+    let secret = to_x25519_secret(derive_path_seed(seed, b"oyster.kms.x25519"));
+    let signing_key = PrivateKeySigner::from_slice(&to_secp256k1_secret(derive_path_seed(
+        seed,
+        b"oyster.kms.secp256k1",
+    )))
+    .context("failed to create signing key")?;
 
     let scallop_app_state = AppState {
         seed,
+        signing_key,
         rpc: args.verification_rpc,
         chain_id: args.verification_chain_id,
     };
@@ -157,9 +154,8 @@ async fn main() -> Result<()> {
     let scallop_handle = spawn(run_forever(move || {
         let app_state = scallop_app_state.clone();
         let listen_addr = args.scallop_listen_addr.clone();
-        let attestation_endpoint = args.attestation_endpoint.clone();
         let secret = secret.clone();
-        async move { run_scallop_server(app_state, listen_addr, attestation_endpoint, secret).await }
+        async move { run_scallop_server(app_state, listen_addr, secret).await }
     }));
 
     let public_handle = spawn(run_forever(move || {
@@ -186,17 +182,16 @@ async fn run_forever<T: FnMut() -> F, F: Future<Output = Result<()>>>(mut task: 
 async fn run_scallop_server(
     app_state: AppState,
     listen_addr: String,
-    attestation_endpoint: String,
     secret: [u8; 32],
 ) -> Result<()> {
-    let auther = Auther {
-        url: attestation_endpoint,
-    };
-
     let auth_store = AuthStore {};
 
     let app = Router::new()
         .route("/derive", get(derive::derive))
+        // middleware is executed bottom to top here
+        // we want timeouts to be first, then size checks
+        .layer(RequestBodyLimitLayer::new(1024))
+        .layer(TimeoutLayer::new(Duration::from_secs(5)))
         .with_state(app_state);
 
     let tcp_listener = TcpListener::bind(&listen_addr)
@@ -206,8 +201,8 @@ async fn run_scallop_server(
     let listener = ScallopListener {
         listener: tcp_listener,
         secret,
-        auth_store,
-        auther,
+        auth_store: Some(auth_store),
+        auther: None::<()>,
     };
 
     info!("Listening on {}", listen_addr);
@@ -241,6 +236,14 @@ async fn run_public_server(app_state: AppState, listen_addr: String) -> Result<(
             "/derive/x25519/public",
             get(derive_public::derive_x25519_public),
         )
+        // middleware is executed bottom to top here
+        // we want timeouts to be first, then size checks, then signing
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            derive_public::signing_middleware,
+        ))
+        .layer(RequestBodyLimitLayer::new(1024))
+        .layer(TimeoutLayer::new(Duration::from_secs(5)))
         .with_state(app_state);
 
     let listener = TcpListener::bind(&listen_addr)

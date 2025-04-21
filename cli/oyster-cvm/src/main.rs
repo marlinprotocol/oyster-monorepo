@@ -1,9 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, doctor::DoctorArgs,
-    image_id::ImageArgs, list::ListArgs, log::LogArgs, stop::StopArgs, update::UpdateArgs,
-    upload::UploadArgs, verify::VerifyArgs, withdraw::WithdrawArgs,
+    build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, derive::KmsDeriveArgs,
+    doctor::DoctorArgs, image_id::ImageArgs, kms_contract::KmsContractArgs, list::ListArgs,
+    log::LogArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs, verify::VerifyArgs,
+    withdraw::WithdrawArgs,
 };
 
 mod args;
@@ -56,6 +57,10 @@ enum Commands {
     Withdraw(WithdrawArgs),
     /// Get Image ID
     ComputeImageId(ImageArgs),
+    /// Get KMS derived public keys or addresses
+    KmsDerive(KmsDeriveArgs),
+    /// KMS verify contract commands
+    KmsContract(KmsContractArgs),
 }
 
 #[tokio::main]
@@ -77,6 +82,8 @@ async fn main() -> Result<()> {
         Commands::Stop(args) => commands::stop::stop_oyster_instance(args).await,
         Commands::Withdraw(args) => commands::withdraw::withdraw_from_job(args).await,
         Commands::ComputeImageId(args) => commands::image_id::compute_image_id(args),
+        Commands::KmsDerive(args) => commands::derive::kms_derive(args).await,
+        Commands::KmsContract(args) => commands::kms_contract::kms_contract(args).await,
     };
 
     if let Err(e) = result {

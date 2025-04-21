@@ -6,11 +6,12 @@ use alloy::{
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, routing::get, Router};
 use clap::Parser;
+use kms_derive_utils::{derive_path_seed, to_secp256k1_public, to_x25519_public};
 use nucypher_core::{
     encrypt_for_dkg, ferveo::api::DkgPublicKey, AccessControlPolicy, Conditions, ProtocolObject,
     ThresholdMessageKit,
 };
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::OsRng, TryRngCore};
 use tokio::{
     fs::{read, read_to_string},
     net::TcpListener,
@@ -24,7 +25,7 @@ struct AppState {
 }
 
 fn encrypt(
-    message: &[u8],
+    message: &[u8; 64],
     conditions: &Conditions,
     dkg_public_key: DkgPublicKey,
     auth_signer: PrivateKeySigner,
@@ -35,8 +36,11 @@ fn encrypt(
 
     // calculate header hash
     let header_hash = keccak256(
-        bincode::serialize(&ciphertext.header().context("failed to get header")?)
-            .context("failed to serialize header")?,
+        bincode::serde::encode_to_vec(
+            &ciphertext.header().context("failed to get header")?,
+            bincode::config::legacy(),
+        )
+        .context("failed to serialize header")?,
     );
 
     // sign the header hash
@@ -56,7 +60,20 @@ fn encrypt(
     let message_kit = ThresholdMessageKit { ciphertext, acp };
 
     // message bytes
-    let message_bytes = message_kit.to_bytes();
+    let mut message_bytes = message_kit.to_bytes().to_vec();
+
+    // add derived secp256k1 public key to the message
+    // expected to be used for signing public KMS responses
+    message_bytes.extend_from_slice(&to_secp256k1_public(derive_path_seed(
+        *message,
+        b"oyster.kms.secp256k1",
+    )));
+    // add derived x25519 public key to the message
+    // expected to be used for scallop auth
+    message_bytes.extend_from_slice(&to_x25519_public(derive_path_seed(
+        *message,
+        b"oyster.kms.x25519",
+    )));
 
     // message signature
     let signature = auth_signer
@@ -64,17 +81,21 @@ fn encrypt(
         .context("signing failed")?
         .as_bytes();
 
-    let mut resp = message_kit.to_bytes().to_vec();
-    resp.extend_from_slice(&signature);
+    message_bytes.extend_from_slice(&signature);
 
-    Ok(hex::encode(resp))
+    Ok(hex::encode(message_bytes))
 }
 
 // generate new seed and encrypt it against the DKG key
 async fn generate(State(state): State<AppState>) -> (StatusCode, String) {
     // generate seed
     let mut seed = [0u8; 64];
-    OsRng.fill_bytes(seed.as_mut());
+    if OsRng.try_fill_bytes(seed.as_mut()).is_err() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to generate seed\n".into(),
+        );
+    };
 
     // generate encrypted message
     let Ok(encrypted) = encrypt(&seed, &state.conditions, state.dkg_public_key, state.signer)

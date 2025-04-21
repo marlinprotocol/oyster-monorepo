@@ -50,10 +50,6 @@ Options:
           Coordinator address [default: 0xE74259e3dafe30bAA8700238e324b47aC98FE755]
       --rpc <RPC>
           RPC URL [default: https://polygon-rpc.com]
-      --attestation-endpoint <ATTESTATION_ENDPOINT>
-          Attestation endpoint [default: http://127.0.0.1:1301/attestation/raw]
-      --secret-path <SECRET_PATH>
-          Path to X25519 secret file [default: /app/x25519.sec]
       --threshold <THRESHOLD>
           DKG threshold [default: 16]
       --delay <DELAY>
@@ -86,6 +82,14 @@ GET /derive
 
 Unlike the scallop endpoints, these endpoints are availble to any caller. They are mainly intended to fetch public keys for derivation paths in advance before even running an enclave.
 
+### Signatures
+
+All the public endpoints include a `x-marlin-kms-signature` header which contains a secp256k1 signature over relevant request and response fields to help verify if the response came from a valid KMS root server.
+
+The public key of the signer is obtained by deriving a secp256k1 public key from the seed. It is printed by the creator verifier program during verification and is expected to be hardcoded into verifiers. The same seed will always lead to the same signer for valid root servers.
+
+The message being signed follows this format (with || denoting concatenation) - `<request uri, i.e. path + query>||<response body>`
+
 ### Derive secp256k1 public key
 
 #### Endpoint
@@ -95,7 +99,7 @@ Unlike the scallop endpoints, these endpoints are availble to any caller. They a
 #### Usage
 
 ```
-GET /derive/secp256k1/public?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_data>&path=<path>
+GET /derive/secp256k1/public?image_id=<image_id>&path=<path>
 
 <binary data of the derived public key in response>
 ```
@@ -109,7 +113,7 @@ GET /derive/secp256k1/public?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user
 #### Usage
 
 ```
-GET /derive/secp256k1/address/ethereum?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_data>&path=<path>
+GET /derive/secp256k1/address/ethereum?image_id=<image_id>&path=<path>
 
 0x92148e8f84096d0dfe7e66a025d14d1e2594ddc2
 ```
@@ -123,7 +127,7 @@ GET /derive/secp256k1/address/ethereum?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_
 #### Usage
 
 ```
-GET /derive/ed25519/public?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_data>&path=<path>
+GET /derive/ed25519/public?image_id=<image_id>&path=<path>
 
 <binary data of the derived public key in response>
 ```
@@ -137,7 +141,7 @@ GET /derive/ed25519/public?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_d
 #### Usage
 
 ```
-GET /derive/ed25519/address/solana?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_data>&path=<path>
+GET /derive/ed25519/address/solana?image_id=<image_id>&path=<path>
 
 BEYzkmcGNdhqHAPKQ7oz89n1RbAumm2kwtX113pPuCax
 ```
@@ -151,7 +155,7 @@ BEYzkmcGNdhqHAPKQ7oz89n1RbAumm2kwtX113pPuCax
 #### Usage
 
 ```
-GET /derive/x25519/public?pcr0=<pcr0>&pcr1=<pcr1>&pcr2=<pcr2>&user_data=<user_data>&path=<path>
+GET /derive/x25519/public?image_id=<image_id>&path=<path>
 
 <binary data of the derived public key in response>
 ```

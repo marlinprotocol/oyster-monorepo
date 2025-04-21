@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use hex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -6,7 +6,7 @@ use tracing::info;
 
 use oyster::attestation::{get, AttestationExpectations, AWS_ROOT_KEY};
 
-use crate::args::pcr::{PcrArgs, PCRS_BASE_BLUE_V1_0_0_AMD64, PCRS_BASE_BLUE_V1_0_0_ARM64};
+use crate::args::pcr::{preset_to_pcr_preset, PcrArgs};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
 use crate::types::Platform;
 
@@ -22,6 +22,10 @@ pub struct VerifyArgs {
     /// Attestation user data, hex encoded
     #[arg(short = 'u', long)]
     user_data: Option<String>,
+
+    /// Image id, hex encoded
+    #[arg(short = 'i', long)]
+    image_id: Option<String>,
 
     /// Attestation Port (default: 1300)
     #[arg(short = 'p', long, default_value_t = DEFAULT_ATTESTATION_PORT)]
@@ -49,7 +53,7 @@ pub struct VerifyArgs {
 }
 
 pub async fn verify(args: VerifyArgs) -> Result<()> {
-    let pcrs = get_pcrs(&args.pcr, args.preset, args.arch).context("Failed to load PCR data")?;
+    let pcrs = get_pcrs(args.pcr, args.preset, args.arch).context("Failed to load PCR data")?;
 
     let attestation_endpoint = format!(
         "http://{}:{}/attestation/raw",
@@ -70,6 +74,15 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         .transpose()?;
     let root_public_key =
         hex::decode(args.root_public_key).context("Failed to decode root public key hex string")?;
+    let image_id = args
+        .image_id
+        .map(|x| {
+            hex::decode(x)
+                .context("Failed to decode root public key hex string")?
+                .try_into()
+                .map_err(|_| anyhow!("incorrect image id size"))
+        })
+        .transpose()?;
 
     let attestation_expectations = AttestationExpectations {
         age: Some((args.max_age, now)),
@@ -78,6 +91,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         root_public_key: Some(root_public_key.as_slice()),
         timestamp: (!args.timestamp.eq(&0)).then_some(args.timestamp),
         public_key: None,
+        image_id: image_id.as_ref(),
     };
 
     let decoded = oyster::attestation::verify(&attestation_doc, attestation_expectations)
@@ -85,6 +99,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
     info!("Enclave public key: {}", hex::encode(decoded.public_key));
+    info!("Image id: {}", hex::encode(&decoded.image_id));
     info!("User data: {}", hex::encode(&decoded.user_data));
     if let Ok(user_data) = String::from_utf8(decoded.user_data.to_vec()) {
         info!("User data, decoded as UTF-8: {user_data}");
@@ -96,39 +111,13 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
     Ok(())
 }
 
-fn get_pcrs(
-    pcr: &PcrArgs,
-    preset: Option<String>,
-    arch: Platform,
-) -> Result<Option<[[u8; 48]; 3]>> {
-    let (pcr0, pcr1, pcr2) = pcr.load()?.unwrap_or(match preset {
-        Some(preset) => match preset.as_str() {
-            "blue" => match arch {
-                Platform::AMD64 => (
-                    PCRS_BASE_BLUE_V1_0_0_AMD64.0.into(),
-                    PCRS_BASE_BLUE_V1_0_0_AMD64.1.into(),
-                    PCRS_BASE_BLUE_V1_0_0_AMD64.2.into(),
-                ),
-                Platform::ARM64 => (
-                    PCRS_BASE_BLUE_V1_0_0_ARM64.0.into(),
-                    PCRS_BASE_BLUE_V1_0_0_ARM64.1.into(),
-                    PCRS_BASE_BLUE_V1_0_0_ARM64.2.into(),
-                ),
-            },
-            "debug" => (
-                hex::encode([0u8; 48]),
-                hex::encode([0u8; 48]),
-                hex::encode([0u8; 48]),
-            ),
-            _ => {
-                return Err(anyhow::anyhow!("Unknown PCR preset"));
-            }
-        },
-        _ => {
-            tracing::info!("No PCR values provided - skipping PCR verification");
-            return Ok(None);
-        }
-    });
+fn get_pcrs(pcr: PcrArgs, preset: Option<String>, arch: Platform) -> Result<Option<[[u8; 48]; 3]>> {
+    let Some((pcr0, pcr1, pcr2)) =
+        pcr.load(preset.and_then(|x| preset_to_pcr_preset(&x, &arch)))?
+    else {
+        tracing::info!("No PCR values provided - skipping PCR verification");
+        return Ok(None);
+    };
 
     tracing::info!(
         "Loaded PCR data: pcr0: {}, pcr1: {}, pcr2: {}",

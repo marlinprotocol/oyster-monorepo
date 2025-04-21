@@ -1,6 +1,13 @@
+use alloy::signers::{
+    k256::sha2::{Digest, Sha256},
+    SignerSync,
+};
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
+    body::to_bytes,
+    extract::{Query, Request, State},
+    http::{HeaderName, HeaderValue, StatusCode},
+    middleware::Next,
+    response::Response,
 };
 use kms_derive_utils::{
     derive_enclave_seed, derive_path_seed, to_ed25519_public, to_ed25519_solana_address,
@@ -12,33 +19,80 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct Params {
-    pcr0: String,
-    pcr1: String,
-    pcr2: String,
-    user_data: String,
+    image_id: String,
     path: String,
 }
 
 impl Params {
     fn derive_path_seed(&self, seed: [u8; 64]) -> Option<[u8; 64]> {
-        let Ok(pcr0) = hex::decode(&self.pcr0) else {
-            return None;
-        };
-        let Ok(pcr1) = hex::decode(&self.pcr1) else {
-            return None;
-        };
-        let Ok(pcr2) = hex::decode(&self.pcr2) else {
-            return None;
-        };
-        let Ok(user_data) = hex::decode(&self.user_data) else {
+        let Ok(image_id) = hex::decode(&self.image_id).and_then(|x| {
+            x.try_into()
+                .map_err(|_| hex::FromHexError::InvalidStringLength)
+        }) else {
             return None;
         };
 
-        let enclave_key = derive_enclave_seed(seed, &pcr0, &pcr1, &pcr2, &user_data);
+        let enclave_key = derive_enclave_seed(seed, image_id);
         let path_key = derive_path_seed(enclave_key, self.path.as_bytes());
 
         Some(path_key)
     }
+}
+
+pub async fn signing_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // store the uri
+    let uri = req.uri().clone();
+
+    // run the request
+    let mut res = next.run(req).await;
+
+    // only sign successful responses
+    if res.status().is_success() {
+        // decompose response
+        let (mut parts, body) = res.into_parts();
+
+        // extract body bytes
+        let body_bytes = match to_bytes(body, usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(uri.to_string());
+        hasher.update(&body_bytes);
+        let digest: [u8; 32] = hasher.finalize().into();
+
+        let signature = match state.signing_key.sign_hash_sync(&digest.into()) {
+            Ok(sig) => sig,
+            Err(_) => {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+        let signature_hex = hex::encode(signature.as_bytes());
+
+        match HeaderValue::from_str(&signature_hex) {
+            Ok(header_value) => {
+                parts.headers.insert(
+                    HeaderName::from_static("x-marlin-kms-signature"),
+                    header_value,
+                );
+            }
+            Err(_) => {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        // reconstruct the response
+        res = Response::from_parts(parts, axum::body::Body::from(body_bytes));
+    }
+
+    Ok(res)
 }
 
 // derive public key based on params

@@ -15,7 +15,7 @@ use nucypher_core::{
     EncryptedThresholdDecryptionResponse, ProtocolObject, SessionSharedSecret, SessionStaticKey,
     SessionStaticSecret, ThresholdDecryptionRequest, ThresholdMessageKit,
 };
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::{distr::Alphanumeric, rng, Rng};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -132,7 +132,7 @@ Issued At: {}
 Expiration Time: {}",
         signer.address(),
         chain_id,
-        thread_rng()
+        rng()
             .sample_iter(&Alphanumeric)
             .take(8)
             .map(char::from)
@@ -226,9 +226,11 @@ Expiration Time: {}",
                 return Err(anyhow!("wrong ritual"));
             }
 
-            Ok(bincode::deserialize::<DecryptionShareSimple>(
+            Ok(bincode::serde::decode_from_slice(
                 &decrypted.decryption_share[..],
-            )?)
+                bincode::config::legacy(),
+            )?
+            .0)
         })
         .filter_map(Result::ok)
         .collect::<Vec<_>>();

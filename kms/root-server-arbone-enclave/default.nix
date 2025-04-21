@@ -18,7 +18,6 @@
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
-  keygenX25519 = "${keygen}/bin/keygen-x25519";
   itvroProxy = "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
   vtiriProxy = "${raw-proxy}/bin/vsock-to-ip-raw-incoming";
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
@@ -38,7 +37,6 @@
     mkdir -p $out/etc
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenSecp256k1} $out/app/keygen-secp256k1
-    cp ${keygenX25519} $out/app/keygen-x25519
     cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
     cp ${vtiriProxy} $out/app/vsock-to-ip-raw-incoming
     cp ${attestationServer} $out/app/attestation-server

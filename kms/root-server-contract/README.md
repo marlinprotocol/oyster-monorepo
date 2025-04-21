@@ -50,10 +50,6 @@ Options:
           Coordinator address [default: 0xE74259e3dafe30bAA8700238e324b47aC98FE755]
       --rpc <RPC>
           RPC URL [default: https://polygon-rpc.com]
-      --attestation-endpoint <ATTESTATION_ENDPOINT>
-          Attestation endpoint [default: http://127.0.0.1:1301/attestation/raw]
-      --secret-path <SECRET_PATH>
-          Path to X25519 secret file [default: /app/x25519.sec]
       --threshold <THRESHOLD>
           DKG threshold [default: 16]
       --delay <DELAY>
@@ -96,6 +92,14 @@ interface IKMSVerifiable {
 ## Public endpoints
 
 Unlike the scallop endpoints, these endpoints are availble to any caller. They are mainly intended to fetch public keys for derivation paths in advance before even running an enclave.
+
+### Signatures
+
+All the public endpoints include a `x-marlin-kms-signature` header which contains a secp256k1 signature over relevant request and response fields to help verify if the response came from a valid KMS root server.
+
+The public key of the signer is obtained by deriving a secp256k1 public key from the seed. It is printed by the creator verifier program during verification and is expected to be hardcoded into verifiers. The same seed will always lead to the same signer for valid root servers.
+
+The message being signed follows this format (with || denoting concatenation) - `<request uri, i.e. path + query>||<response body>`
 
 ### Derive secp256k1 public key
 

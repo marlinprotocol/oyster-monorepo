@@ -1,18 +1,16 @@
-use std::{
-    ops::Deref,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use alloy::signers::k256::sha2::{Digest, Sha256};
 use oyster::{
     attestation::{self, AttestationExpectations, AWS_ROOT_KEY},
-    scallop::{Key, ScallopAuthStore, ScallopAuther},
+    scallop::{Key, ScallopAuthStore},
 };
 
 #[derive(Clone, Default)]
 pub struct AuthStore {}
 
-pub type AuthStoreState = ([[u8; 48]; 3], Box<[u8]>);
+// holds image id
+pub type AuthStoreState = [u8; 32];
 
 impl ScallopAuthStore for AuthStore {
     type State = AuthStoreState;
@@ -44,25 +42,14 @@ impl ScallopAuthStore for AuthStore {
             return None;
         }
 
-        return Some((decoded.pcrs, decoded.user_data));
-    }
-}
+        let mut hasher = Sha256::new();
+        hasher.update(decoded.pcrs[0]);
+        hasher.update(decoded.pcrs[1]);
+        hasher.update(decoded.pcrs[2]);
+        hasher.update((decoded.user_data.len() as u16).to_be_bytes());
+        hasher.update(decoded.user_data);
+        let image_id = hasher.finalize().into();
 
-#[derive(Clone)]
-pub struct Auther {
-    pub url: String,
-}
-
-impl ScallopAuther for Auther {
-    type Error = anyhow::Error;
-
-    async fn new_auth(&mut self) -> Result<Box<[u8]>> {
-        let body = reqwest::get(&self.url)
-            .await
-            .context("failed to fetch attestation")?
-            .bytes()
-            .await
-            .context("failed to read attestation")?;
-        Ok(body.deref().into())
+        return Some(image_id);
     }
 }

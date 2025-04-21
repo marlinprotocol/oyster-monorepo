@@ -9,41 +9,23 @@ use sha2::Digest;
 use sha2::Sha512;
 use sha3::Keccak256;
 
-/// Derives a 64-byte seed for an enclave using PCR measurements and user data.
+/// Derives a 64-byte seed for an enclave using an image id.
 /// The derivation is performed twice for additional security around length extension.
 ///
 /// # Arguments
 /// * `root` - A 64-byte root seed
-/// * `pcr0` - PCR0 measurement bytes
-/// * `pcr1` - PCR1 measurement bytes
-/// * `pcr2` - PCR2 measurement bytes
-/// * `user_data` - Additional user data bytes
+/// * `image_id` - A 32-byte image id
 ///
 /// # Examples
 /// ```
 /// use kms_derive_utils::derive_enclave_seed;
 ///
 /// let root = [0u8; 64];
-/// let pcr0 = vec![1u8; 48];
-/// let pcr1 = vec![2u8; 48];
-/// let pcr2 = vec![3u8; 48];
-/// let user_data = vec![4u8; 8];
-/// let seed = derive_enclave_seed(root, &pcr0, &pcr1, &pcr2, &user_data);
+/// let image_id = [1u8; 32];
+/// let seed = derive_enclave_seed(root, image_id);
 /// ```
-pub fn derive_enclave_seed(
-    root: [u8; 64],
-    pcr0: &[u8],
-    pcr1: &[u8],
-    pcr2: &[u8],
-    user_data: &[u8],
-) -> [u8; 64] {
-    derive_enclave_seed_once(
-        derive_enclave_seed_once(root, pcr0, pcr1, pcr2, user_data),
-        pcr0,
-        pcr1,
-        pcr2,
-        user_data,
-    )
+pub fn derive_enclave_seed(root: [u8; 64], image_id: [u8; 32]) -> [u8; 64] {
+    derive_enclave_seed_once(derive_enclave_seed_once(root, image_id), image_id)
 }
 
 /// Derives a 64-byte seed for an enclave given a chain id and an address.
@@ -271,20 +253,10 @@ pub fn to_x25519_public(derived: [u8; 64]) -> [u8; 32] {
     x25519_dalek::PublicKey::from(&secret).to_bytes()
 }
 
-fn derive_enclave_seed_once(
-    root: [u8; 64],
-    pcr0: &[u8],
-    pcr1: &[u8],
-    pcr2: &[u8],
-    user_data: &[u8],
-) -> [u8; 64] {
+fn derive_enclave_seed_once(root: [u8; 64], image_id: [u8; 32]) -> [u8; 64] {
     // SAFETY: cannot error, safe to unwrap
     let mut mac = Hmac::<Sha512>::new_from_slice(&root).unwrap();
-    mac.update(&pcr0);
-    mac.update(&pcr1);
-    mac.update(&pcr2);
-    mac.update(&(user_data.len() as u16).to_be_bytes());
-    mac.update(&user_data);
+    mac.update(&image_id);
 
     mac.finalize().into_bytes().into()
 }
@@ -319,14 +291,11 @@ mod tests {
     #[test]
     fn test_derive_enclave_seed() {
         let root = hex!("4090382ec7b7a00ee999a8da6f5d85e4159964c9f03448b3e3608e877a49cdf2031c4c25b95142cf02844a118bfafa2ad41aceda1191be332eee20b4bacd9be5");
-        let pcr0 = hex!("107a6d53ba665ae961bb407bccf8b8bc95fa048e1eb59e012caac30e0ba2d58928ab78c18983e44c9660b01a8abadb91");
-        let pcr1 = hex!("c4c764a379f18de9633c69d81173f2ef1510bb84926fab60f77b54885b67d1a9e3c3d716c7991f16dd2c4a8bc4c8eca5");
-        let pcr2 = hex!("f0abae3d376be84340d12a9a5f6d989c1f5c56c59d04b41a3b5a72187fcb3d4090dd60229261c04281eb1d8d40c4b328");
-        let user_data = hex!("0336b1a0838f0bd3");
+        let image_id = hex!("107a6d53ba665ae961bb407bccf8b8bc95fa048e1eb59e012caac30ef29d72a9");
         // derived from an independent online implementation
-        let expected = hex!("07daa9e8e6917e45658f826b68f925e043d54ae4040ef1bbcc54e9aaf29d72a9c8ab133a8a5ca8b6a86eaf355421a4b4d8c6e125a22a827df3c90d78696d07d7");
+        let expected = hex!("b63552edbd62d2c95b3c8662934d6c0d1cb9dab6177ca59a6d228d586e5257a95a21725f3ca3cfb9b1f9816fd10ce6d877048b1f3d7e1496abee9d8afc7f54ce");
 
-        let seed = derive_enclave_seed(root, &pcr0, &pcr1, &pcr2, &user_data);
+        let seed = derive_enclave_seed(root, image_id);
 
         assert_eq!(seed, expected);
     }

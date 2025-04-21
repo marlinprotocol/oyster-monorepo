@@ -91,7 +91,7 @@ Optional args:
 - `--pcr1` (-1): PCR1 value
 - `--pcr2` (-2): PCR2 value
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
 
@@ -122,7 +122,8 @@ Optional args:
 - `--no-stream`: Disable automatic log streaming in debug mode (requires --debug)
 - `--init-params-encoded`: Base64 encoded init params
 - `--init-params`: List of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`
-- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v2.kms.box:1101)
+- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v3.kms.box:1101)
+- `--kms-verification-key`: Kms response signature verification key
 - `--docker-compose`: Path to custom docker-compose.yml file
 - `--contract-address`: Enclave verifier contract address
 - `--chain-id`: Chain ID for KMS contract root server
@@ -133,7 +134,7 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
@@ -220,10 +221,57 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
+
+#### `kms-derive`
+Fetches the KMS derived public keys or addresses  from root server.
+
+Required args:
+- `--path`: Derivation path of the key
+- `--key-type`: Type of key to derive [possible values: secp256k1/public, secp256k1/address/ethereum, ed25519/public, ed25519/address/solana, x25519/public]
+
+Optional args:
+- `--kms-endpoint`: KMS endpoint for fetching public keys or addresses
+- `--kms-verification-key`: Kms response signature verification key
+\
+<br>
+- `--image-id`: Image ID of the enclave
+<br>
+OR
+- `--contract-address`: Address of KMS verification contract
+- `--chain-id`: Chain ID of KMS contract root server
+
+#### `kms-contract deploy`
+Deploys a KMS verify contract
+
+Required args:
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+
+#### `kms-contract approve`
+Approve the image ID on KMS verify contract
+
+Required args:
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+- `--contract-address`: Address of KMS verification contract
+- `--image-id`: Image ID of the enclave
+
+#### `kms-contract revoke`
+Revoke the image ID on KMS verify contract
+
+Required args:
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+- `--contract-address`: Address of KMS verification contract
+- `--image-id`: Image ID of the enclave
+
+#### `kms-contract verify`
+Verify the image ID on KMS verify contract
+
+Required args:
+- `--contract-address`: Address of KMS verification contract
+- `--image-id`: Image ID of the enclave
 
 ### Example
 
@@ -296,7 +344,7 @@ OR
 # Verify an enclave using PCR preset
 ./oyster-cvm verify \
   --enclave-ip 192.168.1.100 \
-  --pcr-preset "base/blue/v1.0.0/amd64"
+  --pcr-preset "base/blue/v2.0.0/amd64"
 
 # Or verify with custom PCR values
 ./oyster-cvm verify \
@@ -395,6 +443,42 @@ oyster-cvm compute-image-id --docker-compose docker-compose.yml --contract-addre
 [INFO] oyster_cvm::args::init_params: digest path="root-server-config.json" should_attest=true should_encrypt=false
 [INFO] oyster_cvm::args::init_params: Computed digest digest="27637e8805c4eabe6bd39ed0cc9ac9e66db731470e524b02ea99794298a093e2"
 [INFO] oyster_cvm::commands::image_id: Image ID: aaa2e48fca87611a563556ad9d778f19c7c32a1a7c84242eeb57cbb1f7e33bf1
+
+# Derive KMS keys using image ID
+oyster-cvm kms-derive --image-id c7160a47e84b1cdd06095c78ce20fbc95967810357f4f590d560a5fa41f076ec --path signing-server --key-type ed25519/address/solana
+
+# Sample output
+[INFO] oyster_cvm::commands::derive: kms derived address address="7Nbd6bRg9cAGsRBYCpyUFWQyE9h57mksYg9P7iabgHD"
+
+# Derive KMS keys using contract address
+oyster-cvm  kms-derive --contract-address D0D6fF1C2FD450aBcB050896EeE16AE10A1aD3e1 --chain-id 42161 --path signing-server --key-type x25519/public
+
+# Sample output
+[INFO] oyster_cvm::commands::derive: kms derived key key="f81003ebf81644344f688d62d4e42c7d4247afe5cba0a1220c159467dd7f1d44"
+
+# Deploy KMS verification contract
+oyster-cvm kms-contract deploy --wallet-private-key-file ./key.txt
+
+# Sample output
+[INFO] oyster_cvm::commands::kms_contract: Contract deployed at: 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795
+
+# Approve image ID on KMS verification contract
+oyster-cvm kms-contract approve --wallet-private-key-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
+
+# Sample output
+[INFO] oyster_cvm::commands::kms_contract: Transaction hash: 0x75c7dd811e9b5316e042c40ceaa1dd8903ddfd4c5cf0638bb80b2fff611992cb
+
+# Revoke image ID on KMS verification contract
+oyster-cvm kms-contract revoke --wallet-private-key-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
+
+# Sample output
+[INFO] oyster_cvm::commands::kms_contract: Transaction hash: 0x38f5087e0edd21c95b3f2b8f81234d92003c7c8724b1b2449fcc7558744a212b
+
+# Verify image ID on KMS verification contract
+oyster-cvm kms-contract verify --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
+
+# Sample output
+[INFO] oyster_cvm::commands::kms_contract: Image ID is verified
 ```
 
 ## License

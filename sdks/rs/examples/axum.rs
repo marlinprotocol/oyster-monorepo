@@ -68,8 +68,8 @@ async fn welcome() -> &'static str {
 }
 
 async fn server_task(key: Key) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let auth_store = AuthStore::default();
-    let auther = Auther {};
+    let auth_store = Some(AuthStore::default());
+    let auther = Some(Auther {});
 
     let app = Router::new()
         .route("/hello", get(hello))

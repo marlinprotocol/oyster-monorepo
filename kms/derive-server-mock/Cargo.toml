@@ -1,0 +1,21 @@
+[package]
+name = "kms-derive-server-mock"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.95"
+axum = "0.8.1"
+clap = { version = "4.5.27", features = ["derive"] }
+kms-derive-utils = { version = "0.1.0", path = "../derive-utils" }
+serde = { version = "1.0.217", features = ["derive"] }
+tokio = { version = "1.43.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1

@@ -41,6 +41,9 @@
       attestation.server-custom-mock = import ./attestation/server-custom-mock {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      attestation.server-mock = import ./attestation/server-mock {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       attestation.verifier = import ./attestation/verifier {
         inherit nixpkgs systemConfig fenix naersk;
       };
@@ -85,6 +88,9 @@
         inherit nixpkgs systemConfig fenix naersk;
       };
       kms.derive-server = import ./kms/derive-server {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
+      kms.derive-server-mock = import ./kms/derive-server-mock {
         inherit nixpkgs systemConfig fenix naersk;
       };
       kms.derive-server-enclave = import ./kms/derive-server-enclave {
