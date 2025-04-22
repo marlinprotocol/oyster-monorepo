@@ -39,6 +39,8 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::is_closed.eq(true),
             jobs::rate.eq(BigDecimal::from(0)),
             jobs::balance.eq(BigDecimal::from(0)),
+            jobs::usdc_balance.eq(BigDecimal::from(0)),
+            jobs::credits_balance.eq(BigDecimal::from(0)),
         ))
         .execute(conn)
         .context("failed to update job")?;

@@ -3,6 +3,7 @@ use alloy::hex::ToHexExt;
 use alloy::rpc::types::Log;
 use anyhow::Context;
 use anyhow::Result;
+use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -34,7 +35,13 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::is_closed.eq(true))
+        .set((
+            jobs::is_closed.eq(true),
+            jobs::rate.eq(BigDecimal::from(0)),
+            jobs::balance.eq(BigDecimal::from(0)),
+            jobs::usdc_balance.eq(BigDecimal::from(0)),
+            jobs::credits_balance.eq(BigDecimal::from(0)),
+        ))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -219,12 +226,12 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    Some(BigDecimal::from(1)),
-                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
+                    Some(BigDecimal::from(0)),
                     Some(creation_now),
                     Some(creation_now),
                     true,
-                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                     Some(BigDecimal::from(0)),
                 ),
                 (
