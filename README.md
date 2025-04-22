@@ -32,6 +32,7 @@ The repository is organized into projects:
 - [kms/root-server](./kms/root-server): KMS root server with key derivation endpoints.
 - [kms/root-server-contract](./kms/root-server-contract): KMS root server with key derivation endpoints that works based on contract approvals.
 - [kms/root-server-enclave](./kms/root-server-enclave): KMS root server enclave.
+- [local/dev-image](./local/dev-image/): Docker image that simulates docker-compose based Oyster deployment locally.
 - [networking/tcp-proxy](./networking/tcp-proxy/): TCP proxies that are part of the networking stack of Salmon images.
 - [networking/raw-proxy](./networking/raw-proxy/): Raw proxies that are part of the networking stack of Tuna images.
 - [networking/iperf3-enclave](./networking/iperf3-enclave/): Enclave image that packages iperf3 for benchmarking purposes.

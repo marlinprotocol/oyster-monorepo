@@ -132,6 +132,13 @@
         kernels = kernels.tuna;
         root-server-contract = kms.root-server-contract.compressed;
       };
+      local.dev-image = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./local/dev-image {
+        inherit nixpkgs systemConfig;
+        supervisord = external.supervisord.compressed;
+        keygen = initialization.keygen.compressed;
+        attestation-server-mock = attestation.server-mock.compressed;
+        derive-server-mock = kms.derive-server-mock.compressed;
+      };
       networking.raw-proxy = import ./networking/raw-proxy {
         inherit nixpkgs systemConfig fenix naersk;
       };
