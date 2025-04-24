@@ -88,7 +88,7 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::test_db::TestDb;
-    use crate::handlers::v1::handle_log_v1;
+    use crate::handlers::v2::handle_log_v2;
     use crate::schema::{jobs, providers};
 
     use super::*;
@@ -123,6 +123,8 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(10)),
+                jobs::credits_balance.eq(BigDecimal::from(11)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
@@ -143,9 +145,26 @@ mod tests {
                 jobs::metadata.eq("some metadata"),
                 jobs::rate.eq(BigDecimal::from(1)),
                 jobs::balance.eq(BigDecimal::from(20)),
+                jobs::usdc_balance.eq(BigDecimal::from(19)),
+                jobs::credits_balance.eq(BigDecimal::from(1)),
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        diesel::insert_into(transactions::table)
+            .values((
+                transactions::block.eq(12),
+                transactions::idx.eq(5),
+                transactions::tx_hash
+                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                transactions::job
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                transactions::amount.eq(BigDecimal::from(10)),
+                transactions::tx_type.eq("withdraw"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -172,24 +191,44 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(19)),
+                    Some(BigDecimal::from(1)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(10)),
+                    Some(BigDecimal::from(11)),
                 )
             ])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                12i64,
+                5i64,
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(10),
+                "withdraw".to_owned(),
+                Some(true),
+            )),
         );
 
         let log = Log {
@@ -204,7 +243,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobReviseRateFinalized(bytes32,uint256)").into(),
+                        event!("JobRateRevised(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
@@ -214,8 +253,8 @@ mod tests {
             },
         };
 
-        // use handle_log_v1 instead of concrete handler to test dispatch
-        handle_log_v1(conn, log)?;
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        handle_log_v2(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -240,23 +279,55 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(5),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(5)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(19)),
+                    Some(BigDecimal::from(1)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(10)),
+                    Some(BigDecimal::from(11)),
                 )
+            ])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .order_by((transactions::block, transactions::idx))
+                .load(conn),
+            Ok(vec![
+                (
+                    12i64,
+                    5i64,
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                    BigDecimal::from(10),
+                    "withdraw".to_owned(),
+                    Some(true),
+                ),
+                (
+                    42i64,
+                    69i64,
+                    keccak256!("some tx").encode_hex_with_prefix(),
+                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                    BigDecimal::from(5),
+                    "rate_revision".to_owned(),
+                    Some(true),
+                ),
             ])
         );
 
@@ -293,9 +364,26 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(10)),
+                jobs::credits_balance.eq(BigDecimal::from(11)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        diesel::insert_into(transactions::table)
+            .values((
+                transactions::block.eq(12),
+                transactions::idx.eq(5),
+                transactions::tx_hash
+                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                transactions::job
+                    .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
+                transactions::amount.eq(BigDecimal::from(10)),
+                transactions::tx_type.eq("withdraw"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -321,12 +409,30 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(10)),
+                Some(BigDecimal::from(11)),
             )])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                12i64,
+                5i64,
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(10),
+                "withdraw".to_owned(),
+                Some(true),
+            )),
         );
 
         let log = Log {
@@ -341,7 +447,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobReviseRateFinalized(bytes32,uint256)").into(),
+                        event!("JobRateRevised(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
@@ -351,8 +457,8 @@ mod tests {
             },
         };
 
-        // use handle_log_v1 instead of concrete handler to test dispatch
-        let res = handle_log_v1(conn, log);
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        let res = handle_log_v2(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -366,6 +472,7 @@ mod tests {
         );
 
         assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -377,12 +484,31 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(10)),
+                Some(BigDecimal::from(11)),
             )])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .order_by((transactions::block, transactions::idx))
+                .load(conn),
+            Ok(vec![(
+                12i64,
+                5i64,
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(10),
+                "withdraw".to_owned(),
+                Some(true),
+            ),])
         );
 
         Ok(())
@@ -418,6 +544,8 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(10)),
+                jobs::credits_balance.eq(BigDecimal::from(11)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
@@ -438,6 +566,8 @@ mod tests {
                 jobs::metadata.eq("some metadata"),
                 jobs::rate.eq(BigDecimal::from(1)),
                 jobs::balance.eq(BigDecimal::from(20)),
+                jobs::usdc_balance.eq(BigDecimal::from(19)),
+                jobs::credits_balance.eq(BigDecimal::from(1)),
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
@@ -445,6 +575,20 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(transactions::table)
+            .values((
+                transactions::block.eq(12),
+                transactions::idx.eq(5),
+                transactions::tx_hash
+                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                transactions::job
+                    .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
+                transactions::amount.eq(BigDecimal::from(10)),
+                transactions::tx_type.eq("withdraw"),
+                transactions::is_usdc.eq(true),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
         assert_eq!(
             providers::table.select(providers::all_columns).first(conn),
@@ -467,26 +611,45 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(19)),
+                    Some(BigDecimal::from(1)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(10)),
+                    Some(BigDecimal::from(11)),
                 )
             ])
         );
 
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                12i64,
+                5i64,
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(10),
+                "withdraw".to_owned(),
+                Some(true),
+            )),
+        );
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
             block_number: Some(42),
@@ -499,7 +662,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobReviseRateFinalized(bytes32,uint256)").into(),
+                        event!("JobRateRevised(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
@@ -509,8 +672,8 @@ mod tests {
             },
         };
 
-        // use handle_log_v1 instead of concrete handler to test dispatch
-        let res = handle_log_v1(conn, log);
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        let res = handle_log_v2(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -536,24 +699,45 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(19)),
+                    Some(BigDecimal::from(1)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(10)),
+                    Some(BigDecimal::from(11)),
                 )
             ])
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .order_by((transactions::block, transactions::idx))
+                .load(conn),
+            Ok(vec![(
+                12i64,
+                5i64,
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(10),
+                "withdraw".to_owned(),
+                Some(true),
+            ),])
         );
 
         Ok(())
