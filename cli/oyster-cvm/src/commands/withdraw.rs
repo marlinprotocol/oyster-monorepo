@@ -11,6 +11,7 @@ use clap::Args;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
+/// Withdraw funds from an existing job
 #[derive(Args)]
 pub struct WithdrawArgs {
     /// Job ID

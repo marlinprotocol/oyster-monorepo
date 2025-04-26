@@ -13,6 +13,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use tracing::info;
 
+/// Deposit funds to an existing job
 #[derive(Args)]
 pub struct DepositArgs {
     /// Job ID

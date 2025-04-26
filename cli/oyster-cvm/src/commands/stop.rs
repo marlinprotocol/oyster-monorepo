@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 
+/// Stop an Oyster CVM instance
 #[derive(Args)]
 pub struct StopArgs {
     /// Job ID

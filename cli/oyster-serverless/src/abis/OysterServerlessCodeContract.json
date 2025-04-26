@@ -1,0 +1,17 @@
+{
+    "abi": [
+		{
+			"inputs": [
+				{
+					"internalType": "string",
+					"name": "inputData",
+					"type": "string"
+				}
+			],
+			"name": "saveCodeInCallData",
+			"outputs": [],
+			"stateMutability": "nonpayable",
+			"type": "function"
+		}
+	]
+}

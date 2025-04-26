@@ -26,6 +26,8 @@ use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
 use tracing::info;
 
+use super::simulate::{simulate, SimulateArgs, LOCAL_DEV_IMAGE};
+
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
 const IP_CHECK_INTERVAL: u64 = 15;
@@ -48,6 +50,7 @@ sol!(
     "src/abis/oyster_market_abi.json"
 );
 
+/// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
 pub struct DeployArgs {
     /// Preset for parameters (e.g. blue)
@@ -82,8 +85,8 @@ pub struct DeployArgs {
     bandwidth: u32,
 
     /// Duration in minutes
-    #[arg(long, required = true)]
-    duration_in_minutes: u32,
+    #[arg(long, required_unless_present = "simulate")]
+    duration_in_minutes: Option<u32>,
 
     /// Job name
     #[arg(long, default_value = "")]
@@ -100,6 +103,14 @@ pub struct DeployArgs {
     /// Init params
     #[command(flatten)]
     init_params: InitParamsArgs,
+
+    /// Simulate the enclave locally
+    #[arg(long, conflicts_with = "image_url")]
+    simulate: bool,
+
+    /// Application ports to expose out of the local oyster simulation
+    #[arg(long, requires = "simulate")]
+    simulate_expose_ports: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -124,6 +135,17 @@ struct InstanceRate {
 }
 
 pub async fn deploy(args: DeployArgs) -> Result<()> {
+    // Start simulation if dry_run flag is opted
+    if args.simulate {
+        if args.preset == "blue" {
+            return start_simulation(args).await;
+        } else {
+            return Err(anyhow!(
+                "Dry run is only supported for blue images based deployments!"
+            ));
+        }
+    }
+
     tracing::info!("Starting deployment...");
 
     let provider = create_provider(&args.wallet.load_required()?).await?;
@@ -169,7 +191,8 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .context("Configuration not supported by operator")?;
 
     // Calculate costs
-    let duration_seconds = (args.duration_in_minutes as u64) * 60;
+    // SAFETY: will be some value if simulation is not opted
+    let duration_seconds = (args.duration_in_minutes.unwrap() as u64) * 60;
     let (total_cost, total_rate) = calculate_total_cost(
         &selected_instance,
         duration_seconds,
@@ -256,6 +279,28 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn start_simulation(args: DeployArgs) -> Result<()> {
+    let simulate_args = SimulateArgs {
+        preset: args.preset,
+        arch: Some(args.arch),
+        docker_compose: args.init_params.docker_compose,
+        docker_images: Vec::new(),
+        init_params: args.init_params.init_params.unwrap_or_default(),
+        expose_ports: args.simulate_expose_ports,
+        dev_image: LOCAL_DEV_IMAGE.to_string(),
+        container_memory: None,
+        job_name: if args.job_name == "" {
+            "oyster_local_dev_container".to_string()
+        } else {
+            args.job_name
+        },
+        cleanup_cache: true,
+        no_local_images: true,
+    };
+
+    return simulate(simulate_args).await;
 }
 
 async fn create_new_oyster_job(

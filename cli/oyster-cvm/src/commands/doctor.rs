@@ -4,6 +4,7 @@ use clap::Args;
 use std::process::Command;
 use tracing::{error, info};
 
+/// Check optional system dependencies like Docker & Nix
 #[derive(Args)]
 pub struct DoctorArgs {
     /// Perform Docker checks

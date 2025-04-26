@@ -56,38 +56,6 @@ Options:
           Print version
 ```
 
-## CLI Verification
-The attestation verifier also includes a binary to verify an attestation doc locally through the CLI as shown below :- 
-
-```
-$ ./target/release/oyster-verify-attestation --help
-Usage: oyster-verify-attestation --attestation <ATTESTATION>
-
-Options:
-      --attestation <ATTESTATION>  
-          path to attestation doc hex string file
-  -h, --help                       Print help
-  -V, --version                    Print version
-```
-
-Above execution will return an error if failing to parse or verify the attestation doc/file. 
-If the verification completes successfully, the parsed attestation doc will be printed in below format :- 
-```
-AttestationDecoded {
-    pcrs: [[...], [...], [...]],
-    timestamp: '...',
-    public_key: [...]
-}
-```
-
-To generate the attestation hex file, call the corresponding `attestation-server` endpoint inside a running enclave like below:-
-```
-$ curl <attestation_server_ip:attestation_server_port>/attestation/hex --output attestation.hex
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-100  8938  100  8938    0     0   126k      0 --:--:-- --:--:-- --:--:--  124k
-```
-
 ## Endpoints
 
 The attestation verifier exposes two verification endpoints which expect the attestation in one of two formats - raw and hex. The formats match the two endpoints of the [attestation server](https://github.com/marlinprotocol/oyster-attestation-server) and the response of the server can just be sent to the verifier as is.
@@ -226,11 +194,11 @@ struct Attestation {
 
 ## Verification
 
-It is designed to be verified by the following solidity code (taken from the [AttestationVerifier](https://github.com/marlinprotocol/oyster-contracts/blob/master/contracts/AttestationVerifier.sol#L230) contract):
+It is designed to be verified by the following solidity code (taken from the [AttestationVerifier](https://github.com/marlinprotocol/oyster-monorepo/blob/master/contracts/contracts-foundry/src/attestation/AttestationVerifier.sol#L48) contract):
 
 ```solidity
-bytes32 private constant DOMAIN_SEPARATOR =
-    keccak256(
+    /// @notice EIP-712 domain separator
+    bytes32 public constant DOMAIN_SEPARATOR = keccak256(
         abi.encode(
             keccak256("EIP712Domain(string name,string version)"),
             keccak256("marlin.oyster.AttestationVerifier"),
@@ -238,24 +206,27 @@ bytes32 private constant DOMAIN_SEPARATOR =
         )
     );
 
-bytes32 private constant ATTESTATION_TYPEHASH =
-    keccak256("Attestation(bytes enclavePubKey,bytes32 imageId,uint256 timestampInMilliseconds)");
+    /// @notice EIP-712 typehash for attestation struct
+    bytes32 public constant ATTESTATION_TYPEHASH =
+        keccak256("Attestation(bytes enclavePubKey,bytes32 imageId,uint256 timestampInMilliseconds)");
 
-function _verify(bytes memory signature, Attestation memory attestation) internal view {
-    bytes32 hashStruct = keccak256(
-        abi.encode(
-            ATTESTATION_TYPEHASH,
-            keccak256(attestation.enclavePubKey),
-            attestation.imageId,
-            attestation.timestampInMilliseconds
-        )
-    );
-    bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, hashStruct));
+    /// @notice Verifies a signed attestation using EIP-712 signatures
+    /// @param _signature ECDSA signature of the attestation
+    /// @param _attestation Attestation data structure to verify
+    function verify(bytes memory _signature, Attestation memory _attestation) external view {
+        bytes32 _hashStruct = keccak256(
+            abi.encode(
+                ATTESTATION_TYPEHASH,
+                keccak256(_attestation.enclavePubKey),
+                _attestation.imageId,
+                _attestation.timestampInMilliseconds
+            )
+        );
+        bytes32 _digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, _hashStruct));
 
-    address signer = ECDSA.recover(digest, signature);
-
-    ...
-}
+        address _signer = ECDSA.recover(_digest, _signature);
+        _ensureKeyVerified(bytes32(uint256(uint160(_signer))));
+    }
 ```
 
 ## License

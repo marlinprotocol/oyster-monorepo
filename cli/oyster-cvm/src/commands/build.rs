@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use tracing::info;
 
+/// Build enclave image
 #[derive(Args)]
 pub struct BuildArgs {
     /// Platform (amd64 or arm64)

@@ -39,7 +39,7 @@ pub enum AttestationError {
     HttpBodyError(#[from] hyper::Error),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AttestationExpectations<'a> {
     pub timestamp: Option<usize>,
     // (max age, current timestamp)

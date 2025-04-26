@@ -8,6 +8,7 @@ use tracing::info;
 
 const STREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Stream logs from an Oyster CVM instance
 #[derive(Args)]
 pub struct LogArgs {
     /// IP address of the instance

@@ -60,6 +60,24 @@ Optional args:
 - `--check-docker`: Check if Docker is installed
 - `--check-nix`: Check if Nix is installed
 
+#### `simulate`
+Simulates the oyster-cvm environment locally inside a docker container.
+
+Required args:
+- `--arch` (platform architecture (e.g. amd64, arm64))
+- `--docker-compose` (path to docker-compose.yml file)
+
+Optional args:
+- `--preset`: (preset for parameters (e.g. blue) [default: blue])
+- `--docker-images` (list of Docker image .tar file paths)
+- `--init-params` (list of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`)
+- `--expose-ports` (application ports to expose out of the local container)
+- `--dev-image` (local dev base image to use in format `<image_name>:<image_tag>`)
+- `--container-memory` (memory limit for the local dev container)
+- `--job-name` (job and local dev container name)
+- `--cleanup-cache` (cleanup local images cache after testing)
+- `--no-local-images` (Pull relevant local images or just the docker hub published)
+
 #### `build`
 Builds an oyster-cvm image. Only needed for custom enclave images - you can use the base image for standard deployments.
 
@@ -85,6 +103,10 @@ Verifies an Oyster enclave's attestation document.
 
 Required args:
 - `--enclave-ip` (-e): Enclave IP address
+OR
+- `--attestation-hex` (-x): Hex encoded attestation
+OR
+- `--attestation-hex-file`: File containing hex encoded attestation
 
 Optional args:
 - `--pcr0` (-0): PCR0 value
@@ -127,6 +149,8 @@ Optional args:
 - `--docker-compose`: Path to custom docker-compose.yml file
 - `--contract-address`: Enclave verifier contract address
 - `--chain-id`: Chain ID for KMS contract root server
+- `--simulate`: Simulate the oyster cvm enclave locally before deployment
+- `--simulate-expose-ports`: Application ports to expose out of the local oyster simulation
 \
 <br>
 - `--pcr0` (-0): PCR0 value
@@ -282,6 +306,26 @@ Required args:
 [INFO] Docker is installed ✓
 [INFO] Nix is installed ✓
 
+# Simulate oyster-cvm environment locally
+./oyster-cvm simulate \
+  --docker-compose ./docker-compose.yml \
+  --init-params secret:1:0:utf8:hello \
+  --expose-ports 5000
+
+# Sample Output:
+[INFO] Simulating oyster local dev environment with:
+[INFO]   Platform: amd64
+[INFO]   Docker compose: ./docker-compose.yml
+[INFO]   Init params: secret:1:0:utf8:hello
+[INFO] Pulling dev base image to local docker daemon
+...
+[INFO] digest path="secret" should_attest=true
+[INFO] Starting the dev container with user specified parameters
+...
+[INFO] Dev container exited with status: exit status: 130
+[INFO] Max container CPU usage: 6.65%
+[INFO] Max container Memory usage: 40.41 MiB
+
 # Deploy using base image (quickstart)
 ./oyster-cvm deploy \
   --wallet-private-key-file ./key.txt \
@@ -320,6 +364,18 @@ Required args:
 [INFO] TCP connection established successfully
 [INFO] Attestation check successful
 [INFO] Enclave is ready! IP address: 192.168.1.100
+
+# Dry run the oyster blue deployment locally
+./oyster-cvm deploy \
+  --preset "blue" \
+  --operator "0x..." \
+  --instance-type "m5a.2xlarge" \
+  --duration-in-minutes 60 \  
+  --job-name "my-custom-job" \
+  --init-params secret:1:0:utf8:hello \
+  --docker-compose ./docker-compose.yml \
+  --simulate \ 
+  --simulate-expose-ports 5000
 
 # Update an existing job
 ./oyster-cvm update \

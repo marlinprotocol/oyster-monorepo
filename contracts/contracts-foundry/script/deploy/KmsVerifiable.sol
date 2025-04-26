@@ -8,7 +8,7 @@ contract KmsVerifiableScript is Script {
     function run() external returns (KmsVerifiable) {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(privateKey);
-        bytes32 [] memory _imageIds = new bytes32[](0);
+        bytes32[] memory _imageIds = new bytes32[](0);
         KmsVerifiable kmsVerifiable = new KmsVerifiable(_imageIds);
         vm.stopBroadcast();
         console.log("Deployed to:", address(kmsVerifiable));

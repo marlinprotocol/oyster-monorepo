@@ -10,6 +10,7 @@ use tracing::{debug, error, info};
 
 const BUFFER_TIME_HOURS: f64 = 5.0 / 60.0; // 5 minutes in hours
 
+/// List active jobs for a wallet address
 #[derive(Args)]
 pub struct ListArgs {
     /// Wallet address to query jobs for

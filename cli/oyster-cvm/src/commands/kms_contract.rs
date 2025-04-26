@@ -20,6 +20,7 @@ sol!(
     "src/artifacts/KmsVerifiable.json"
 );
 
+/// KMS verify contract commands
 #[derive(Parser)]
 pub struct KmsContractArgs {
     #[command(subcommand)]

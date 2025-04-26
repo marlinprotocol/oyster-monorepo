@@ -109,8 +109,6 @@ contract AttestationVerifierTestVerify is Test {
 
     function test_Verify_UnverifiedKey() public {
         // generated using attestation-verifier.test.js
-        bytes memory _enclavePubkey =
-            hex"9d17c9747a93e74b4065164eaf1df2e22bd36dc17772cf3fb99bfe6ff47bbd3ce8034234fa46b89c99d6e81393e60e7bcc83680e7b15bfd0fbcb01ae78aa9c76";
         bytes memory _attestationPubkey =
             hex"9f82020b6e9431e8abcc0f1ce313248a10bc9e96e59b720dc3653398496c3c52dea402c5ef3a6780ccf1f0aeeaa68ae4e3f132496d011df322e84b171e82750d";
         uint256 _timestamp = 0x4e43046b;

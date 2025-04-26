@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use commands::{
     build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, derive::KmsDeriveArgs,
     doctor::DoctorArgs, image_id::ImageArgs, kms_contract::KmsContractArgs, list::ListArgs,
-    log::LogArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs, verify::VerifyArgs,
-    withdraw::WithdrawArgs,
+    log::LogArgs, simulate::SimulateArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs,
+    verify::VerifyArgs, withdraw::WithdrawArgs,
 };
 
 mod args;
@@ -33,33 +33,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Check optional system dependencies like Docker & Nix
     Doctor(DoctorArgs),
-    /// Build enclave image
+    Simulate(SimulateArgs),
     Build(BuildArgs),
-    /// Upload enclave image to IPFS
     Upload(UploadArgs),
-    /// Deploy an Oyster CVM instance
     Deploy(DeployArgs),
-    /// Verify Oyster Enclave Attestation
     Verify(VerifyArgs),
-    /// List active jobs for a wallet address
     List(ListArgs),
-    /// Update existing deployments
     Update(UpdateArgs),
-    /// Stream logs from an Oyster CVM instance
     Logs(LogArgs),
-    /// Deposit funds to an existing job
     Deposit(DepositArgs),
-    /// Stop an Oyster CVM instance
     Stop(StopArgs),
-    /// Withdraw funds from an existing job
     Withdraw(WithdrawArgs),
-    /// Get Image ID
     ComputeImageId(ImageArgs),
-    /// Get KMS derived public keys or addresses
     KmsDerive(KmsDeriveArgs),
-    /// KMS verify contract commands
     KmsContract(KmsContractArgs),
 }
 
@@ -71,6 +58,7 @@ async fn main() -> Result<()> {
 
     let result = match cli.command {
         Commands::Doctor(args) => commands::doctor::run_doctor(args),
+        Commands::Simulate(args) => commands::simulate::simulate(args).await,
         Commands::Build(args) => commands::build::build_oyster_image(args),
         Commands::Upload(args) => commands::upload::upload_enclave_image(args).await,
         Commands::Verify(args) => commands::verify::verify(args).await,

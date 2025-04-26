@@ -4,11 +4,7 @@ use std::num::TryFromIntError;
 use alloy::{
     dyn_abi::Eip712Domain,
     primitives::{B256, U256},
-    signers::{
-        k256::sha2::{Digest, Sha256},
-        local::PrivateKeySigner,
-        SignerSync,
-    },
+    signers::{local::PrivateKeySigner, SignerSync},
     sol,
     sol_types::{eip712_domain, SolStruct},
 };
@@ -111,26 +107,6 @@ sol! {
     }
 }
 
-fn compute_image_id(
-    pcr0: &[u8],
-    pcr1: &[u8],
-    pcr2: &[u8],
-    user_data: &[u8],
-) -> Result<B256, UserError> {
-    if user_data.len() > 65535 {
-        return Err(UserError::UserDataTooBig);
-    }
-
-    let mut hasher = Sha256::new();
-    hasher.update(pcr0);
-    hasher.update(pcr1);
-    hasher.update(pcr2);
-    hasher.update((user_data.len() as u16).to_be_bytes());
-    hasher.update(user_data);
-
-    Ok(B256::from_slice(&hasher.finalize()))
-}
-
 fn compute_signature(
     enclave_pubkey: &[u8],
     image_id: B256,
@@ -165,15 +141,9 @@ fn verify(
     )
     .map_err(UserError::AttestationVerification)?;
 
-    let image_id = compute_image_id(
-        &decoded.pcrs[0],
-        &decoded.pcrs[1],
-        &decoded.pcrs[2],
-        &decoded.user_data,
-    )?;
     let signature = compute_signature(
         &decoded.public_key.as_ref(),
-        image_id,
+        decoded.image_id.into(),
         decoded.timestamp,
         signer,
     )?;
@@ -181,7 +151,7 @@ fn verify(
     Ok(VerifyAttestationResponse {
         signature: hex::encode(signature),
         public_key: hex::encode(decoded.public_key),
-        image_id: hex::encode(image_id),
+        image_id: hex::encode(decoded.image_id),
         timestamp: decoded.timestamp,
         verifier_public_key: hex::encode(public),
     }

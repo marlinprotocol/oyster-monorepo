@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::{env, fs, time::Duration};
 use tracing::info;
 
+/// Upload enclave image to IPFS
 #[derive(Args)]
 pub struct UploadArgs {
     /// Path to enclave image file

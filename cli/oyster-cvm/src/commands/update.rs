@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use tracing::info;
 
+/// Update existing deployments
 #[derive(Args)]
 pub struct UpdateArgs {
     /// Job ID

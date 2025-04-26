@@ -23,6 +23,7 @@
     mkdir -p $out
     mkdir -p $out/app
     mkdir -p $out/etc
+    mkdir -p $out/tmp
     mkdir -p $out/app/docker-images
     touch $out/app/init-params-digest
     cp ${supervisord'} $out/app/supervisord
@@ -42,7 +43,7 @@ in {
     copyToRoot = pkgs.buildEnv {
       name = "image-root";
       paths = [ app pkgs.docker pkgs.busybox pkgs.cacert ];
-      pathsToLink = ["/bin" "/app" "/etc" ];
+      pathsToLink = ["/bin" "/app" "/etc" "/tmp" ];
     };
 
     config = {

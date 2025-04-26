@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use hex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs::read;
 use tracing::info;
 
 use oyster::attestation::{get, AttestationExpectations, AWS_ROOT_KEY};
@@ -10,11 +11,29 @@ use crate::args::pcr::{preset_to_pcr_preset, PcrArgs};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
 use crate::types::Platform;
 
+/// Verify Oyster Enclave Attestation
+///
+/// For verifying a running enclave (among other flags):
+///   --enclave-ip <ENCLAVE_IP>
+///
+/// For verifying an existing attestation (among other flags):
+///   --attestation-hex <ATTESTATION_HEX>
+///
+/// For verifying an existing attestation, read from a file (among other flags):
+///   --attestation-hex-file <ATTESTATION_HEX_FILE>
 #[derive(Args)]
 pub struct VerifyArgs {
+    /// Hex encoded attestation
+    #[arg(short = 'x', long, conflicts_with_all = ["enclave_ip", "attestation_hex_file"])]
+    attestation_hex: Option<String>,
+
+    /// Path to file containing a hex encoded attestation
+    #[arg(long, conflicts_with_all = ["enclave_ip", "attestation_hex"])]
+    attestation_hex_file: Option<String>,
+
     /// Enclave IP
-    #[arg(short = 'e', long, required = true)]
-    enclave_ip: String,
+    #[arg(short = 'e', long, conflicts_with_all = ["attestation_hex", "attestation_hex_file"])]
+    enclave_ip: Option<String>,
 
     #[command(flatten)]
     pcr: PcrArgs,
@@ -55,17 +74,37 @@ pub struct VerifyArgs {
 pub async fn verify(args: VerifyArgs) -> Result<()> {
     let pcrs = get_pcrs(args.pcr, args.preset, args.arch).context("Failed to load PCR data")?;
 
-    let attestation_endpoint = format!(
-        "http://{}:{}/attestation/raw",
-        args.enclave_ip, args.attestation_port
-    );
-    info!(
-        "Connecting to attestation endpoint: {}",
-        attestation_endpoint
-    );
+    // parse or fetch attestation
+    let attestation = if let Some(attestation_hex) = args.attestation_hex {
+        info!("Parsing attestation");
+        let attestation = hex::decode(attestation_hex)?.into_boxed_slice();
+        info!("Successfully parsed attestation");
 
-    let attestation_doc = get(attestation_endpoint.parse()?).await?;
-    info!("Successfully fetched attestation document");
+        attestation
+    } else if let Some(attestation_hex_file) = args.attestation_hex_file {
+        info!("Reading attestation from {attestation_hex_file}");
+        let attestation_hex = read(&attestation_hex_file).await?.into_boxed_slice();
+        let attestation = hex::decode(attestation_hex)?.into_boxed_slice();
+        info!("Read attestation from {attestation_hex_file}");
+
+        attestation
+    } else if let Some(enclave_ip) = args.enclave_ip {
+        let attestation_endpoint = format!(
+            "http://{}:{}/attestation/raw",
+            enclave_ip, args.attestation_port
+        );
+        info!(
+            "Connecting to attestation endpoint: {}",
+            attestation_endpoint
+        );
+
+        let attestation_doc = get(attestation_endpoint.parse()?).await?;
+        info!("Successfully fetched attestation document");
+
+        attestation_doc
+    } else {
+        bail!("Could not get attestation, either enclave-ip, attestation-hex or attestation-hex-file must be specified")
+    };
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as usize;
     let user_data = args
@@ -94,7 +133,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         image_id: image_id.as_ref(),
     };
 
-    let decoded = oyster::attestation::verify(&attestation_doc, attestation_expectations)
+    let decoded = oyster::attestation::verify(&attestation, attestation_expectations.clone())
         .context("Failed to verify attestation document")?;
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
@@ -108,6 +147,20 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
     info!("PCR1: {}", hex::encode(decoded.pcrs[1]));
     info!("PCR2: {}", hex::encode(decoded.pcrs[2]));
     info!("Verification successful ✓");
+    info!(
+        timestamp = attestation_expectations.timestamp,
+        age = attestation_expectations.age.map(|x| x.0),
+        pcr0 = attestation_expectations.pcrs.map(|x| hex::encode(x[0])),
+        pcr1 = attestation_expectations.pcrs.map(|x| hex::encode(x[1])),
+        pcr2 = attestation_expectations.pcrs.map(|x| hex::encode(x[2])),
+        enclave_public_key = attestation_expectations.public_key.map(|x| hex::encode(x)),
+        user_data = attestation_expectations.user_data.map(|x| hex::encode(x)),
+        root_public_key = attestation_expectations
+            .root_public_key
+            .map(|x| hex::encode(x)),
+        image_id = attestation_expectations.image_id.map(|x| hex::encode(x)),
+        "Verified against expectations: "
+    );
     Ok(())
 }
 

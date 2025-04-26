@@ -12,6 +12,7 @@ use crate::{
     types::Platform,
 };
 
+/// Get Image ID
 #[derive(Args, Debug)]
 pub struct ImageArgs {
     /// Preset for parameters (e.g. blue, debug)
