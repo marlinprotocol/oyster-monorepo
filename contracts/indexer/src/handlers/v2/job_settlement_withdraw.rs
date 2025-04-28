@@ -74,7 +74,6 @@ fn handle_usdc_settlement_withdraw(
         // we do it by only updating rows where is_closed is false and usdc_balance is greater than or equal to amount
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .filter(jobs::usdc_balance.ge(&amount))
         .set((
             jobs::balance.eq(jobs::balance.sub(&amount)),
             jobs::usdc_balance.eq(jobs::usdc_balance.sub(&amount)),
@@ -132,7 +131,6 @@ fn handle_credits_settlement_withdraw(
         // we do it by only updating rows where is_closed is false and credits_balance is greater than or equal to amount
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .filter(jobs::credits_balance.ge(&amount))
         .set((
             jobs::balance.eq(jobs::balance.sub(&amount)),
             jobs::credits_balance.eq(jobs::credits_balance.sub(&amount)),
