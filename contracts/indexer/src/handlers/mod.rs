@@ -6,12 +6,14 @@ use tracing::{instrument, warn};
 mod v1;
 mod v2;
 
-// Define upgrade block constant
-const UPGRADE_BLOCK: u64 = 134038094;
+use crate::constants::get_contract_upgrade_block;
 
 // Helper function that can be used across the codebase
 fn is_v2_contract(block_number: u64) -> bool {
-    block_number > UPGRADE_BLOCK
+    match get_contract_upgrade_block() {
+        Some(block) => block_number > block,
+        None => false, // If no upgrade block is provided, we only handle v1
+    }
 }
 
 #[instrument(
