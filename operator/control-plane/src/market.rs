@@ -10,7 +10,7 @@ use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
 use alloy::transports::ws::WsConnect;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -124,6 +124,43 @@ where
         (**self).check_enclave_running(job, region).await
     }
 }
+
+// old events (v1)
+#[allow(non_snake_case)]
+pub const JOB_OPENED: &str = "JobOpened(bytes32,string,address,address,uint256,uint256,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_SETTLED: &str = "JobSettled(bytes32,uint256,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_DEPOSITED: &str = "JobDeposited(bytes32,address,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_WITHDREW: &str = "JobWithdrew(bytes32,address,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_REVISE_RATE_INITIATED: &str = "JobReviseRateInitiated(bytes32,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_REVISE_RATE_CANCELLED: &str = "JobReviseRateCancelled(bytes32)";
+#[allow(non_snake_case)]
+pub const JOB_REVISE_RATE_FINALIZED: &str = "JobReviseRateFinalized(bytes32,uint256)";
+
+// new events (v2)
+#[allow(non_snake_case)]
+pub const JOB_OPENED_V2: &str = "JobOpened(bytes32,string,address,address)";
+#[allow(non_snake_case)]
+pub const JOB_SETTLED_V2: &str = "JobSettled(bytes32,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_DEPOSITED_V2: &str = "JobDeposited(bytes32,address,address,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_WITHDRAWN: &str = "JobWithdrawn(bytes32,address,address,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_SETTLEMENT_WITHDRAWN: &str =
+    "JobSettlementWithdrawn(bytes32,address,address,uint256)";
+#[allow(non_snake_case)]
+pub const JOB_RATE_REVISED: &str = "JobRateRevised(bytes32,uint256)";
+
+// common events
+#[allow(non_snake_case)]
+pub const JOB_CLOSED: &str = "JobClosed(bytes32)";
+#[allow(non_snake_case)]
+pub const JOB_METADATA_UPDATED: &str = "JobMetadataUpdated(bytes32,string)";
 
 pub trait LogsProvider {
     fn new_jobs<'a>(
@@ -312,9 +349,7 @@ async fn new_jobs(
 ) -> Result<impl StreamExt<Item = (B256, bool)> + '_> {
     let event_filter = Filter::new()
         .address(address)
-        .event_signature(vec![keccak256(
-            "JobOpened(bytes32,string,address,address,uint256,uint256,uint256)",
-        )])
+        .event_signature(vec![keccak256(JOB_OPENED), keccak256(JOB_OPENED_V2)])
         .topic3(provider.into_word());
 
     // ordering is important to prevent race conditions while getting all logs but
@@ -479,6 +514,7 @@ struct JobState<'a> {
     allowed_regions: &'a [String],
 
     balance: U256,
+    original_balance: U256,
     last_settled: Duration,
     rate: U256,
     original_rate: U256,
@@ -516,6 +552,7 @@ impl<'a> JobState<'a> {
             launch_delay,
             allowed_regions,
             balance: U256::from(360),
+            original_balance: U256::from(0),
             last_settled: context.now_timestamp(),
             rate: U256::from(1),
             original_rate: U256::from(1),
@@ -662,33 +699,12 @@ impl<'a> JobState<'a> {
         };
         info!(topic = ?log.topics()[0], data = ?log.data(), "New log");
 
-        // events
-        #[allow(non_snake_case)]
-        let JOB_OPENED =
-            keccak256("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)");
-        #[allow(non_snake_case)]
-        let JOB_SETTLED = keccak256("JobSettled(bytes32,uint256,uint256)");
-        #[allow(non_snake_case)]
-        let JOB_CLOSED = keccak256("JobClosed(bytes32)");
-        #[allow(non_snake_case)]
-        let JOB_DEPOSITED = keccak256("JobDeposited(bytes32,address,uint256)");
-        #[allow(non_snake_case)]
-        let JOB_WITHDREW = keccak256("JobWithdrew(bytes32,address,uint256)");
-        #[allow(non_snake_case)]
-        let JOB_REVISE_RATE_INITIATED = keccak256("JobReviseRateInitiated(bytes32,uint256)");
-        #[allow(non_snake_case)]
-        let JOB_REVISE_RATE_CANCELLED = keccak256("JobReviseRateCancelled(bytes32)");
-        #[allow(non_snake_case)]
-        let JOB_REVISE_RATE_FINALIZED = keccak256("JobReviseRateFinalized(bytes32,uint256)");
-        #[allow(non_snake_case)]
-        let METADATA_UPDATED = keccak256("JobMetadataUpdated(bytes32,string)");
-
         // NOTE: jobs should be killed fully if any individual event would kill it
         // regardless of future events
-        // helps preserve consistency on restarts where events are procesed all at once
+        // helps preserve consistency on restarts where events are processed all at once
         // e.g. do not spin up if job goes below min_rate and then goes above min_rate
 
-        if log.topics()[0] == JOB_OPENED {
+        if log.topics()[0] == keccak256(JOB_OPENED) {
             // decode
             let Ok((metadata, _rate, _balance, timestamp)) =
                 <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)
@@ -708,69 +724,20 @@ impl<'a> JobState<'a> {
 
             // update solvency metrics
             self.balance = _balance;
+            self.original_balance = _balance;
             self.rate = _rate;
             self.original_rate = _rate;
             self.last_settled = Duration::from_secs(timestamp.saturating_to::<u64>());
 
-            let Ok(v) = serde_json::from_str::<Value>(&metadata)
-                .inspect_err(|err| error!(?err, "Error reading metadata"))
-            else {
-                return JobResult::Failed;
-            };
-
-            let Some(t) = v["instance"].as_str() else {
-                error!("Instance type not set");
-                return JobResult::Failed;
-            };
-            self.instance_type = t.to_string();
-            info!(self.instance_type, "Instance type set");
-
-            let Some(t) = v["region"].as_str() else {
-                error!("Job region not set");
-                return JobResult::Failed;
-            };
-            self.region = t.to_string();
-            info!(self.region, "Job region set");
-
-            if !self.allowed_regions.contains(&self.region) {
-                error!(self.region, "Region not suppported, exiting job");
+            if let Err(err) = self.decode_metadata(metadata, false) {
+                error!(?err);
                 return JobResult::Failed;
             }
 
-            let Some(t) = v["memory"].as_i64() else {
-                error!("Memory not set");
+            if !self.allowed_regions.contains(&self.region) {
+                error!(self.region, "Region not supported, exiting job");
                 return JobResult::Failed;
-            };
-            self.req_mem = t;
-            info!(self.req_mem, "Required memory");
-
-            let Some(t) = v["vcpu"].as_i64() else {
-                error!("vcpu not set");
-                return JobResult::Failed;
-            };
-            self.req_vcpus = t.try_into().unwrap_or(i32::MAX);
-            info!(self.req_vcpus, "Required vcpu");
-
-            let Some(url) = v["url"].as_str() else {
-                error!("EIF url not found! Exiting job");
-                return JobResult::Failed;
-            };
-            self.eif_url = url.to_string();
-
-            // we leave the default family unchanged if not found for backward compatibility
-            v["family"]
-                .as_str()
-                .inspect(|f| self.family = (*f).to_owned());
-
-            // we leave the default debug mode unchanged if not found for backward compatibility
-            v["debug"].as_bool().inspect(|f| self.debug = *f);
-
-            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
-            else {
-                error!("failed to decode init params");
-                return JobResult::Failed;
-            };
-            self.init_params = init_params.into_boxed_slice();
+            }
 
             // blacklist whitelist check
             let allowed =
@@ -823,7 +790,72 @@ impl<'a> JobState<'a> {
             } else {
                 JobResult::Done
             }
-        } else if log.topics()[0] == JOB_SETTLED {
+        } else if log.topics()[0] == keccak256(JOB_OPENED_V2) {
+            // decode
+            let Ok(metadata) = String::abi_decode(&log.data().data, true)
+                .inspect_err(|err| error!(?err, data = ?log.data(), "JOB_OPENED: Decode failure"))
+            else {
+                return JobResult::Internal;
+            };
+
+            // update solvency metrics
+            self.original_rate = U256::from(0);
+            self.last_settled = self.context.now_timestamp();
+
+            info!(
+                metadata,
+                rate = self.rate.to_string(),
+                original_rate = self.original_rate.to_string(),
+                balance = self.balance.to_string(),
+                last_settled = self.last_settled.as_secs(),
+                "OPENED",
+            );
+
+            if let Err(err) = self.decode_metadata(metadata, false) {
+                error!(?err);
+                return JobResult::Failed;
+            }
+
+            if !self.allowed_regions.contains(&self.region) {
+                error!(self.region, "Region not supported, exiting job");
+                return JobResult::Failed;
+            }
+
+            // blacklist whitelist check
+            let allowed =
+                whitelist_blacklist_check(log.clone(), address_whitelist, address_blacklist);
+            if !allowed {
+                // blacklisted or not whitelisted address
+                return JobResult::Done;
+            }
+
+            let mut supported = false;
+            for entry in rates {
+                if entry.region == self.region {
+                    for card in &entry.rate_cards {
+                        if card.instance == self.instance_type {
+                            self.min_rate = card.min_rate;
+                            supported = true;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if !supported {
+                error!(self.instance_type, "Instance type not supported",);
+                return JobResult::Failed;
+            }
+
+            info!(
+                self.instance_type,
+                rate = self.min_rate.to_string(),
+                "MIN RATE",
+            );
+
+            return JobResult::Success;
+        } else if log.topics()[0] == keccak256(JOB_SETTLED) {
             // decode
             let Ok((amount, timestamp)) =
                 <(U256, U256)>::abi_decode_sequence(&log.data().data, true)
@@ -851,9 +883,35 @@ impl<'a> JobState<'a> {
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == JOB_CLOSED {
+        } else if log.topics()[0] == keccak256(JOB_SETTLED_V2) {
+            // decode
+            let Ok(timestamp) = U256::abi_decode(&log.data().data, true)
+                .inspect_err(|err| error!(?err, data = ?log.data(), "SETTLED: Decode failure"))
+            else {
+                return JobResult::Internal;
+            };
+
+            info!(
+                rate = self.rate.to_string(),
+                balance = self.balance.to_string(),
+                last_settled = self.last_settled.as_secs(),
+                "SETTLED",
+            );
+            // update solvency metrics
+            self.last_settled = Duration::from_secs(timestamp.saturating_to::<u64>());
+            info!(
+                rate = self.rate.to_string(),
+                balance = self.balance.to_string(),
+                last_settled = self.last_settled.as_secs(),
+                "SETTLED",
+            );
+
+            return JobResult::Success;
+        } else if log.topics()[0] == keccak256(JOB_CLOSED) {
             return JobResult::Done;
-        } else if log.topics()[0] == JOB_DEPOSITED {
+        } else if log.topics()[0] == keccak256(JOB_DEPOSITED)
+            || log.topics()[0] == keccak256(JOB_DEPOSITED_V2)
+        {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
@@ -870,8 +928,15 @@ impl<'a> JobState<'a> {
                 last_settled = self.last_settled.as_secs(),
                 "DEPOSITED",
             );
+
             // update solvency metrics
-            self.balance += amount;
+            if self.original_balance.is_zero() {
+                self.balance = amount;
+                self.original_balance = amount;
+            } else {
+                self.balance += amount;
+            }
+
             info!(
                 amount = amount.to_string(),
                 rate = self.rate.to_string(),
@@ -881,12 +946,15 @@ impl<'a> JobState<'a> {
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == JOB_WITHDREW {
+        } else if log.topics()[0] == keccak256(JOB_WITHDREW)
+            || log.topics()[0] == keccak256(JOB_WITHDRAWN)
+            || log.topics()[0] == keccak256(JOB_SETTLEMENT_WITHDRAWN)
+        {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(amount) = U256::abi_decode(&log.data().data, true)
-                .inspect_err(|err| error!(?err, data = ?log.data(), "WITHDREW: Decode failure"))
+                .inspect_err(|err| error!(?err, data = ?log.data(), "WITHDRAWN: Decode failure"))
             else {
                 return JobResult::Internal;
             };
@@ -896,24 +964,26 @@ impl<'a> JobState<'a> {
                 rate = self.rate.to_string(),
                 balance = self.balance.to_string(),
                 last_settled = self.last_settled.as_secs(),
-                "WITHDREW",
+                "WITHDRAWN",
             );
+
             // update solvency metrics
             self.balance -= amount;
+
             info!(
                 amount = amount.to_string(),
                 rate = self.rate.to_string(),
                 balance = self.balance.to_string(),
                 last_settled = self.last_settled.as_secs(),
-                "WITHDREW",
+                "WITHDRAWN",
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == JOB_REVISE_RATE_INITIATED {
+        } else if log.topics()[0] == keccak256(JOB_REVISE_RATE_INITIATED) {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
-                |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_INTIATED: Decode failure"),
+                |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_INITIATED: Decode failure"),
             ) else {
                 return JobResult::Internal;
             };
@@ -923,7 +993,7 @@ impl<'a> JobState<'a> {
                 rate = self.rate.to_string(),
                 balance = self.balance.to_string(),
                 last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_INTIATED",
+                "JOB_REVISE_RATE_INITIATED",
             );
             self.original_rate = self.rate;
             self.rate = new_rate;
@@ -936,11 +1006,11 @@ impl<'a> JobState<'a> {
                 rate = self.rate.to_string(),
                 balance = self.balance.to_string(),
                 last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_INTIATED",
+                "JOB_REVISE_RATE_INITIATED",
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == JOB_REVISE_RATE_CANCELLED {
+        } else if log.topics()[0] == keccak256(JOB_REVISE_RATE_CANCELLED) {
             info!(
                 rate = self.rate.to_string(),
                 balance = self.balance.to_string(),
@@ -956,7 +1026,7 @@ impl<'a> JobState<'a> {
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == JOB_REVISE_RATE_FINALIZED {
+        } else if log.topics()[0] == keccak256(JOB_REVISE_RATE_FINALIZED) {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
@@ -986,7 +1056,53 @@ impl<'a> JobState<'a> {
             );
 
             return JobResult::Success;
-        } else if log.topics()[0] == METADATA_UPDATED {
+        } else if log.topics()[0] == keccak256(JOB_RATE_REVISED) {
+            // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
+            // if this is changed in the future
+            let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
+                |err| error!(?err, data = ?log.data(), "JOB_RATE_REVISED: Decode failure"),
+            ) else {
+                return JobResult::Internal;
+            };
+
+            info!(
+                self.original_rate = self.original_rate.to_string(),
+                rate = self.rate.to_string(),
+                balance = self.balance.to_string(),
+                last_settled = self.last_settled.as_secs(),
+                "JOB_RATE_REVISED",
+            );
+            self.rate = new_rate;
+            if self.rate < self.min_rate {
+                info!("Revised job rate below min rate, shut down");
+                return JobResult::Done;
+            }
+            if self.original_rate.is_zero() {
+                for entry in gb_rates {
+                    if entry.region_code == self.region {
+                        let gb_cost = entry.rate;
+                        let bandwidth_rate = self.rate - self.min_rate;
+
+                        self.bandwidth =
+                            (bandwidth_rate.saturating_mul(U256::from(1024 * 1024 * 8)) / gb_cost)
+                                .saturating_to::<u64>();
+                        break;
+                    }
+                }
+                self.schedule_launch(self.launch_delay);
+            }
+            self.original_rate = new_rate;
+
+            info!(
+                self.original_rate = self.original_rate.to_string(),
+                rate = self.rate.to_string(),
+                balance = self.balance.to_string(),
+                last_settled = self.last_settled.as_secs(),
+                "JOB_RATE_REVISED",
+            );
+
+            return JobResult::Success;
+        } else if log.topics()[0] == keccak256(JOB_METADATA_UPDATED) {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(metadata) = String::abi_decode(&log.data().data, true).inspect_err(
@@ -997,70 +1113,10 @@ impl<'a> JobState<'a> {
 
             info!(metadata, "METADATA_UPDATED");
 
-            let Ok(v) = serde_json::from_str::<Value>(&metadata)
-                .inspect_err(|err| error!(?err, "Error reading metadata"))
-            else {
-                return JobResult::Failed;
-            };
-
-            let Some(t) = v["instance"].as_str() else {
-                error!("Instance type not set");
-                return JobResult::Failed;
-            };
-            if self.instance_type != t {
-                error!("Instance type change not allowed");
+            if let Err(err) = self.decode_metadata(metadata, true) {
+                error!(?err);
                 return JobResult::Failed;
             }
-
-            let Some(t) = v["region"].as_str() else {
-                error!("Job region not set");
-                return JobResult::Failed;
-            };
-            if self.region != t {
-                error!("Region change not allowed");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["memory"].as_i64() else {
-                error!("Memory not set");
-                return JobResult::Failed;
-            };
-            if self.req_mem != t {
-                error!("Memory change not allowed");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["vcpu"].as_i64() else {
-                error!("vcpu not set");
-                return JobResult::Failed;
-            };
-            if self.req_vcpus != t.try_into().unwrap_or(2) {
-                error!("vcpu change not allowed");
-                return JobResult::Failed;
-            }
-
-            let family = v["family"].as_str();
-            if family.is_some() && self.family != family.unwrap() {
-                error!("Family change not allowed");
-                return JobResult::Failed;
-            }
-
-            let debug = v["debug"].as_bool().unwrap_or(false);
-            self.debug = debug;
-
-            let Some(url) = v["url"].as_str() else {
-                error!("EIF url not found! Exiting job");
-                return JobResult::Failed;
-            };
-
-            self.eif_url = url.to_string();
-
-            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
-            else {
-                error!("failed to decode init params");
-                return JobResult::Failed;
-            };
-            self.init_params = init_params.into_boxed_slice();
 
             // schedule change immediately if not already scheduled
             if !self.infra_change_scheduled {
@@ -1072,6 +1128,76 @@ impl<'a> JobState<'a> {
             error!(topic = ?log.topics()[0], "Unknown event");
             return JobResult::Failed;
         }
+    }
+
+    fn decode_metadata(&mut self, metadata: String, update: bool) -> Result<()> {
+        let metadata_json =
+            serde_json::from_str::<Value>(&metadata).context("Error reading metadata")?;
+
+        let Some(instance) = metadata_json["instance"].as_str() else {
+            return Err(anyhow!("Instance type not set"));
+        };
+        if update && self.instance_type != instance {
+            return Err(anyhow!("Instance type change not allowed"));
+        } else {
+            self.instance_type = instance.to_string();
+            info!(self.instance_type, "Instance type set");
+        }
+
+        let Some(region) = metadata_json["region"].as_str() else {
+            return Err(anyhow!("Job region not set"));
+        };
+        if update && self.region != region {
+            return Err(anyhow!("Region change not allowed"));
+        } else {
+            self.region = region.to_string();
+            info!(self.region, "Job region set");
+        }
+
+        let Some(memory) = metadata_json["memory"].as_i64() else {
+            return Err(anyhow!("Memory not set"));
+        };
+        if update && self.req_mem != memory {
+            return Err(anyhow!("Memory change not allowed"));
+        } else {
+            self.req_mem = memory;
+            info!(self.req_mem, "Required memory");
+        }
+
+        let Some(vcpu) = metadata_json["vcpu"].as_i64() else {
+            return Err(anyhow!("vcpu not set"));
+        };
+        if update && self.req_vcpus != vcpu.try_into().unwrap_or(2) {
+            return Err(anyhow!("vcpu change not allowed"));
+        } else {
+            self.req_vcpus = vcpu.try_into().unwrap_or(i32::MAX);
+            info!(self.req_vcpus, "Required vcpu");
+        }
+
+        let family = metadata_json["family"].as_str();
+        if update && family.is_some() && self.family != family.unwrap() {
+            return Err(anyhow!("Family change not allowed"));
+        } else if family.is_some() {
+            self.family = family.unwrap().to_owned();
+            info!(self.family, "Family");
+        }
+
+        let debug = metadata_json["debug"].as_bool().unwrap_or(false);
+        self.debug = debug;
+
+        let Some(url) = metadata_json["url"].as_str() else {
+            return Err(anyhow!("EIF url not found! Exiting job"));
+        };
+        self.eif_url = url.to_string();
+
+        let Ok(init_params) =
+            BASE64_STANDARD.decode(metadata_json["init_params"].as_str().unwrap_or(""))
+        else {
+            return Err(anyhow!("failed to decode init params"));
+        };
+        self.init_params = init_params.into_boxed_slice();
+
+        Ok(())
     }
 }
 
@@ -1263,15 +1389,21 @@ async fn job_logs(
     let event_filter = Filter::new()
         .address(contract)
         .event_signature(vec![
-            keccak256("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)"),
-            keccak256("JobSettled(bytes32,uint256,uint256)"),
-            keccak256("JobClosed(bytes32)"),
-            keccak256("JobDeposited(bytes32,address,uint256)"),
-            keccak256("JobWithdrew(bytes32,address,uint256)"),
-            keccak256("JobReviseRateInitiated(bytes32,uint256)"),
-            keccak256("JobReviseRateCancelled(bytes32)"),
-            keccak256("JobReviseRateFinalized(bytes32,uint256)"),
-            keccak256("JobMetadataUpdated(bytes32,string)"),
+            keccak256(JOB_OPENED),
+            keccak256(JOB_OPENED_V2),
+            keccak256(JOB_SETTLED),
+            keccak256(JOB_SETTLED_V2),
+            keccak256(JOB_CLOSED),
+            keccak256(JOB_DEPOSITED),
+            keccak256(JOB_DEPOSITED_V2),
+            keccak256(JOB_WITHDREW),
+            keccak256(JOB_WITHDRAWN),
+            keccak256(JOB_SETTLEMENT_WITHDRAWN),
+            keccak256(JOB_REVISE_RATE_INITIATED),
+            keccak256(JOB_REVISE_RATE_CANCELLED),
+            keccak256(JOB_REVISE_RATE_FINALIZED),
+            keccak256(JOB_RATE_REVISED),
+            keccak256(JOB_METADATA_UPDATED),
         ])
         .topic1(job);
 
