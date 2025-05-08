@@ -14,9 +14,10 @@ const DOMAIN = {
 
 const TYPES = {
   Attestation: [
-    { name: 'enclavePubKey', type: 'bytes' },
     { name: 'imageId', type: 'bytes32' },
-    { name: 'timestampInMilliseconds', type: 'uint256' },
+    { name: 'timestampMs', type: 'uint64' },
+    { name: 'publicKey', type: 'bytes' },
+    { name: 'userData', type: 'bytes' },
   ],
 };
 
@@ -29,9 +30,10 @@ const signature = await walletClient.signTypedData({
   types: TYPES,
   primaryType: 'Attestation',
   message: {
-    enclavePubKey: "0x9f82020b6e9431e8abcc0f1ce313248a10bc9e96e59b720dc3653398496c3c52dea402c5ef3a6780ccf1f0aeeaa68ae4e3f132496d011df322e84b171e82750d",
     imageId: "0x0000000000000000000000000000000000000000000000000000000000000002",
-    timestampInMilliseconds: 0x4e43046b,
+    timestampMs: 0x4e43046b,
+    publicKey: "0x9f82020b6e9431e8abcc0f1ce313248a10bc9e96e59b720dc3653398496c3c52dea402c5ef3a6780ccf1f0aeeaa68ae4e3f132496d011df322e84b171e82750d",
+    userData: "0x12345678",
   }
 });
 

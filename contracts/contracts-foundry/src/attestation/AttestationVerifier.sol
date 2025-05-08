@@ -56,18 +56,19 @@ contract AttestationVerifier is AttestationAuther, IAttestationVerifier {
 
     /// @notice EIP-712 typehash for attestation struct
     bytes32 public constant ATTESTATION_TYPEHASH =
-        keccak256("Attestation(bytes enclavePubKey,bytes32 imageId,uint256 timestampInMilliseconds)");
+        keccak256("Attestation(bytes32 imageId,uint64 timestampMs,bytes publicKey,bytes userData)");
 
     /// @notice Verifies a signed attestation using EIP-712 signatures
     /// @param _signature ECDSA signature of the attestation
     /// @param _attestation Attestation data structure to verify
-    function verify(bytes memory _signature, Attestation memory _attestation) external view {
+    function verify(bytes calldata _signature, Attestation calldata _attestation) external view {
         bytes32 _hashStruct = keccak256(
             abi.encode(
                 ATTESTATION_TYPEHASH,
-                keccak256(_attestation.enclavePubKey),
                 _attestation.imageId,
-                _attestation.timestampInMilliseconds
+                _attestation.timestampMs,
+                keccak256(_attestation.publicKey),
+                keccak256(_attestation.userData)
             )
         );
         bytes32 _digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, _hashStruct));

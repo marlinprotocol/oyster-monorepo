@@ -6,6 +6,7 @@ import {RiscZeroVerifier, RiscZeroVerifierDefault} from "../../src/attestation/R
 
 import {Ownable} from "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IRiscZeroVerifier} from "../../lib/risc0-ethereum/contracts/src/IRiscZeroVerifier.sol";
+import {IAttestationVerifier} from "../../src/attestation/IAttestationVerifier.sol";
 
 contract TestRiscZeroVerifier is RiscZeroVerifierDefault {
     bool public authorized;
@@ -30,11 +31,8 @@ contract TestRiscZeroVerifier is RiscZeroVerifierDefault {
         require(authorized, NotAuthorized());
     }
 
-    function verify(bytes calldata _seal, bytes calldata _pubkey, bytes32 _imageId, uint64 _timestampInMilliseconds)
-        external
-        view
-    {
-        return _verify(_seal, _pubkey, _imageId, _timestampInMilliseconds);
+    function verify(bytes calldata _seal, IAttestationVerifier.Attestation calldata _attestation) external view {
+        return _verify(_seal, _attestation);
     }
 }
 
@@ -210,13 +208,17 @@ contract RiscZeroVerifierTestVerify is Test {
     function test_Verify_Valid(
         bytes calldata _seal,
         bytes calldata _pubkey,
+        bytes calldata _userData,
         bytes32 _imageId,
-        uint64 _timestampInMilliseconds
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length <= 256);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
-        bytes32 _journalDigest =
-            sha256(abi.encodePacked(_timestampInMilliseconds, rootKey, uint8(_pubkey.length), _pubkey, _imageId));
+        vm.assume(_pubkey.length < 256);
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
+        bytes32 _journalDigest = sha256(
+            abi.encodePacked(
+                _timestampMs, _imageId, rootKey, uint8(_pubkey.length), _pubkey, uint16(_userData.length), _userData
+            )
+        );
         vm.mockCallRevert(address(verifier), abi.encode(), abi.encode());
         bytes memory _calldata =
             abi.encodeWithSelector(IRiscZeroVerifier.verify.selector, _seal, guestId, _journalDigest);
@@ -224,51 +226,76 @@ contract RiscZeroVerifierTestVerify is Test {
         vm.expectCall(address(verifier), _calldata, 1);
         vm.warp(4);
 
-        riscZeroVerifier.verify(_seal, _pubkey, _imageId, _timestampInMilliseconds);
+        riscZeroVerifier.verify(_seal, IAttestationVerifier.Attestation(_imageId, _timestampMs, _pubkey, _userData));
     }
 
     function test_Verify_TooOld(
         bytes calldata _seal,
         bytes calldata _pubkey,
+        bytes calldata _userData,
         bytes32 _imageId,
-        uint64 _timestampInMilliseconds
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length <= 256);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 0, 2000));
+        vm.assume(_pubkey.length < 256);
+        _timestampMs = uint64(bound(_timestampMs, 0, 2000));
         vm.expectRevert(abi.encodeWithSelector(RiscZeroVerifier.RiscZeroVerifierTooOld.selector));
         vm.warp(4);
 
-        riscZeroVerifier.verify(_seal, _pubkey, _imageId, _timestampInMilliseconds);
+        riscZeroVerifier.verify(_seal, IAttestationVerifier.Attestation(_imageId, _timestampMs, _pubkey, _userData));
     }
 
-    function test_Verify_TooLong(
+    function test_Verify_PubkeyTooLong(
         bytes calldata _seal,
         bytes memory _pubkey,
+        bytes calldata _userData,
         bytes32 _imageId,
-        uint64 _timestampInMilliseconds
+        uint64 _timestampMs
     ) public {
         // foundry does not generate data >256 length, concat to emulate it
         vm.assume(_pubkey.length > 64);
         _pubkey = bytes.concat(_pubkey, _pubkey, _pubkey, _pubkey);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
         vm.expectRevert(abi.encodeWithSelector(RiscZeroVerifier.RiscZeroVerifierPubkeyTooLong.selector));
         vm.warp(4);
 
-        riscZeroVerifier.verify(_seal, _pubkey, _imageId, _timestampInMilliseconds);
+        riscZeroVerifier.verify(_seal, IAttestationVerifier.Attestation(_imageId, _timestampMs, _pubkey, _userData));
+    }
+
+    function test_Verify_UserDataTooLong(
+        bytes calldata _seal,
+        bytes memory _pubkey,
+        bytes memory _userData,
+        bytes32 _imageId,
+        uint64 _timestampMs
+    ) public {
+        vm.assume(_pubkey.length < 256);
+        // foundry does not generate data >65536 length, concat to emulate it
+        vm.assume(_userData.length > 64);
+        _userData = bytes.concat(_userData, _userData, _userData, _userData); // 256
+        _userData = bytes.concat(_userData, _userData, _userData, _userData); // 1024
+        _userData = bytes.concat(_userData, _userData, _userData, _userData); // 4096
+        _userData = bytes.concat(_userData, _userData, _userData, _userData); // 16384
+        _userData = bytes.concat(_userData, _userData, _userData, _userData); // 65536
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
+        vm.expectRevert(abi.encodeWithSelector(RiscZeroVerifier.RiscZeroVerifierUserDataTooLong.selector));
+        vm.warp(4);
+
+        riscZeroVerifier.verify(_seal, IAttestationVerifier.Attestation(_imageId, _timestampMs, _pubkey, _userData));
     }
 
     function test_Verify_InvalidSeal(
         bytes calldata _seal,
         bytes calldata _pubkey,
+        bytes calldata _userData,
         bytes32 _imageId,
-        uint64 _timestampInMilliseconds
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length <= 256);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
+        vm.assume(_pubkey.length < 256);
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
         vm.mockCallRevert(address(verifier), abi.encode(), "0x12345678");
         vm.expectRevert("0x12345678");
         vm.warp(4);
 
-        riscZeroVerifier.verify(_seal, _pubkey, _imageId, _timestampInMilliseconds);
+        riscZeroVerifier.verify(_seal, IAttestationVerifier.Attestation(_imageId, _timestampMs, _pubkey, _userData));
     }
 }

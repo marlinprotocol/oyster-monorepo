@@ -1,30 +1,34 @@
 use std::borrow::BorrowMut;
 use std::collections::BTreeMap;
 
-use aws_nitro_enclaves_cose::{crypto::Openssl, CoseSign1};
+use aws_nitro_enclaves_cose::{CoseSign1, crypto::Openssl};
 use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
 use hyper::Uri;
+use hyper::body::Bytes;
 use hyper_util::client::legacy::{Client, Error};
 use hyper_util::rt::TokioExecutor;
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNumContext;
 use openssl::ec::{EcKey, PointConversionForm};
 use openssl::sha::Sha256;
-use openssl::x509::{X509VerifyResult, X509};
+use openssl::x509::{X509, X509VerifyResult};
 use serde_cbor::{self, value, value::Value};
 
-pub const AWS_ROOT_KEY: [u8; 96] = hex_literal::hex!("fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4");
-pub const MOCK_ROOT_KEY: [u8; 96] = hex_literal::hex!("6c79411ebaae7489a4e8355545c0346784b31df5d08cb1f7c0097836a82f67240f2a7201862880a1d09a0bb326637188fbbafab47a10abe3630fcf8c18d35d96532184985e582c0dce3dace8441f37b9cc9211dff935baae69e4872cc3494410");
+pub const AWS_ROOT_KEY: [u8; 96] = hex_literal::hex!(
+    "fc0254eba608c1f36870e29ada90be46383292736e894bfff672d989444b5051e534a4b1f6dbe3c0bc581a32b7b176070ede12d69a3fea211b66e752cf7dd1dd095f6f1370f4170843d9dc100121e4cf63012809664487c9796284304dc53ff4"
+);
+pub const MOCK_ROOT_KEY: [u8; 96] = hex_literal::hex!(
+    "6c79411ebaae7489a4e8355545c0346784b31df5d08cb1f7c0097836a82f67240f2a7201862880a1d09a0bb326637188fbbafab47a10abe3630fcf8c18d35d96532184985e582c0dce3dace8441f37b9cc9211dff935baae69e4872cc3494410"
+);
 
 #[derive(Debug)]
 pub struct AttestationDecoded {
-    pub timestamp: usize,
-    pub pcrs: [[u8; 48]; 3],
     pub root_public_key: Box<[u8]>,
+    pub image_id: [u8; 32],
+    pub pcrs: [[u8; 48]; 4],
+    pub timestamp: usize,
     pub public_key: Box<[u8]>,
     pub user_data: Box<[u8]>,
-    pub image_id: [u8; 32],
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -41,14 +45,14 @@ pub enum AttestationError {
 
 #[derive(Debug, Default, Clone)]
 pub struct AttestationExpectations<'a> {
+    pub root_public_key: Option<&'a [u8]>,
+    pub pcrs: Option<[[u8; 48]; 4]>,
+    pub image_id: Option<&'a [u8; 32]>,
     pub timestamp: Option<usize>,
     // (max age, current timestamp)
     pub age: Option<(usize, usize)>,
-    pub pcrs: Option<[[u8; 48]; 3]>,
     pub public_key: Option<&'a [u8]>,
     pub user_data: Option<&'a [u8]>,
-    pub root_public_key: Option<&'a [u8]>,
-    pub image_id: Option<&'a [u8; 32]>,
 }
 
 pub fn verify(
@@ -56,16 +60,16 @@ pub fn verify(
     expectations: AttestationExpectations,
 ) -> Result<AttestationDecoded, AttestationError> {
     let mut result = AttestationDecoded {
-        pcrs: [[0; 48]; 3],
-        timestamp: 0,
         root_public_key: Default::default(),
+        image_id: Default::default(),
+        pcrs: [[0; 48]; 4],
+        timestamp: 0,
         public_key: Default::default(),
         user_data: Default::default(),
-        image_id: Default::default(),
     };
 
     // parse attestation doc
-    let (cosesign1, mut attestation_doc) = parse_attestation_doc(&attestation_doc)?;
+    let (cosesign1, mut attestation_doc) = parse_attestation_doc(attestation_doc)?;
 
     // parse timestamp
     result.timestamp = parse_timestamp(&mut attestation_doc)?;
@@ -91,6 +95,21 @@ pub fn verify(
     if let Some(pcrs) = expectations.pcrs {
         if result.pcrs != pcrs {
             return Err(AttestationError::VerifyFailed("pcrs mismatch".into()));
+        }
+    }
+
+    // compute image id
+    let mut hasher = Sha256::new();
+    // bitflags denoting what pcrs are part of the computation
+    // this one has 0, 1, 2 and 16
+    hasher.update(&((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
+    hasher.update(result.pcrs.as_flattened());
+    result.image_id = hasher.finish();
+
+    // check image id if exists
+    if let Some(image_id) = expectations.image_id {
+        if &result.image_id != image_id {
+            return Err(AttestationError::VerifyFailed("image id mismatch".into()));
         }
     }
 
@@ -129,32 +148,13 @@ pub fn verify(
         }
     }
 
-    let mut hasher = Sha256::new();
-    hasher.update(result.pcrs.as_flattened());
-    hasher.update(
-        &u16::try_from(result.user_data.len())
-            .map_err(|_| {
-                AttestationError::VerifyFailed("user data too big to compute image id".into())
-            })?
-            .to_be_bytes(),
-    );
-    hasher.update(result.user_data.as_ref());
-    result.image_id = hasher.finish();
-
-    // check image id if exists
-    if let Some(image_id) = expectations.image_id {
-        if &result.image_id != image_id {
-            return Err(AttestationError::VerifyFailed("image id mismatch".into()));
-        }
-    }
-
     Ok(result)
 }
 
 fn parse_attestation_doc(
     attestation_doc: &[u8],
 ) -> Result<(CoseSign1, BTreeMap<Value, Value>), AttestationError> {
-    let cosesign1 = CoseSign1::from_bytes(&attestation_doc)
+    let cosesign1 = CoseSign1::from_bytes(attestation_doc)
         .map_err(|e| AttestationError::ParseFailed(format!("cose: {e}")))?;
     let payload = cosesign1
         .get_payload::<Openssl>(None)
@@ -190,15 +190,15 @@ fn parse_timestamp(
 
 fn parse_pcrs(
     attestation_doc: &mut BTreeMap<Value, Value>,
-) -> Result<[[u8; 48]; 3], AttestationError> {
+) -> Result<[[u8; 48]; 4], AttestationError> {
     let pcrs_arr = attestation_doc
         .remove(&"pcrs".to_owned().into())
         .ok_or(AttestationError::ParseFailed("pcrs not found".into()))?;
     let mut pcrs_arr = value::from_value::<BTreeMap<Value, Value>>(pcrs_arr)
         .map_err(|e| AttestationError::ParseFailed(format!("pcrs: {e}")))?;
 
-    let mut result = [[0; 48]; 3];
-    for i in 0..3 {
+    let mut result = [[0; 48]; 4];
+    for (i, result_pcr) in result.iter_mut().take(3).enumerate() {
         let pcr = pcrs_arr
             .remove(&(i as u32).into())
             .ok_or(AttestationError::ParseFailed(format!("pcr{i} not found")))?;
@@ -208,10 +208,24 @@ fn parse_pcrs(
                 "pcr{i} decode failure"
             ))),
         })?;
-        result[i] = pcr
+        *result_pcr = pcr
             .as_slice()
             .try_into()
             .map_err(|e| AttestationError::ParseFailed(format!("pcr{i} not 48 bytes: {e}")))?;
+    }
+
+    // check if pcr16 exists, leave as zero if not
+    if let Some(pcr) = pcrs_arr.remove(&16.into()) {
+        let pcr = (match pcr {
+            Value::Bytes(b) => Ok(b),
+            _ => Err(AttestationError::ParseFailed(
+                "pcr16 decode failure".to_string(),
+            )),
+        })?;
+        result[3] = pcr
+            .as_slice()
+            .try_into()
+            .map_err(|e| AttestationError::ParseFailed(format!("pcr16 not 48 bytes: {e}")))?;
     }
 
     Ok(result)
@@ -329,8 +343,8 @@ fn get_all_certs(cert: X509, cabundle: &[Value]) -> Result<Box<[X509]>, Attestat
             Value::Bytes(b) => Ok(b),
             _ => Err(AttestationError::ParseFailed("cert decode".into())),
         })?;
-        let cert = X509::from_der(&cert)
-            .map_err(|e| AttestationError::ParseFailed(format!("der: {e}")))?;
+        let cert =
+            X509::from_der(cert).map_err(|e| AttestationError::ParseFailed(format!("der: {e}")))?;
         all_certs.push(cert);
     }
     Ok(all_certs.into_boxed_slice())
@@ -385,7 +399,7 @@ pub async fn get(endpoint: Uri) -> Result<Box<[u8]>, AttestationError> {
 mod tests {
     use hex_literal::hex;
 
-    use crate::attestation::{AttestationExpectations, AWS_ROOT_KEY, MOCK_ROOT_KEY};
+    use crate::attestation::{AWS_ROOT_KEY, AttestationExpectations, MOCK_ROOT_KEY};
 
     use super::verify;
 
@@ -400,15 +414,36 @@ mod tests {
         let decoded = verify(&attestation, Default::default()).unwrap();
 
         assert_eq!(decoded.timestamp, 0x00000193bef3f3b0);
-        assert_eq!(decoded.pcrs[0], hex!("189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"));
-        assert_eq!(decoded.pcrs[1], hex!("5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"));
-        assert_eq!(decoded.pcrs[2], hex!("6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"));
+        assert_eq!(
+            decoded.pcrs[0],
+            hex!(
+                "189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[1],
+            hex!(
+                "5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[2],
+            hex!(
+                "6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"
+            )
+        );
+        assert_eq!(decoded.pcrs[3], [0u8; 48]);
         assert_eq!(decoded.user_data, [0u8; 0].into());
-        assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
+        assert_eq!(
+            decoded.public_key.as_ref(),
+            hex!(
+                "e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"
+            )
+        );
         assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
         assert_eq!(
             decoded.image_id,
-            hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")
+            hex!("a6b0824d3c47f51542b3a18e6245c408490bef88ddc8d5e1bf8b95ec7eba1602")
         );
     }
 
@@ -432,25 +467,47 @@ mod tests {
                     hex!("189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"),
                     hex!("5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"),
                     hex!("6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"),
+                    [0; 48],
                 ]),
                 public_key: Some(&hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb")),
                 user_data: Some(&[0; 0]),
                 root_public_key: Some(&AWS_ROOT_KEY),
-                image_id: Some(&hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")),
+                image_id: Some(&hex!("a6b0824d3c47f51542b3a18e6245c408490bef88ddc8d5e1bf8b95ec7eba1602")),
             },
         )
         .unwrap();
 
         assert_eq!(decoded.timestamp, 0x00000193bef3f3b0);
-        assert_eq!(decoded.pcrs[0], hex!("189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"));
-        assert_eq!(decoded.pcrs[1], hex!("5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"));
-        assert_eq!(decoded.pcrs[2], hex!("6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"));
+        assert_eq!(
+            decoded.pcrs[0],
+            hex!(
+                "189038eccf28a3a098949e402f3b3d86a876f4915c5b02d546abb5d8c507ceb1755b8192d8cfca66e8f226160ca4c7a6"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[1],
+            hex!(
+                "5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[2],
+            hex!(
+                "6c3ef363c488a9a86faa63a44653fd806e645d4540b40540876f3b811fc1bceecf036a4703f07587c501ee45bb56a1aa"
+            )
+        );
+        assert_eq!(decoded.pcrs[3], [0u8; 48]);
         assert_eq!(decoded.user_data, [0u8; 0].into());
-        assert_eq!(decoded.public_key.as_ref(), hex!("e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"));
+        assert_eq!(
+            decoded.public_key.as_ref(),
+            hex!(
+                "e646f8b0071d5ba75931402522cc6a5c42a84a6fea238864e5ac9a0e12d83bd36d0c8109d3ca2b699fce8d082bf313f5d2ae249bb275b6b6e91e0fcd9262f4bb"
+            )
+        );
         assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
         assert_eq!(
             decoded.image_id,
-            hex!("10aff51b369137fcb2d71372829300c543b1f8c586d77080f00ba31140621b9c")
+            hex!("a6b0824d3c47f51542b3a18e6245c408490bef88ddc8d5e1bf8b95ec7eba1602")
         );
     }
 
@@ -468,12 +525,13 @@ mod tests {
         assert_eq!(decoded.pcrs[0], [0; 48]);
         assert_eq!(decoded.pcrs[1], [1; 48]);
         assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.pcrs[3], [0u8; 48]);
         assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
         assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
         assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
         assert_eq!(
             decoded.image_id,
-            hex!("79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372")
+            hex!("b45dfd1807c1f4b81ef28b44682fba5d4d5522baac808a44b7302cbfda5144e7")
         );
     }
 
@@ -490,12 +548,12 @@ mod tests {
             AttestationExpectations {
                 timestamp: Some(0x00000193bf444e30),
                 age: Some((300000, 0x00000193bf444e30 + 300000)),
-                pcrs: Some([[0; 48], [1; 48], [2; 48]]),
+                pcrs: Some([[0; 48], [1; 48], [2; 48], [0; 48]]),
                 public_key: Some(&hex!("12345678")),
                 user_data: Some(&hex!("abcdef")),
                 root_public_key: Some(&MOCK_ROOT_KEY),
                 image_id: Some(&hex!(
-                    "79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372"
+                    "b45dfd1807c1f4b81ef28b44682fba5d4d5522baac808a44b7302cbfda5144e7"
                 )),
             },
         )
@@ -505,12 +563,193 @@ mod tests {
         assert_eq!(decoded.pcrs[0], [0; 48]);
         assert_eq!(decoded.pcrs[1], [1; 48]);
         assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.pcrs[3], [0u8; 48]);
         assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
         assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
         assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
         assert_eq!(
             decoded.image_id,
-            hex!("79fc2e5fd8deb77d38890bdb4e4b1a1bddb08b5854d81d97b24167b449ddd372")
+            hex!("b45dfd1807c1f4b81ef28b44682fba5d4d5522baac808a44b7302cbfda5144e7")
+        );
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw`
+    // on the attestation server of a real Nitro enclave
+    #[test]
+    fn test_aws_pcr16_none_specified() {
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws_pcr16.bin",
+        )
+        .unwrap();
+
+        let decoded = verify(&attestation, Default::default()).unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000196811b1c0b);
+        assert_eq!(
+            decoded.pcrs[0],
+            hex!(
+                "2984ab215649c40ffe8f8b80cfadee47f1b06760f7d9257981f64b2758c347fafa6c733591b25e75ae7e9d1cb86ad5df"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[1],
+            hex!(
+                "ed7759aa996a2e94c6086f24f61f354f75f9ea7f93a74f55d65c2cb5590d1af3930c9adbc57bb543764fa1f5c444f495"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[2],
+            hex!(
+                "27216d3fbedb900be4bdbdb2d5be27b9e8254989e123aaa97f24d1b0fd1016d001323eb9d09a9d25e8e1e1298d68e9c6"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[3],
+            hex!(
+                "30e84b2d7eeffe6d90a475797b35e59a11b0da473eee4b3b8edfe73daf0279801bb18730c39db7f27f2f77b7b458cb9e"
+            )
+        );
+        assert_eq!(decoded.user_data, [0u8; 0].into());
+        assert_eq!(
+            decoded.public_key.as_ref(),
+            hex!("2af77183f4772f00e269c7ffadb0eca298bf76711bbe94471a4944ede5ada084")
+        );
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("c28909dc8803cf0edf6113f3fb81d0494f4c92b63087242200e18a5be347aacd")
+        );
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw`
+    // on the attestation server of a real Nitro enclave
+    #[test]
+    fn test_aws_pcr16_all_specified() {
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws_pcr16.bin",
+        )
+        .unwrap();
+
+        let decoded = verify(
+            &attestation,
+            AttestationExpectations {
+                timestamp: Some(0x00000196811b1c0b),
+                age: Some((
+                    300000,
+                    0x00000196811b1c0b + 300000,
+                )),
+                pcrs: Some([
+                    hex!("2984ab215649c40ffe8f8b80cfadee47f1b06760f7d9257981f64b2758c347fafa6c733591b25e75ae7e9d1cb86ad5df"),
+                    hex!("ed7759aa996a2e94c6086f24f61f354f75f9ea7f93a74f55d65c2cb5590d1af3930c9adbc57bb543764fa1f5c444f495"),
+                    hex!("27216d3fbedb900be4bdbdb2d5be27b9e8254989e123aaa97f24d1b0fd1016d001323eb9d09a9d25e8e1e1298d68e9c6"),
+                    hex!("30e84b2d7eeffe6d90a475797b35e59a11b0da473eee4b3b8edfe73daf0279801bb18730c39db7f27f2f77b7b458cb9e"),
+                ]),
+                public_key: Some(&hex!("2af77183f4772f00e269c7ffadb0eca298bf76711bbe94471a4944ede5ada084")),
+                user_data: Some(&[0; 0]),
+                root_public_key: Some(&AWS_ROOT_KEY),
+                image_id: Some(&hex!("c28909dc8803cf0edf6113f3fb81d0494f4c92b63087242200e18a5be347aacd")),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000196811b1c0b);
+        assert_eq!(
+            decoded.pcrs[0],
+            hex!(
+                "2984ab215649c40ffe8f8b80cfadee47f1b06760f7d9257981f64b2758c347fafa6c733591b25e75ae7e9d1cb86ad5df"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[1],
+            hex!(
+                "ed7759aa996a2e94c6086f24f61f354f75f9ea7f93a74f55d65c2cb5590d1af3930c9adbc57bb543764fa1f5c444f495"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[2],
+            hex!(
+                "27216d3fbedb900be4bdbdb2d5be27b9e8254989e123aaa97f24d1b0fd1016d001323eb9d09a9d25e8e1e1298d68e9c6"
+            )
+        );
+        assert_eq!(
+            decoded.pcrs[3],
+            hex!(
+                "30e84b2d7eeffe6d90a475797b35e59a11b0da473eee4b3b8edfe73daf0279801bb18730c39db7f27f2f77b7b458cb9e"
+            )
+        );
+        assert_eq!(decoded.user_data, [0u8; 0].into());
+        assert_eq!(
+            decoded.public_key.as_ref(),
+            hex!("2af77183f4772f00e269c7ffadb0eca298bf76711bbe94471a4944ede5ada084")
+        );
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("c28909dc8803cf0edf6113f3fb81d0494f4c92b63087242200e18a5be347aacd")
+        );
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
+    // on a custom mock attestation server running locally
+    #[test]
+    fn test_mock_pcr16_none_specified() {
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom_pcr16.bin",
+        )
+        .unwrap();
+
+        let decoded = verify(&attestation, Default::default()).unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000196870610d9);
+        assert_eq!(decoded.pcrs[0], [0; 48]);
+        assert_eq!(decoded.pcrs[1], [1; 48]);
+        assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.pcrs[3], [16; 48]);
+        assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
+        assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
+        assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("20a182763745f956ddee6f8e9d14a66e23db836c0eb1a769a2ef4d3ab77bef1b")
+        );
+    }
+
+    // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
+    // on a custom mock attestation server running locally
+    #[test]
+    fn test_mock_pcr16_all_specified() {
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom_pcr16.bin",
+        )
+        .unwrap();
+
+        let decoded = verify(
+            &attestation,
+            AttestationExpectations {
+                timestamp: Some(0x00000196870610d9),
+                age: Some((300000, 0x00000196870610d9 + 300000)),
+                pcrs: Some([[0; 48], [1; 48], [2; 48], [16; 48]]),
+                public_key: Some(&hex!("12345678")),
+                user_data: Some(&hex!("abcdef")),
+                root_public_key: Some(&MOCK_ROOT_KEY),
+                image_id: Some(&hex!(
+                    "20a182763745f956ddee6f8e9d14a66e23db836c0eb1a769a2ef4d3ab77bef1b"
+                )),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(decoded.timestamp, 0x00000196870610d9);
+        assert_eq!(decoded.pcrs[0], [0; 48]);
+        assert_eq!(decoded.pcrs[1], [1; 48]);
+        assert_eq!(decoded.pcrs[2], [2; 48]);
+        assert_eq!(decoded.pcrs[3], [16; 48]);
+        assert_eq!(decoded.user_data.as_ref(), hex!("abcdef"));
+        assert_eq!(decoded.public_key.as_ref(), hex!("12345678"));
+        assert_eq!(decoded.root_public_key.as_ref(), MOCK_ROOT_KEY);
+        assert_eq!(
+            decoded.image_id,
+            hex!("20a182763745f956ddee6f8e9d14a66e23db836c0eb1a769a2ef4d3ab77bef1b")
         );
     }
 }

@@ -13,6 +13,7 @@ The repository is organized into projects:
 - [attestation/verifier](./attestation/verifier/): Attestation verifier server that verifies attestations.
 - [attestation/verifier-enclave](./attestation/verifier-enclave/): Attestation verifier enclave that packages the attestation verifier server.
 - [attestation/verifier-risczero](./attestation/verifier-risczero/): Attestation verifier that generates a ZK proof of attestation verification using RISCZero.
+- [cli/oyster-serverless](./cli/oyster-serverless/): CLI for interacting with Oyster Serverless.
 - [contracts/contracts](./contracts/contracts/): Most of the Oyster contracts are included here.
 - [contracts/contracts-foundry](./contracts/contracts-foundry/): Contains KMS related contracts.
 - [contracts/indexer](./contracts/indexer/): Indexer for the Oyster contracts.
@@ -21,6 +22,7 @@ The repository is organized into projects:
 - [initialization/init-server](./initialization/init-server/): Server that provides data endpoints over vsocks during enclave initialization.
 - [initialization/vet](./initialization/vet/): Curl-like utility that makes http queries over vsocks instead of TCP sockets.
 - [initialization/keygen](./initialization/keygen/): Keypair generators.
+- [initialization/pcr-utils](./initialization/pcr-utils/): Utilities for extending and locking PCRs.
 - [kernels](./kernels/): Linux kernels for different classes of enclave images and different use cases.
 - [kms/creator](./kms/creator): Encrypted seed generator for the KMS root servers.
 - [kms/creator-enclave](./kms/creator-enclave): KMS creator enclave.

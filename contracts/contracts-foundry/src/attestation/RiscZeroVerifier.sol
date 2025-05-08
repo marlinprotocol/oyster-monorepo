@@ -4,6 +4,8 @@ pragma solidity ^0.8.0;
 
 import {IRiscZeroVerifier} from "../../lib/risc0-ethereum/contracts/src/IRiscZeroVerifier.sol";
 
+import {IAttestationVerifier} from "./IAttestationVerifier.sol";
+
 /// @title RiscZero based attestation verifier
 /// @notice Contract for verifying RiscZero proofs of attestation verification
 abstract contract RiscZeroVerifier {
@@ -33,8 +35,10 @@ abstract contract RiscZeroVerifier {
 
     /// @notice Thrown when attestation is too old
     error RiscZeroVerifierTooOld();
-    /// @notice Thrown when public key exceeds maximum length of 256 bytes
+    /// @notice Thrown when public key exceeds maximum length of 255 bytes
     error RiscZeroVerifierPubkeyTooLong();
+    /// @notice Thrown when user data exceeds maximum length of 65535 bytes
+    error RiscZeroVerifierUserDataTooLong();
 
     /// @notice Emitted when verifier contract is updated
     /// @param verifier New verifier contract address
@@ -128,17 +132,21 @@ abstract contract RiscZeroVerifier {
     /// @notice Verifies a RiscZero proof of attestation verification
     /// @dev Reverts if attestation is expired, pubkey too long, or verification fails
     /// @param _seal Proof seal from RiscZero
-    /// @param _pubkey Attestation public key
-    /// @param _imageId Enclave image ID
-    /// @param _timestampInMilliseconds Attestation timestamp in milliseconds
-    function _verify(bytes memory _seal, bytes memory _pubkey, bytes32 _imageId, uint64 _timestampInMilliseconds)
-        internal
-        view
-    {
-        require(_timestampInMilliseconds > block.timestamp * 1000 - _rzvGetMaxAgeMs(), RiscZeroVerifierTooOld());
-        require(_pubkey.length <= 256, RiscZeroVerifierPubkeyTooLong());
+    /// @param _attestation Attestation data structure to verify
+    function _verify(bytes memory _seal, IAttestationVerifier.Attestation memory _attestation) internal view {
+        require(_attestation.timestampMs > block.timestamp * 1000 - _rzvGetMaxAgeMs(), RiscZeroVerifierTooOld());
+        require(_attestation.publicKey.length < 256, RiscZeroVerifierPubkeyTooLong());
+        require(_attestation.userData.length < 65536, RiscZeroVerifierUserDataTooLong());
         bytes32 _journalDigest = sha256(
-            abi.encodePacked(_timestampInMilliseconds, _rzvGetRootKey(), uint8(_pubkey.length), _pubkey, _imageId)
+            abi.encodePacked(
+                _attestation.timestampMs,
+                _attestation.imageId,
+                _rzvGetRootKey(),
+                uint8(_attestation.publicKey.length),
+                _attestation.publicKey,
+                uint16(_attestation.userData.length),
+                _attestation.userData
+            )
         );
         _rzvGetVerifier().verify(_seal, _rzvGetGuestId(), _journalDigest);
     }

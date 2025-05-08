@@ -428,12 +428,16 @@ contract AttestationAutherTestVerifyEnclaveRiscZero is Test {
     function test_VerifyEnclaveRiscZero_Valid(
         bytes calldata _seal,
         bytes calldata _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes calldata _userData,
+        uint64 _timestampMs
     ) public {
         vm.assume(_pubkey.length == 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
-        bytes32 _journalDigest =
-            sha256(abi.encodePacked(_timestampInMilliseconds, rootKey, uint8(64), _pubkey, imageId));
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
+        bytes32 _journalDigest = sha256(
+            abi.encodePacked(
+                _timestampMs, imageId, rootKey, uint8(_pubkey.length), _pubkey, uint16(_userData.length), _userData
+            )
+        );
         vm.mockCallRevert(address(verifier), abi.encode(), abi.encode());
         bytes memory _calldata =
             abi.encodeWithSelector(IRiscZeroVerifier.verify.selector, _seal, guestId, _journalDigest);
@@ -445,7 +449,7 @@ contract AttestationAutherTestVerifyEnclaveRiscZero is Test {
         vm.expectEmit();
         emit VerifiedKeys.VerifiedKeysVerified(_addr, imageId, _pubkey);
 
-        auther.verifyEnclave(_seal, _pubkey, imageId, _timestampInMilliseconds);
+        auther.verifyEnclaveRiscZero(_seal, IAttestationVerifier.Attestation(imageId, _timestampMs, _pubkey, _userData));
 
         assertEq(auther.keys(_addr), imageId);
     }
@@ -453,25 +457,30 @@ contract AttestationAutherTestVerifyEnclaveRiscZero is Test {
     function test_VerifyEnclaveRiscZero_TooOld(
         bytes calldata _seal,
         bytes calldata _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes calldata _userData,
+        uint64 _timestampMs
     ) public {
         vm.assume(_pubkey.length == 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 0, 2000));
+        _timestampMs = uint64(bound(_timestampMs, 0, 2000));
         vm.expectRevert(abi.encodeWithSelector(RiscZeroVerifier.RiscZeroVerifierTooOld.selector));
         vm.warp(4);
 
-        auther.verifyEnclave(_seal, _pubkey, imageId, _timestampInMilliseconds);
+        auther.verifyEnclaveRiscZero(_seal, IAttestationVerifier.Attestation(imageId, _timestampMs, _pubkey, _userData));
     }
 
     function test_VerifyEnclaveRiscZero_InvalidLength(
         bytes calldata _seal,
         bytes calldata _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes calldata _userData,
+        uint64 _timestampMs
     ) public {
         vm.assume(_pubkey.length != 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
-        bytes32 _journalDigest =
-            sha256(abi.encodePacked(_timestampInMilliseconds, rootKey, uint8(_pubkey.length), _pubkey, imageId));
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
+        bytes32 _journalDigest = sha256(
+            abi.encodePacked(
+                _timestampMs, imageId, rootKey, uint8(_pubkey.length), _pubkey, uint16(_userData.length), _userData
+            )
+        );
         vm.mockCallRevert(address(verifier), abi.encode(), abi.encode());
         bytes memory _calldata =
             abi.encodeWithSelector(IRiscZeroVerifier.verify.selector, _seal, guestId, _journalDigest);
@@ -480,25 +489,29 @@ contract AttestationAutherTestVerifyEnclaveRiscZero is Test {
         vm.expectRevert(abi.encodeWithSelector(AttestationAuther.AttestationAutherPubkeyInvalid.selector));
         vm.warp(4);
 
-        auther.verifyEnclave(_seal, _pubkey, imageId, _timestampInMilliseconds);
+        auther.verifyEnclaveRiscZero(_seal, IAttestationVerifier.Attestation(imageId, _timestampMs, _pubkey, _userData));
     }
 
     function test_VerifyEnclaveRiscZero_FailedVerification(
         bytes calldata _seal,
         bytes calldata _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes calldata _userData,
+        uint64 _timestampMs
     ) public {
         vm.assume(_pubkey.length == 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
-        bytes32 _journalDigest =
-            sha256(abi.encodePacked(_timestampInMilliseconds, rootKey, uint8(_pubkey.length), _pubkey, imageId));
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
+        bytes32 _journalDigest = sha256(
+            abi.encodePacked(
+                _timestampMs, imageId, rootKey, uint8(_pubkey.length), _pubkey, uint16(_userData.length), _userData
+            )
+        );
         bytes memory _calldata =
             abi.encodeWithSelector(IRiscZeroVerifier.verify.selector, _seal, guestId, _journalDigest);
         vm.mockCallRevert(address(verifier), _calldata, "not verified");
         vm.expectRevert("not verified");
         vm.warp(4);
 
-        auther.verifyEnclave(_seal, _pubkey, imageId, _timestampInMilliseconds);
+        auther.verifyEnclaveRiscZero(_seal, IAttestationVerifier.Attestation(imageId, _timestampMs, _pubkey, _userData));
     }
 }
 
@@ -532,60 +545,66 @@ contract AttestationAutherTestVerifyEnclaveSignature is Test {
 
     function test_VerifyEnclaveSignature_Valid(
         bytes memory _signature,
-        bytes memory _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes memory _publicKey,
+        bytes memory _userData,
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length == 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
+        vm.assume(_publicKey.length == 64);
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
         IAttestationVerifier.Attestation memory attestation = IAttestationVerifier.Attestation({
-            enclavePubKey: _pubkey,
             imageId: imageId,
-            timestampInMilliseconds: _timestampInMilliseconds
+            timestampMs: _timestampMs,
+            publicKey: _publicKey,
+            userData: _userData
         });
-        bytes32 _addr = bytes32(uint256(uint160(uint256(keccak256(_pubkey)))));
+        bytes32 _addr = bytes32(uint256(uint160(uint256(keccak256(_publicKey)))));
         vm.expectEmit();
-        emit VerifiedKeys.VerifiedKeysVerified(_addr, imageId, _pubkey);
+        emit VerifiedKeys.VerifiedKeysVerified(_addr, imageId, _publicKey);
         vm.warp(4);
 
-        auther.verifyEnclave(_signature, attestation);
+        auther.verifyEnclaveSignature(_signature, attestation);
 
         assertEq(auther.keys(_addr), imageId);
     }
 
     function test_VerifyEnclaveSignature_Invalid(
         bytes memory _signature,
-        bytes memory _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes memory _publicKey,
+        bytes memory _userData,
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length == 64);
+        vm.assume(_publicKey.length == 64);
         auther.setShouldVerify(false);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 2001, type(uint64).max));
+        _timestampMs = uint64(bound(_timestampMs, 2001, type(uint64).max));
         IAttestationVerifier.Attestation memory attestation = IAttestationVerifier.Attestation({
-            enclavePubKey: _pubkey,
             imageId: imageId,
-            timestampInMilliseconds: _timestampInMilliseconds
+            timestampMs: _timestampMs,
+            publicKey: _publicKey,
+            userData: _userData
         });
         vm.expectRevert("auther not verified");
         vm.warp(4);
 
-        auther.verifyEnclave(_signature, attestation);
+        auther.verifyEnclaveSignature(_signature, attestation);
     }
 
     function test_VerifyEnclaveSignature_Expired(
         bytes memory _signature,
-        bytes memory _pubkey,
-        uint64 _timestampInMilliseconds
+        bytes memory _publicKey,
+        bytes memory _userData,
+        uint64 _timestampMs
     ) public {
-        vm.assume(_pubkey.length == 64);
-        _timestampInMilliseconds = uint64(bound(_timestampInMilliseconds, 0, 2000));
+        vm.assume(_publicKey.length == 64);
+        _timestampMs = uint64(bound(_timestampMs, 0, 2000));
         IAttestationVerifier.Attestation memory attestation = IAttestationVerifier.Attestation({
-            enclavePubKey: _pubkey,
             imageId: imageId,
-            timestampInMilliseconds: _timestampInMilliseconds
+            timestampMs: _timestampMs,
+            publicKey: _publicKey,
+            userData: _userData
         });
         vm.warp(4);
 
         vm.expectRevert(abi.encodeWithSelector(AttestationAuther.AttestationAutherTooOld.selector));
-        auther.verifyEnclave(_signature, attestation);
+        auther.verifyEnclaveSignature(_signature, attestation);
     }
 }

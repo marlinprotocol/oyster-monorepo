@@ -1,5 +1,6 @@
 use crate::configs::global::ARBITRUM_ONE_RPC_URL;
 use alloy::{
+    hex,
     network::{Ethereum, EthereumWallet},
     primitives::FixedBytes,
     providers::{Provider, ProviderBuilder, WalletProvider},

@@ -62,6 +62,9 @@
       initialization.logger = import ./initialization/logger {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      initialization.pcr-utils = import ./initialization/pcr-utils {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       kernels.vanilla = import ./kernels/vanilla.nix {
         inherit nixpkgs systemConfig;
       };
@@ -205,6 +208,9 @@
         kernels = kernels.tuna;
       };
       cli.oyster-cvm = import ./cli/oyster-cvm {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
+      cli.oyster-serverless = import ./cli/oyster-serverless {
         inherit nixpkgs systemConfig fenix naersk;
       };
       serverless.executor = import ./serverless/executor {

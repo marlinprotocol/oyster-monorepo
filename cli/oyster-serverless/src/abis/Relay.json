@@ -611,12 +611,6 @@
           "internalType": "uint256",
           "name": "callbackGasLimit",
           "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "address",
-          "name": "jobOwner",
-          "type": "address"
         }
       ],
       "name": "JobRelayed",

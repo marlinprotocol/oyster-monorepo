@@ -23,7 +23,10 @@ impl WalletArgs {
 
         if let Some(ref path) = self.wallet_file {
             return Ok(Some(
-                fs::read_to_string(path).context("Failed to read private key file")?,
+                fs::read_to_string(path)
+                    .context("Failed to read private key file")?
+                    .trim()
+                    .to_string(),
             ));
         }
 
