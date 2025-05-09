@@ -237,13 +237,19 @@ impl LogsProvider for TestLogger {
 #[derive(Clone)]
 pub enum Action {
     Open,
+    OpenV2,
     Close,
     Settle,
+    SettleV2,
     Deposit,
+    DepositV2,
     Withdraw,
+    Withdrawn,
+    SettlementWithdraw,
     ReviseRateInitiated,
     ReviseRateCancelled,
     ReviseRateFinalized,
+    RateRevised,
     MetadataUpdated,
 }
 
@@ -272,6 +278,13 @@ pub fn get_gb_rates() -> Vec<GBRateCard> {
 
 #[cfg(test)]
 pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
+    use crate::market::{
+        JOB_CLOSED, JOB_DEPOSITED, JOB_DEPOSITED_V2, JOB_METADATA_UPDATED, JOB_OPENED,
+        JOB_OPENED_V2, JOB_RATE_REVISED, JOB_REVISE_RATE_CANCELLED, JOB_REVISE_RATE_FINALIZED,
+        JOB_REVISE_RATE_INITIATED, JOB_SETTLED, JOB_SETTLED_V2, JOB_SETTLEMENT_WITHDRAWN,
+        JOB_WITHDRAWN, JOB_WITHDREW,
+    };
+
     let mut log = Log {
         inner: alloy::primitives::Log {
             address: Address::from_str("0x000000000000000000000000000000000000dead").unwrap(),
@@ -283,7 +296,18 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
         Action::Open => {
             log.inner.data = LogData::new_unchecked(
                 vec![
-                    keccak256("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)"),
+                    keccak256(JOB_OPENED),
+                    idx,
+                    compute_address_word("owner"),
+                    compute_address_word("provider"),
+                ],
+                data,
+            );
+        }
+        Action::OpenV2 => {
+            log.inner.data = LogData::new_unchecked(
+                vec![
+                    keccak256(JOB_OPENED_V2),
                     idx,
                     compute_address_word("owner"),
                     compute_address_word("provider"),
@@ -292,20 +316,30 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
             );
         }
         Action::Close => {
-            log.inner.data =
-                LogData::new_unchecked(vec![keccak256("JobClosed(bytes32)"), idx], data);
+            log.inner.data = LogData::new_unchecked(vec![keccak256(JOB_CLOSED), idx], data);
         }
         Action::Settle => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobSettled(bytes32,uint256,uint256)"), idx],
-                data,
-            );
+            log.inner.data = LogData::new_unchecked(vec![keccak256(JOB_SETTLED), idx], data);
+        }
+        Action::SettleV2 => {
+            log.inner.data = LogData::new_unchecked(vec![keccak256(JOB_SETTLED_V2), idx], data);
         }
         Action::Deposit => {
             log.inner.data = LogData::new_unchecked(
                 vec![
-                    keccak256("JobDeposited(bytes32,address,uint256)"),
+                    keccak256(JOB_DEPOSITED),
                     idx,
+                    compute_address_word("depositor"),
+                ],
+                data,
+            );
+        }
+        Action::DepositV2 => {
+            log.inner.data = LogData::new_unchecked(
+                vec![
+                    keccak256(JOB_DEPOSITED_V2),
+                    idx,
+                    compute_address_word("token"),
                     compute_address_word("depositor"),
                 ],
                 data,
@@ -314,36 +348,53 @@ pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
         Action::Withdraw => {
             log.inner.data = LogData::new_unchecked(
                 vec![
-                    keccak256("JobWithdrew(bytes32,address,uint256)"),
+                    keccak256(JOB_WITHDREW),
                     idx,
                     compute_address_word("withdrawer"),
                 ],
                 data,
             );
         }
-        Action::ReviseRateInitiated => {
+        Action::Withdrawn => {
             log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateInitiated(bytes32,uint256)"), idx],
+                vec![
+                    keccak256(JOB_WITHDRAWN),
+                    idx,
+                    compute_address_word("token"),
+                    compute_address_word("withdrawer"),
+                ],
                 data,
             );
+        }
+        Action::SettlementWithdraw => {
+            log.inner.data = LogData::new_unchecked(
+                vec![
+                    keccak256(JOB_SETTLEMENT_WITHDRAWN),
+                    idx,
+                    compute_address_word("token"),
+                    compute_address_word("provider"),
+                ],
+                data,
+            );
+        }
+        Action::ReviseRateInitiated => {
+            log.inner.data =
+                LogData::new_unchecked(vec![keccak256(JOB_REVISE_RATE_INITIATED), idx], data);
         }
         Action::ReviseRateCancelled => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateCancelled(bytes32)"), idx],
-                data,
-            );
+            log.inner.data =
+                LogData::new_unchecked(vec![keccak256(JOB_REVISE_RATE_CANCELLED), idx], data);
         }
         Action::ReviseRateFinalized => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateFinalized(bytes32,uint256)"), idx],
-                data,
-            );
+            log.inner.data =
+                LogData::new_unchecked(vec![keccak256(JOB_REVISE_RATE_FINALIZED), idx], data);
+        }
+        Action::RateRevised => {
+            log.inner.data = LogData::new_unchecked(vec![keccak256(JOB_RATE_REVISED), idx], data);
         }
         Action::MetadataUpdated => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobMetadataUpdated(bytes32,string)"), idx],
-                data,
-            );
+            log.inner.data =
+                LogData::new_unchecked(vec![keccak256(JOB_METADATA_UPDATED), idx], data);
         }
     }
 
