@@ -1,17 +1,64 @@
 {
     "abi": [
 		{
-			"inputs": [
-				{
-					"internalType": "string",
-					"name": "inputData",
-					"type": "string"
-				}
-			],
-			"name": "saveCodeInCallData",
-			"outputs": [],
-			"stateMutability": "nonpayable",
-			"type": "function"
+		  "inputs": [],
+		  "name": "InvalidInitialization",
+		  "type": "error"
+		},
+		{
+		  "inputs": [],
+		  "name": "NotInitializing",
+		  "type": "error"
+		},
+		{
+		  "anonymous": false,
+		  "inputs": [
+			{
+			  "indexed": true,
+			  "internalType": "address",
+			  "name": "owner",
+			  "type": "address"
+			},
+			{
+			  "indexed": false,
+			  "internalType": "bytes",
+			  "name": "metadata",
+			  "type": "bytes"
+			}
+		  ],
+		  "name": "CodeCreated",
+		  "type": "event"
+		},
+		{
+		  "anonymous": false,
+		  "inputs": [
+			{
+			  "indexed": false,
+			  "internalType": "uint64",
+			  "name": "version",
+			  "type": "uint64"
+			}
+		  ],
+		  "name": "Initialized",
+		  "type": "event"
+		},
+		{
+		  "inputs": [
+			{
+			  "internalType": "string",
+			  "name": "inputData",
+			  "type": "string"
+			},
+			{
+			  "internalType": "bytes",
+			  "name": "metadata",
+			  "type": "bytes"
+			}
+		  ],
+		  "name": "saveCodeInCallData",
+		  "outputs": [],
+		  "stateMutability": "nonpayable",
+		  "type": "function"
 		}
-	]
+	  ]
 }

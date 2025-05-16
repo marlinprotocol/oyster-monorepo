@@ -5,6 +5,7 @@ use alloy::sol;
 use anyhow::{Context, Result};
 use clap::Args;
 use minify_js::{minify, Session, TopLevelMode};
+use tokio::fs;
 use tracing::info;
 
 sol!(
@@ -34,6 +35,16 @@ pub async fn run_deploy(args: DeployArgs) -> Result<()> {
     if !worker_path.exists() {
         anyhow::bail!("worker.js not found in current directory");
     }
+
+    // Check if metadata.json exists in current directory
+    let metadata_path = std::env::current_dir()?.join("metadata.json");
+    if !metadata_path.exists() {
+        anyhow::bail!("metadata.json not found in current directory");
+    }
+
+    let metadata = fs::read_to_string(metadata_path)
+        .await
+        .context("Failed to read input file")?;
 
     // Read worker.js content
     let worker_code = tokio::fs::read_to_string(&worker_path)
@@ -80,7 +91,7 @@ pub async fn run_deploy(args: DeployArgs) -> Result<()> {
 
     // Call saveCodeInCallData with code
     let tx = contract
-        .saveCodeInCallData(final_code)
+        .saveCodeInCallData(final_code, metadata.into())
         .send()
         .await
         .context("Failed to send transaction")?;

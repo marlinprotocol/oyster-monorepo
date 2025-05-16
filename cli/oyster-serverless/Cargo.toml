@@ -7,12 +7,14 @@ license = "Apache-2.0"
 [dependencies]
 alloy = { version = "0.9.1", features = ["full"] }
 anyhow = "1.0.72"
+chrono = "0.4.41"
 clap = { version = "4.2.7", features = ["derive"] }
 ctrlc = "3.4"
 inquire = "0.6"
 minify-js = "0.5.6"
 openssl = { version = "0.10", features = ["vendored"] }
 portpicker = "0.1.1"
+prettytable-rs = "0.10"
 reqwest = { version = "0.12", features = ["multipart", "json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

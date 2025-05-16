@@ -41,6 +41,8 @@ pub enum SubscriptionCommands {
     Terminate(TerminateArgs),
     /// Refund deposits for a terminated subscription
     RefundDeposits(RefundDepositsArgs),
+    /// List subscriptions for an address
+    List(ListSubscriptionArgs),
 }
 
 #[derive(Args)]
@@ -136,4 +138,15 @@ pub struct RefundDepositsArgs {
     /// Subscription transaction hash to refund deposits for
     #[arg(short, long, required = true)]
     pub subscription_transaction_hash: String,
+}
+
+#[derive(Args)]
+pub struct ListSubscriptionArgs {
+    /// Address to list subscriptions for
+    #[arg(short, long, required = true)]
+    pub address: String,
+
+    /// Whether to show only completed subscriptions
+    #[arg(long, default_value = "false")]
+    pub completed: bool,
 }

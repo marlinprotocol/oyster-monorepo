@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use inquire::{Select, Text};
 use reqwest;
+use serde_json::json;
 use std::fs;
 use std::io::Write;
 use tracing::info;
@@ -89,6 +90,26 @@ pub async fn run_new(args: NewArgs) -> Result<()> {
     };
 
     download_template(&template_url, &project_path).await?;
+
+    // Get metadata name and description
+    let metadata_name = Text::new("Enter a name to use as a metadata identifier:")
+        .with_default(&args.name)
+        .prompt()
+        .context("Failed to get project name")?;
+
+    let metadata_description = Text::new("Enter a project description for metadata:")
+        .prompt()
+        .context("Failed to get project description")?;
+
+    // Create metadata.json
+    let metadata = json!({
+        "name": metadata_name,
+        "description": metadata_description
+    });
+
+    let metadata_path = project_path.join("metadata.json");
+    fs::write(&metadata_path, serde_json::to_string(&metadata)?)?;
+
     info!("Created new project at {}", project_path.display());
     info!(
         "All subsequent steps should be performed inside the newly created {} directory.",

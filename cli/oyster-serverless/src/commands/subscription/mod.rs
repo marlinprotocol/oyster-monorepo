@@ -1,5 +1,6 @@
 mod create;
 mod fetch;
+mod list;
 mod refund;
 mod terminate;
 mod types;
@@ -22,5 +23,6 @@ pub async fn run_subscription(args: SubscriptionArgs) -> Result<()> {
         SubscriptionCommands::RefundDeposits(refund_args) => {
             refund::refund_deposits(refund_args).await
         }
+        SubscriptionCommands::List(list_args) => list::list_subscriptions(list_args).await,
     }
 }
