@@ -16,6 +16,25 @@ sol!(
     "src/abis/Token.json"
 );
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum Status {
+    Success,
+    Pending,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Status::Success => write!(f, "success"),
+            Status::Pending => write!(f, "pending"),
+            Status::Failed => write!(f, "failed"),
+            Status::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct JobArgs {
     #[command(subcommand)]
@@ -30,6 +49,8 @@ pub enum JobCommands {
     FetchResponse(FetchResponseArgs),
     /// Cancel a job
     Cancel(CancelArgs),
+    /// List pending jobs for an address
+    List(ListArgs),
 }
 
 #[derive(Args)]
@@ -85,4 +106,15 @@ pub struct CancelArgs {
     /// Job ID to cancel (transaction hash of job creation)
     #[arg(short, long, required = true)]
     pub job_transaction_hash: String,
+}
+
+#[derive(Args)]
+pub struct ListArgs {
+    /// Address to list jobs for
+    #[arg(short, long, required = true)]
+    pub address: String,
+
+    /// Status of jobs to list
+    #[arg(short, long, default_value = "pending")]
+    pub status: Status,
 }
