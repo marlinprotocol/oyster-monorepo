@@ -3,7 +3,7 @@ CREATE TABLE providers (
   cp text NOT NULL,
   is_active BOOL NOT NULL,
   tx_hash CHAR(66) NOT NULL,
-  block_number BIGINT NOT NULL,
+  block_number BIGINT NOT NULL
 );
 
 CREATE INDEX providers_is_active_idx ON providers (is_active);

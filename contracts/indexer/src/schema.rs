@@ -9,13 +9,11 @@ diesel::table! {
         owner -> Bpchar,
         #[max_length = 42]
         provider -> Bpchar,
-        rate -> Nullable<Numeric>,
-        balance -> Nullable<Numeric>,
-        last_settled -> Nullable<Timestamp>,
-        created -> Nullable<Timestamp>,
+        rate -> Numeric,
+        balance -> Numeric,
+        last_settled -> Timestamp,
+        created -> Timestamp,
         is_closed -> Bool,
-        usdc_balance -> Nullable<Numeric>,
-        credits_balance -> Nullable<Numeric>,
     }
 }
 
@@ -55,8 +53,7 @@ diesel::table! {
         #[max_length = 66]
         job -> Bpchar,
         amount -> Numeric,
-        tx_type -> Varchar,
-        is_usdc -> Nullable<Bool>,
+        is_deposit -> Bool,
     }
 }
 
