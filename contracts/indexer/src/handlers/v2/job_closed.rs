@@ -1,9 +1,11 @@
 use crate::schema::jobs;
 use alloy::hex::ToHexExt;
+use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::Context;
 use anyhow::Result;
+use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -11,20 +13,23 @@ use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_metadata_updated(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
-    let metadata = String::abi_decode(&log.data().data, true)?;
+    let timestamp = U256::abi_decode(&log.data().data, true)?;
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
+    //
+    // do we not have to delete outstanding revise rate requests?
+    // no, it is handled by LockDeleted
 
-    info!(id, ?metadata, "updating job metadata");
+    info!(id, ?timestamp, "closing job");
 
     // target sql:
     // UPDATE jobs
-    // SET metadata = "<metadata>"
+    // SET is_closed = true
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -33,9 +38,15 @@ pub fn handle_job_metadata_updated(conn: &mut PgConnection, log: Log) -> Result<
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::metadata.eq(&metadata))
+        .set((
+            jobs::is_closed.eq(true),
+            jobs::rate.eq(BigDecimal::from(0)),
+            jobs::balance.eq(BigDecimal::from(0)),
+            jobs::usdc_balance.eq(BigDecimal::from(0)),
+            jobs::credits_balance.eq(BigDecimal::from(0)),
+        ))
         .execute(conn)
-        .context("failed to update job")?;
+        .context("failed to close job")?;
 
     if count != 1 {
         // !!! should never happen
@@ -45,7 +56,7 @@ pub fn handle_job_metadata_updated(conn: &mut PgConnection, log: Log) -> Result<
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    info!(id, ?metadata, "updated job metadata");
+    info!(id, "closed job");
 
     Ok(())
 }
@@ -58,14 +69,14 @@ mod tests {
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::v2::handle_log_v2;
     use crate::schema::providers;
 
     use super::*;
 
     #[test]
-    fn test_job_metadata_update() -> Result<()> {
+    fn test_close_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -94,6 +105,8 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
+                jobs::credits_balance.eq(BigDecimal::from(1)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
@@ -114,6 +127,8 @@ mod tests {
                 jobs::metadata.eq("some metadata"),
                 jobs::rate.eq(BigDecimal::from(1)),
                 jobs::balance.eq(BigDecimal::from(20)),
+                jobs::usdc_balance.eq(BigDecimal::from(15)),
+                jobs::credits_balance.eq(BigDecimal::from(5)),
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
@@ -143,26 +158,35 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(15)),
+                    Some(BigDecimal::from(5)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(1)),
                 )
             ])
         );
 
+        let close_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let close_now = U256::from(close_timestamp);
+        // log under test
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
             block_number: Some(42),
@@ -175,18 +199,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobMetadataUpdated(bytes32,string)").into(),
+                        event!("JobClosed(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
-                    "some random metadata".abi_encode().into(),
+                    close_now.abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        handle_log_v2(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -208,25 +232,29 @@ mod tests {
             Ok(vec![
                 (
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    "some random metadata".to_owned(),
+                    "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
-                    false,
+                    Some(BigDecimal::from(0)),
+                    Some(BigDecimal::from(0)),
+                    Some(creation_now),
+                    Some(creation_now),
+                    true,
+                    Some(BigDecimal::from(0)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(1)),
                 )
             ])
         );
@@ -235,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_job_metadata_update_for_non_existent_job() -> Result<()> {
+    fn test_close_non_existent_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -264,6 +292,8 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
+                jobs::credits_balance.eq(BigDecimal::from(1)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
@@ -292,14 +322,21 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(20)),
+                Some(BigDecimal::from(1)),
             )])
         );
 
+        let close_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let close_now = U256::from(close_timestamp);
+        // log under test
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
             block_number: Some(42),
@@ -312,18 +349,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobMetadataUpdated(bytes32,string)").into(),
+                        event!("JobClosed(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
-                    "some random metadata".abi_encode().into(),
+                    close_now.abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        let res = handle_log_v2(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -348,11 +385,13 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(20)),
+                Some(BigDecimal::from(1)),
             )])
         );
 
@@ -360,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn test_job_metadata_update_for_closed_job() -> Result<()> {
+    fn test_close_closed_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -389,6 +428,8 @@ mod tests {
                 jobs::metadata.eq("some other metadata"),
                 jobs::rate.eq(BigDecimal::from(3)),
                 jobs::balance.eq(BigDecimal::from(21)),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
+                jobs::credits_balance.eq(BigDecimal::from(1)),
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
@@ -409,6 +450,8 @@ mod tests {
                 jobs::metadata.eq("some metadata"),
                 jobs::rate.eq(BigDecimal::from(1)),
                 jobs::balance.eq(BigDecimal::from(20)),
+                jobs::usdc_balance.eq(BigDecimal::from(15)),
+                jobs::credits_balance.eq(BigDecimal::from(5)),
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
@@ -438,26 +481,35 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(15)),
+                    Some(BigDecimal::from(5)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(1)),
                 )
             ])
         );
 
+        let close_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let close_now = U256::from(close_timestamp);
+        // log under test
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
             block_number: Some(42),
@@ -470,18 +522,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobMetadataUpdated(bytes32,string)").into(),
+                        event!("JobClosed(bytes32,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                     ],
-                    "some random metadata".abi_encode().into(),
+                    close_now.abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        // use handle_log_v2 instead of concrete handler to test dispatch
+        let res = handle_log_v2(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -507,22 +559,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(15)),
+                    Some(BigDecimal::from(5)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(1)),
                 )
             ])
         );
