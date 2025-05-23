@@ -24,11 +24,11 @@ use tracing::{error, info, info_span, Instrument};
 // IMPORTANT: do not import SystemTime, use a SystemContext
 
 // Trait to encapsulate behaviour that should be simulated in tests
-trait SystemContext {
+pub trait SystemContext {
     fn now_timestamp(&self) -> Duration;
 }
 
-struct RealSystemContext {}
+pub struct RealSystemContext {}
 
 impl SystemContext for RealSystemContext {
     fn now_timestamp(&self) -> Duration {

@@ -1,19 +1,22 @@
 use std::fs;
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::transports::ws::WsConnect;
-use anyhow::Context;
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use clap::Parser;
+use solana_sdk::pubkey::Pubkey;
 use tracing::Instrument;
 use tracing::{error, info, info_span};
 use tracing_subscriber::EnvFilter;
 
 use cp::aws;
 use cp::market;
+use cp::market_solana;
 use cp::server;
 
 #[derive(Parser)]
@@ -39,6 +42,10 @@ struct Cli {
     /// RPC url
     #[clap(long, value_parser)]
     rpc: String,
+
+    /// HTTP RPC url
+    #[clap(long, value_parser)]
+    http_rpc: Option<String>,
 
     /// Rates location
     #[clap(long, value_parser)]
@@ -131,6 +138,7 @@ async fn run() -> Result<()> {
     info!(?cli.profile);
     info!(?cli.key_name);
     info!(?cli.rpc);
+    info!(?cli.http_rpc);
     info!(?cli.rates);
     info!(?cli.bandwidth);
     info!(?cli.contract);
@@ -213,63 +221,112 @@ async fn run() -> Result<()> {
     let address_whitelist: &'static [String] = Box::leak(address_whitelist_vec.into_boxed_slice());
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
-    let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
-        .await
-        .context("Failed to fetch chain_id")?;
 
-    // Initialize job registry for terminated jobs
-    let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
+    if let Ok(program_id) = Pubkey::from_str(&cli.contract) {
+        let job_id = market::JobId {
+            id: B256::ZERO.encode_hex_with_prefix(),
+            operator: cli.provider.clone(),
+            contract: cli.contract.clone(),
+            chain: String::new(),
+        };
 
-    // Start periodic job registry persistence task
-    let registry_clone = job_registry.clone();
-    tokio::spawn(async move {
-        registry_clone.run_periodic_save(10).await; // Save every 10 seconds
-    });
+        tokio::spawn(
+            server::serve(
+                aws.clone(),
+                regions,
+                compute_rates,
+                bandwidth_rates,
+                SocketAddr::from(([0, 0, 0, 0], cli.port)),
+                job_id.clone(),
+            )
+            .instrument(info_span!("server")),
+        );
 
-    let job_id = market::JobId {
-        id: B256::ZERO.encode_hex_with_prefix(),
-        operator: cli.provider.clone(),
-        contract: cli.contract.clone(),
-        chain,
-    };
+        // Initialize job registry for terminated jobs
+        let job_registry =
+            market_solana::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
 
-    tokio::spawn(
-        server::serve(
-            aws.clone(),
+        // Start periodic job registry persistence task
+        let registry_clone = job_registry.clone();
+        tokio::spawn(async move {
+            registry_clone.run_periodic_save(10).await; // Save every 10 seconds
+        });
+
+        market_solana::run(
+            aws,
+            program_id,
+            Pubkey::from_str(&cli.provider)?,
+            cli.http_rpc.ok_or(anyhow!("Missing http rpc url"))?,
+            cli.rpc,
             regions,
             compute_rates,
             bandwidth_rates,
-            SocketAddr::from(([0, 0, 0, 0], cli.port)),
-            job_id.clone(),
+            address_whitelist,
+            address_blacklist,
+            job_id,
+            job_registry,
         )
-        .instrument(info_span!("server")),
-    );
+        .instrument(info_span!("main"))
+        .await;
+    } else {
+        let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
+            .await
+            .context("Failed to fetch chain_id")?;
 
-    let ethers = market::EthersProvider {
-        contract: cli
-            .contract
-            .parse::<Address>()
-            .context("failed to parse contract address")?,
-        provider: cli
-            .provider
-            .parse::<Address>()
-            .context("failed to parse provider address")?,
-    };
+        // Initialize job registry for terminated jobs
+        let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
 
-    market::run(
-        aws,
-        ethers,
-        cli.rpc,
-        regions,
-        compute_rates,
-        bandwidth_rates,
-        address_whitelist,
-        address_blacklist,
-        job_id,
-        job_registry,
-    )
-    .instrument(info_span!("main"))
-    .await;
+        // Start periodic job registry persistence task
+        let registry_clone = job_registry.clone();
+        tokio::spawn(async move {
+            registry_clone.run_periodic_save(10).await; // Save every 10 seconds
+        });
+
+        let job_id = market::JobId {
+            id: B256::ZERO.encode_hex_with_prefix(),
+            operator: cli.provider.clone(),
+            contract: cli.contract.clone(),
+            chain,
+        };
+
+        tokio::spawn(
+            server::serve(
+                aws.clone(),
+                regions,
+                compute_rates,
+                bandwidth_rates,
+                SocketAddr::from(([0, 0, 0, 0], cli.port)),
+                job_id.clone(),
+            )
+            .instrument(info_span!("server")),
+        );
+
+        let ethers = market::EthersProvider {
+            contract: cli
+                .contract
+                .parse::<Address>()
+                .context("failed to parse contract address")?,
+            provider: cli
+                .provider
+                .parse::<Address>()
+                .context("failed to parse provider address")?,
+        };
+
+        market::run(
+            aws,
+            ethers,
+            cli.rpc,
+            regions,
+            compute_rates,
+            bandwidth_rates,
+            address_whitelist,
+            address_blacklist,
+            job_id,
+            job_registry,
+        )
+        .instrument(info_span!("main"))
+        .await;
+    }
 
     Ok(())
 }
