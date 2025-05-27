@@ -222,6 +222,7 @@ async fn run() -> Result<()> {
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
 
+    // Check if it's the solana market and handle accordingly
     if let Ok(program_id) = Pubkey::from_str(&cli.contract) {
         let job_id = market::JobId {
             id: B256::ZERO.encode_hex_with_prefix(),

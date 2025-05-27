@@ -214,7 +214,7 @@ pub async fn run(
         };
         let cutoff = cutoff.unwrap();
 
-        // cut off stream at cutoff block, extract data from items
+        // cut off stream at cutoff slot
         let stream = stream.filter_map(move |item| {
             if item.context.slot > cutoff {
                 Some(item)
@@ -232,7 +232,7 @@ pub async fn run(
         };
         let old_logs = tokio_stream::iter(old_logs.unwrap());
 
-        // stream
+        // market stream
         let stream = old_logs.chain(stream);
 
         let job_stream = std::pin::pin!(stream);
@@ -255,6 +255,7 @@ pub async fn run(
     }
 }
 
+// Get historical logs for the market program
 pub async fn get_logs_for_program_between_slots(
     client: &RpcClient,
     program_id: Pubkey,
@@ -283,6 +284,8 @@ pub async fn get_logs_for_program_between_slots(
             break;
         }
 
+        let batch_len = batch.len();
+
         for signature_info in batch {
             let signature =
                 Signature::from_str(&signature_info.signature).context("invalid signature")?;
@@ -297,7 +300,7 @@ pub async fn get_logs_for_program_between_slots(
                 continue;
             }
             if slot < last_slot {
-                return Ok(collected_logs);
+                break;
             }
 
             collected_logs.push(Response {
@@ -316,9 +319,14 @@ pub async fn get_logs_for_program_between_slots(
                 },
             });
         }
+
+        if batch_len < 1000 {
+            break;
+        }
     }
 
     collected_logs.reverse();
+
     Ok(collected_logs)
 }
 
@@ -344,6 +352,7 @@ async fn run_once(
                 continue;
             };
 
+            // handle event logs accordingly
             match job_event {
                 JobEvent::Opened(event) => {
                     if event.provider != provider {
@@ -1115,11 +1124,6 @@ async fn job_manager(
     }
 
     job_registry.add_terminated_job(state.job_id.id.clone());
-    job_registry
-        .active_jobs
-        .lock()
-        .unwrap()
-        .remove(&state.job_id.id);
 
     job_result
 }
