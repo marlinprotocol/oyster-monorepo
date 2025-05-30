@@ -88,6 +88,13 @@ pub struct JobSettlementWithdrawn {
     pub amount: u64,
 }
 
+#[event]
+#[derive(Debug)]
+pub struct JobMetadataUpdated {
+    pub job: Pubkey,
+    pub new_metadata: String,
+}
+
 #[derive(Debug)]
 pub enum JobEvent {
     Opened(JobOpened),
@@ -97,6 +104,7 @@ pub enum JobEvent {
     Withdrew(JobWithdrew),
     RateRevised(JobRateRevised),
     SettlementWithdrawn(JobSettlementWithdrawn),
+    MetadataUpdated(JobMetadataUpdated),
 }
 
 impl JobEvent {
@@ -133,6 +141,11 @@ impl JobEvent {
                 JobSettlementWithdrawn::DISCRIMINATOR => {
                     return Some(JobEvent::SettlementWithdrawn(
                         JobSettlementWithdrawn::try_from_slice(data).ok()?,
+                    ))
+                }
+                JobMetadataUpdated::DISCRIMINATOR => {
+                    return Some(JobEvent::MetadataUpdated(
+                        JobMetadataUpdated::try_from_slice(data).ok()?,
                     ))
                 }
                 _ => return None,
@@ -468,6 +481,16 @@ async fn run_once(
                         .get(&event.job.to_string())
                     {
                         let _ = tx.send(JobEvent::SettlementWithdrawn(event)).await;
+                    }
+                }
+                JobEvent::MetadataUpdated(event) => {
+                    if let Some(tx) = job_registry
+                        .active_jobs
+                        .lock()
+                        .unwrap()
+                        .get(&event.job.to_string())
+                    {
+                        let _ = tx.send(JobEvent::MetadataUpdated(event)).await;
                     }
                 }
             }
@@ -943,6 +966,84 @@ impl<'a> JobState<'a> {
 
                 return JobResult::Success;
             }
+            JobEvent::MetadataUpdated(log) => {
+                // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
+                // if this is changed in the future
+                info!(log.new_metadata, "JOB_METADATA_UPDATED");
+
+                let Ok(metadata) = serde_json::from_str::<Value>(&log.new_metadata)
+                    .inspect_err(|err| error!(?err, "Error reading new metadata"))
+                else {
+                    return JobResult::Failed;
+                };
+
+                let Some(instance) = metadata["instance"].as_str() else {
+                    error!("Instance type not set");
+                    return JobResult::Failed;
+                };
+                if self.instance_type != instance {
+                    error!("Instance type change not allowed");
+                    return JobResult::Failed;
+                }
+
+                let Some(region) = metadata["region"].as_str() else {
+                    error!("Job region not set");
+                    return JobResult::Failed;
+                };
+                if self.region != region {
+                    error!("Region change not allowed");
+                    return JobResult::Failed;
+                }
+
+                let Some(memory) = metadata["memory"].as_i64() else {
+                    error!("Memory not set");
+                    return JobResult::Failed;
+                };
+                if self.req_mem != memory {
+                    error!("Memory change not allowed");
+                    return JobResult::Failed;
+                }
+
+                let Some(vcpu) = metadata["vcpu"].as_i64() else {
+                    error!("vcpu not set");
+                    return JobResult::Failed;
+                };
+                if self.req_vcpus != vcpu.try_into().unwrap_or(2) {
+                    error!("vcpu change not allowed");
+                    return JobResult::Failed;
+                }
+
+                let family = metadata["family"].as_str();
+                if family.is_some() && self.family != family.unwrap() {
+                    error!("Family change not allowed");
+                    return JobResult::Failed;
+                }
+
+                let debug = metadata["debug"].as_bool().unwrap_or(false);
+                self.debug = debug;
+
+                let Some(url) = metadata["url"].as_str() else {
+                    error!("EIF url not found! Exiting job");
+                    return JobResult::Failed;
+                };
+
+                self.eif_url = url.to_string();
+
+                let Ok(init_params) =
+                    BASE64_STANDARD.decode(metadata["init_params"].as_str().unwrap_or(""))
+                else {
+                    error!("failed to decode init params");
+                    return JobResult::Failed;
+                };
+                self.init_params = init_params.into_boxed_slice();
+
+                // schedule change immediately if not already scheduled
+                if !self.infra_change_scheduled {
+                    self.schedule_launch(0);
+                }
+
+                return JobResult::Success;
+            }
         }
     }
 }
@@ -1139,7 +1240,8 @@ mod tests {
     use tokio::time::{sleep, Duration, Instant};
 
     use crate::market_solana::{
-        JobClosed, JobDeposited, JobOpened, JobRateRevised, JobSettled, JobWithdrew,
+        JobClosed, JobDeposited, JobMetadataUpdated, JobOpened, JobRateRevised, JobSettled,
+        JobWithdrew,
     };
     use crate::test::{self, compute_address_word, compute_instance_id, TestAws, TestAwsOutcome};
     use crate::{market, market_solana};
@@ -2403,5 +2505,711 @@ mod tests {
             &address_whitelist,
             &address_blacklist
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_eif_update_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (100, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/updated-enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_debug_update_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"debug\":true}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (100, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_other_metadata_update_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (100, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.large\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(100),
+                job: job_id.to_string(),
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_init_params_update_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (100, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"init_params\":\"c29tZSBwYXJhbXM=\"}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: b"some params".to_vec().into_boxed_slice(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_metadata_update_event_with_no_updates_before_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (100, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_eif_update_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (400, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/updated-enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_debug_update_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"debug\":true}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (400, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: true,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_other_metadata_update_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (400, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/updated-enclave.eif\",\"instance\":\"c6a.large\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_init_params_update_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (400, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2,\"init_params\":\"c29tZSBwYXJhbXM=\"}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: b"some params".to_vec().into_boxed_slice(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_metadata_update_event_with_no_updates_after_spin_up() {
+        let start_time = Instant::now();
+        let job_id = Pubkey::new_unique();
+
+        let logs = vec![
+            (0, JobEvent::Opened(JobOpened {
+                job: job_id,
+                metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+                owner: Pubkey::new_from_array(compute_address_word("owner").0), 
+                provider: Pubkey::new_from_array(compute_address_word("provider").0),
+                rate: 31000000000000u64,
+                balance: 31000u64,
+                timestamp: 0
+            })),
+            (400, JobEvent::MetadataUpdated(JobMetadataUpdated {
+                job: job_id,
+                new_metadata: "{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),
+            })),
+            (505, JobEvent::Closed(JobClosed {
+                job: job_id,
+            })),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.to_string(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.to_string(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(505),
+                    job: job_id.to_string(),
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
     }
 }
