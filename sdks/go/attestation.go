@@ -108,7 +108,7 @@ func verify(data []byte, pcrs map[uint]string, minCpus uint64, minMem uint64, ma
 
 	// Verify the signature using the public_key (`*rsa.PublicKey`, `*ecdsa.PublicKey`, and `ed25519.PublicKey` are accepted)
 	if msg.Verify(nil, verifier) != nil {
-		return nil, errors.New("cose signature verfication failed")
+		return nil, errors.New("cose signature verification failed")
 	}
 
 	// Validating certificate chain
