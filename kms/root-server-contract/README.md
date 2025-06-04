@@ -91,7 +91,7 @@ interface IKMSVerifiable {
 
 ## Public endpoints
 
-Unlike the scallop endpoints, these endpoints are availble to any caller. They are mainly intended to fetch public keys for derivation paths in advance before even running an enclave.
+Unlike the scallop endpoints, these endpoints are available to any caller. They are mainly intended to fetch public keys for derivation paths in advance before even running an enclave.
 
 ### Signatures
 
