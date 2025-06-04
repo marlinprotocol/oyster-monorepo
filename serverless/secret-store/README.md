@@ -48,7 +48,7 @@ Supported outputs:
 
 <b>Signer file setup</b>
 
-A signer secret is required to run the secret store applicaton. It'll also be the identity of the store enclave on chain i.e, the enclave address will be derived from the corresponding public key. The signer must be a `secp256k1` binary secret.
+A signer secret is required to run the secret store application. It'll also be the identity of the store enclave on chain i.e, the enclave address will be derived from the corresponding public key. The signer must be a `secp256k1` binary secret.
 The <a href="https://github.com/marlinprotocol/oyster-monorepo/tree/master/initialization/keygen">Keygen repo</a> can be used to generate this.
 
 <b> RPC and smart contracts configuration</b>
