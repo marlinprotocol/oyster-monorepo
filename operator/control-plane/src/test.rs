@@ -208,11 +208,11 @@ impl LogsProvider for TestLogger {
     async fn new_jobs<'a>(
         &'a self,
         _client: &'a impl Provider<PubSubFrontend>,
-    ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
+    ) -> Result<impl StreamExt<Item = (B256, bool, u64)> + 'a> {
         let logs: Vec<Log> = Vec::new();
         Ok(tokio_stream::iter(
             logs.iter()
-                .map(|job| (job.topics()[1], false))
+                .map(|job| (job.topics()[1], false, 0))
                 .collect::<Vec<_>>(),
         )
         .throttle(Duration::from_secs(2)))
@@ -222,6 +222,7 @@ impl LogsProvider for TestLogger {
         &'a self,
         _client: &'a impl Provider<PubSubFrontend>,
         job: B256,
+        _start_block: u64,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
         let logs: Vec<Log> = Vec::new();
         Ok(tokio_stream::iter(

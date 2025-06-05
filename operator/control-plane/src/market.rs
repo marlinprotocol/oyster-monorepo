@@ -129,12 +129,13 @@ pub trait LogsProvider {
     fn new_jobs<'a>(
         &'a self,
         client: &'a impl Provider<PubSubFrontend>,
-    ) -> impl Future<Output = Result<impl StreamExt<Item = (B256, bool)> + 'a>>;
+    ) -> impl Future<Output = Result<impl StreamExt<Item = (B256, bool, u64)> + 'a>>;
 
     fn job_logs<'a>(
         &'a self,
         client: &'a impl Provider<PubSubFrontend>,
         job: B256,
+        start_block: u64,
     ) -> impl Future<Output = Result<impl StreamExt<Item = Log> + Send + 'a>> + Send;
 }
 
@@ -148,7 +149,7 @@ impl LogsProvider for EthersProvider {
     async fn new_jobs<'a>(
         &'a self,
         client: &'a impl Provider<PubSubFrontend>,
-    ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
+    ) -> Result<impl StreamExt<Item = (B256, bool, u64)> + 'a> {
         new_jobs(client, self.contract, self.provider).await
     }
 
@@ -156,8 +157,9 @@ impl LogsProvider for EthersProvider {
         &'a self,
         client: &'a impl Provider<PubSubFrontend>,
         job: B256,
+        start_block: u64,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
-        job_logs(client, self.contract, job).await
+        job_logs(client, self.contract, job, start_block).await
     }
 }
 
@@ -251,7 +253,7 @@ pub async fn run(
 }
 
 async fn run_once(
-    mut job_stream: impl StreamExt<Item = (B256, bool)> + Unpin,
+    mut job_stream: impl StreamExt<Item = (B256, bool, u64)> + Unpin,
     infra_provider: impl InfraProvider + Send + Sync + Clone + 'static,
     logs_provider: impl LogsProvider + Send + Sync + Clone + 'static,
     url: String,
@@ -265,7 +267,7 @@ async fn run_once(
     job_registry: JobRegistry,
 ) -> usize {
     let mut job_count = 0;
-    while let Some((job, removed)) = job_stream.next().await {
+    while let Some((job, removed, start_block)) = job_stream.next().await {
         info!(?job, removed, "New job");
 
         let job_registry = job_registry.clone();
@@ -294,6 +296,7 @@ async fn run_once(
                 address_whitelist,
                 address_blacklist,
                 job_registry,
+                start_block,
             )
             .instrument(info_span!(parent: None, "job", ?job)),
         );
@@ -309,7 +312,7 @@ async fn new_jobs(
     client: &impl Provider<PubSubFrontend>,
     address: Address,
     provider: Address,
-) -> Result<impl StreamExt<Item = (B256, bool)> + '_> {
+) -> Result<impl StreamExt<Item = (B256, bool, u64)> + '_> {
     let event_filter = Filter::new()
         .address(address)
         .event_signature(vec![keccak256(
@@ -360,7 +363,13 @@ async fn new_jobs(
         .await
         .context("failed to subscribe to new jobs")?
         .into_stream()
-        .map(move |item| (item.topics()[1], item.removed));
+        .map(move |item| {
+            (
+                item.topics()[1],
+                item.removed,
+                item.block_number.unwrap_or(0),
+            )
+        });
 
     Ok(stream)
 }
@@ -378,6 +387,7 @@ async fn job_manager(
     address_whitelist: &[String],
     address_blacklist: &[String],
     job_registry: JobRegistry,
+    start_block: u64,
 ) {
     let mut backoff = 1;
     let job = job_id.id.clone();
@@ -407,7 +417,7 @@ async fn job_manager(
         let client = res.unwrap();
         let res = logs_provider
             // TODO: Bad unwrap?
-            .job_logs(&client, job.parse().unwrap())
+            .job_logs(&client, job.parse().unwrap(), start_block)
             .await;
         if let Err(err) = res {
             error!(?err, "Subscribe error");
@@ -1266,6 +1276,7 @@ async fn job_logs(
     client: &impl Provider<PubSubFrontend>,
     contract: Address,
     job: B256,
+    start_block: u64,
 ) -> Result<impl StreamExt<Item = Log> + Send + '_> {
     let event_filter = Filter::new()
         .address(contract)
@@ -1282,49 +1293,43 @@ async fn job_logs(
         ])
         .topic1(job);
 
-    // // ordering is important to prevent race conditions while getting all logs but
-    // // it still relies on the RPC being consistent between registering the subscription
-    // // and querying the cutoff block number
-    //
-    // // register subscription
-    // let stream = client
-    //     .subscribe_logs(&event_filter.clone().select(0..))
-    //     .await
-    //     .context("failed to subscribe to job logs")?
-    //     .into_stream();
-    //
-    // // get cutoff block number
-    // let cutoff = client
-    //     .get_block_number()
-    //     .await
-    //     .context("failed to get cutoff block")?;
-    //
-    // // cut off stream at cutoff block
-    // let stream = stream.filter_map(move |item| {
-    //     if item.block_number.unwrap() > cutoff {
-    //         Some(item)
-    //     } else {
-    //         None
-    //     }
-    // });
-    //
-    // // get logs up to cutoff
-    // let old_logs = client
-    //     .get_logs(&event_filter.select(0..=cutoff))
-    //     .await
-    //     .context("failed to query old logs")?;
-    //
-    // // convert to a stream, extract data from items
-    // let old_logs = tokio_stream::iter(old_logs);
-    //
-    // // stream
-    // let stream = old_logs.chain(stream);
+    // ordering is important to prevent race conditions while getting all logs but
+    // it still relies on the RPC being consistent between registering the subscription
+    // and querying the cutoff block number
 
+    // register subscription
     let stream = client
-        .subscribe_logs(&event_filter.clone().select(0..))
+        .subscribe_logs(&event_filter.clone().select(start_block..))
         .await
         .context("failed to subscribe to job logs")?
         .into_stream();
+
+    // get cutoff block number
+    let cutoff = client
+        .get_block_number()
+        .await
+        .context("failed to get cutoff block")?;
+
+    // cut off stream at cutoff block
+    let stream = stream.filter_map(move |item| {
+        if item.block_number.unwrap() > cutoff {
+            Some(item)
+        } else {
+            None
+        }
+    });
+
+    // get logs up to cutoff
+    let old_logs = client
+        .get_logs(&event_filter.select(start_block..=cutoff))
+        .await
+        .context("failed to query old logs")?;
+
+    // convert to a stream, extract data from items
+    let old_logs = tokio_stream::iter(old_logs);
+
+    // stream
+    let stream = old_logs.chain(stream);
 
     Ok(stream)
 }
