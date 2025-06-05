@@ -317,43 +317,50 @@ async fn new_jobs(
         )])
         .topic3(provider.into_word());
 
-    // ordering is important to prevent race conditions while getting all logs but
-    // it still relies on the RPC being consistent between registering the subscription
-    // and querying the cutoff block number
+    // // ordering is important to prevent race conditions while getting all logs but
+    // // it still relies on the RPC being consistent between registering the subscription
+    // // and querying the cutoff block number
+    //
+    // // register subscription
+    // let stream = client
+    //     .subscribe_logs(&event_filter.clone().select(0..))
+    //     .await
+    //     .context("failed to subscribe to new jobs")?
+    //     .into_stream();
+    //
+    // // get cutoff block number
+    // let cutoff = client
+    //     .get_block_number()
+    //     .await
+    //     .context("failed to get cutoff block")?;
+    //
+    // // cut off stream at cutoff block, extract data from items
+    // let stream = stream.filter_map(move |item| {
+    //     if item.block_number.unwrap() > cutoff {
+    //         Some((item.topics()[1], item.removed))
+    //     } else {
+    //         None
+    //     }
+    // });
+    //
+    // // get logs up to cutoff
+    // let old_logs = client
+    //     .get_logs(&event_filter.select(0..=cutoff))
+    //     .await
+    //     .context("failed to query old logs")?;
+    //
+    // // convert to a stream, extract data from items
+    // let old_logs = tokio_stream::iter(old_logs).map(|item| (item.topics()[1], item.removed));
+    //
+    // // stream
+    // let stream = old_logs.chain(stream);
 
-    // register subscription
     let stream = client
         .subscribe_logs(&event_filter.clone().select(0..))
         .await
         .context("failed to subscribe to new jobs")?
-        .into_stream();
-
-    // get cutoff block number
-    let cutoff = client
-        .get_block_number()
-        .await
-        .context("failed to get cutoff block")?;
-
-    // cut off stream at cutoff block, extract data from items
-    let stream = stream.filter_map(move |item| {
-        if item.block_number.unwrap() > cutoff {
-            Some((item.topics()[1], item.removed))
-        } else {
-            None
-        }
-    });
-
-    // get logs up to cutoff
-    let old_logs = client
-        .get_logs(&event_filter.select(0..=cutoff))
-        .await
-        .context("failed to query old logs")?;
-
-    // convert to a stream, extract data from items
-    let old_logs = tokio_stream::iter(old_logs).map(|item| (item.topics()[1], item.removed));
-
-    // stream
-    let stream = old_logs.chain(stream);
+        .into_stream()
+        .map(move |item| (item.topics()[1], item.removed));
 
     Ok(stream)
 }
@@ -1275,43 +1282,49 @@ async fn job_logs(
         ])
         .topic1(job);
 
-    // ordering is important to prevent race conditions while getting all logs but
-    // it still relies on the RPC being consistent between registering the subscription
-    // and querying the cutoff block number
+    // // ordering is important to prevent race conditions while getting all logs but
+    // // it still relies on the RPC being consistent between registering the subscription
+    // // and querying the cutoff block number
+    //
+    // // register subscription
+    // let stream = client
+    //     .subscribe_logs(&event_filter.clone().select(0..))
+    //     .await
+    //     .context("failed to subscribe to job logs")?
+    //     .into_stream();
+    //
+    // // get cutoff block number
+    // let cutoff = client
+    //     .get_block_number()
+    //     .await
+    //     .context("failed to get cutoff block")?;
+    //
+    // // cut off stream at cutoff block
+    // let stream = stream.filter_map(move |item| {
+    //     if item.block_number.unwrap() > cutoff {
+    //         Some(item)
+    //     } else {
+    //         None
+    //     }
+    // });
+    //
+    // // get logs up to cutoff
+    // let old_logs = client
+    //     .get_logs(&event_filter.select(0..=cutoff))
+    //     .await
+    //     .context("failed to query old logs")?;
+    //
+    // // convert to a stream, extract data from items
+    // let old_logs = tokio_stream::iter(old_logs);
+    //
+    // // stream
+    // let stream = old_logs.chain(stream);
 
-    // register subscription
     let stream = client
         .subscribe_logs(&event_filter.clone().select(0..))
         .await
         .context("failed to subscribe to job logs")?
         .into_stream();
-
-    // get cutoff block number
-    let cutoff = client
-        .get_block_number()
-        .await
-        .context("failed to get cutoff block")?;
-
-    // cut off stream at cutoff block
-    let stream = stream.filter_map(move |item| {
-        if item.block_number.unwrap() > cutoff {
-            Some(item)
-        } else {
-            None
-        }
-    });
-
-    // get logs up to cutoff
-    let old_logs = client
-        .get_logs(&event_filter.select(0..=cutoff))
-        .await
-        .context("failed to query old logs")?;
-
-    // convert to a stream, extract data from items
-    let old_logs = tokio_stream::iter(old_logs);
-
-    // stream
-    let stream = old_logs.chain(stream);
 
     Ok(stream)
 }
