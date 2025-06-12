@@ -76,7 +76,13 @@ async fn inject_mutable_config(
 
     // Decode the gas private key from the payload
     let mut bytes32_gas_key = [0u8; 32];
-    if let Err(err) = hex::decode_to_slice(&mutable_config.gas_key_hex, &mut bytes32_gas_key) {
+    if let Err(err) = hex::decode_to_slice(
+        &mutable_config
+            .gas_key_hex
+            .strip_prefix("0x")
+            .unwrap_or(&mutable_config.gas_key_hex),
+        &mut bytes32_gas_key,
+    ) {
         return HttpResponse::BadRequest().body(format!(
             "Failed to hex decode the gas private key into 32 bytes: {:?}\n",
             err

@@ -1,8 +1,8 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+use alloy::sol_types::SolCall;
 use bytes::Bytes;
-use ethers::abi::Abi;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -15,6 +15,7 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::cgroups::Cgroups;
+use crate::model::CodeContract::saveCodeInCallDataCall;
 
 // Define errors that might arise during a job execution
 #[derive(Error, Debug)]
@@ -55,7 +56,6 @@ pub async fn create_code_file(
     workerd_runtime_path: &str,
     rpc: &str,
     contract: &str,
-    code_contract_abi: &Abi,
 ) -> Result<(), ServerlessError> {
     // Get code transaction data from its hash
     let mut tx_data = match Retry::spawn(
@@ -92,25 +92,12 @@ pub async fn create_code_file(
 
     let input_bytes = hex::decode(&input[2..])?;
 
-    // Get the Function object corresponding to function saveCodeInCallData(string calldata inputData, bytes calldata metadata)
-    let save_code_function = code_contract_abi.function("saveCodeInCallData").unwrap();
-
-    // Ensure the function selector is correct
-    if input_bytes.len() < 4 || save_code_function.short_signature() != input_bytes[..4] {
-        return Err(ServerlessError::InvalidTxCalldata);
-    }
-
     // Now decode the data
-    let Ok(tokens) = save_code_function.decode_input(&input_bytes[4..]) else {
+    let Ok(tokens) = saveCodeInCallDataCall::abi_decode(&input_bytes, true) else {
         return Err(ServerlessError::InvalidTxCalldata);
     };
 
-    // Extract inputData token
-    let Some(code_str) = tokens[0].clone().into_string() else {
-        return Err(ServerlessError::InvalidTxCalldata);
-    };
-
-    let mut code_bytes = code_str.into_bytes();
+    let mut code_bytes = tokens.inputData.into_bytes();
 
     // Strip trailing zeros in the calldata
     let idx = code_bytes.iter().rev().position(|x| *x != 0).unwrap_or(0);
