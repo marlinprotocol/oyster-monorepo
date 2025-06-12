@@ -1,21 +1,22 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use alloy::dyn_abi::DynSolValue;
+use alloy::primitives::{keccak256, Address, U256};
+use alloy::signers::local::PrivateKeySigner;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use ethers::abi::{encode, encode_packed, Token};
-use ethers::prelude::*;
-use ethers::utils::keccak256;
 use k256::elliptic_curve::generic_array::sequence::Lengthen;
+use multi_block_txns::TxnManager;
 use serde_json::{json, Value};
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
-use tokio_retry::Retry;
 
 use crate::constant::EXECUTION_ENV_ID;
-use crate::event_handler::events_listener;
+use crate::events::events_listener;
 use crate::model::{AppState, ImmutableConfig, MutableConfig, RegistrationMessage, TeeConfig};
-use crate::utils::{call_secret_store_endpoint_get, call_secret_store_endpoint_post};
+use crate::utils::{
+    call_secret_store_endpoint_get, call_secret_store_endpoint_post, get_latest_block_number,
+};
 
 pub async fn index() {}
 
@@ -91,7 +92,7 @@ pub async fn inject_immutable_config(
     }
 
     // Initialize owner address for the enclave
-    *app_state.enclave_owner.lock().unwrap() = H160::from_slice(&owner_address);
+    *app_state.enclave_owner.lock().unwrap() = Address::from_slice(&owner_address);
     *immutable_params_injected_guard = true;
 
     (
@@ -119,77 +120,56 @@ pub async fn inject_mutable_config(
             .into_response();
     }
 
-    // Validate the user provided gas wallet private key
-    let bytes32_gas_key = hex::decode(
+    // Decode the gas private key from the payload
+    let mut bytes32_gas_key = [0u8; 32];
+    if let Err(err) = hex::decode_to_slice(
         &mutable_config
             .executor_gas_key
             .strip_prefix("0x")
             .unwrap_or(&mutable_config.executor_gas_key),
-    );
-    let Ok(bytes32_gas_key) = bytes32_gas_key else {
+        &mut bytes32_gas_key,
+    ) {
         return (
             StatusCode::BAD_REQUEST,
             format!(
-                "Invalid gas private key hex string: {:?}\n",
-                bytes32_gas_key.unwrap_err()
+                "Failed to hex decode the gas private key into 32 bytes: {:?}\n",
+                err
             ),
-        )
-            .into_response();
-    };
-
-    if bytes32_gas_key.len() != 32 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Gas private key must be 32 bytes long!\n",
         )
             .into_response();
     }
 
     // Initialize local wallet with operator's gas key to send signed transactions to the common chain
-    let gas_wallet = LocalWallet::from_bytes(&bytes32_gas_key);
-    let Ok(gas_wallet) = gas_wallet else {
+    let gas_private_key = PrivateKeySigner::from_bytes(&bytes32_gas_key.into());
+    let Ok(_) = gas_private_key else {
         return (
             StatusCode::BAD_REQUEST,
             format!(
                 "Invalid gas private key provided: {:?}\n",
-                gas_wallet.unwrap_err()
+                gas_private_key.unwrap_err()
             ),
         )
             .into_response();
     };
-    let gas_wallet = gas_wallet.with_chain_id(app_state.common_chain_id);
 
     // Connect the rpc http provider with the operator's gas wallet
-    let http_rpc_client = Provider::<Http>::try_from(&app_state.http_rpc_url);
-    let Ok(http_rpc_client) = http_rpc_client else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to initialize the http rpc server {}: {:?}\n",
-                app_state.http_rpc_url,
-                http_rpc_client.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-    let http_rpc_client = http_rpc_client.with_signer(gas_wallet);
+    let http_rpc_txn_manager = TxnManager::new(
+        app_state.http_rpc_url.clone(),
+        app_state.common_chain_id,
+        mutable_config.executor_gas_key.clone(),
+        None,
+        None,
+        None,
+        None,
+    );
 
-    // Fetch current nonce for the injected gas address from the rpc
-    let nonce_to_send = Retry::spawn(
-        ExponentialBackoff::from_millis(5).map(jitter).take(3),
-        || async {
-            http_rpc_client
-                .get_transaction_count(http_rpc_client.address(), None)
-                .await
-        },
-    )
-    .await;
-    let Ok(nonce_to_send) = nonce_to_send else {
+    let Ok(http_rpc_txn_manager) = http_rpc_txn_manager else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(
-                "Failed to fetch current nonce for the gas address: {:?}\n",
-                nonce_to_send.unwrap_err()
+                "Failed to initialize the http rpc txn manager for url {}: {:?}\n",
+                app_state.http_rpc_url,
+                http_rpc_txn_manager.unwrap_err()
             ),
         )
             .into_response();
@@ -231,29 +211,50 @@ pub async fn inject_mutable_config(
     // Initialize HTTP RPC client and nonce for sending the signed transactions while holding lock
     let mut mutable_params_injected_guard = app_state.mutable_params_injected.lock().unwrap();
 
-    *app_state.nonce_to_send.lock().unwrap() = nonce_to_send;
-    *app_state.http_rpc_client.lock().unwrap() = Some(http_rpc_client);
     let mut ws_rpc_url = app_state.ws_rpc_url.write().unwrap();
     // strip existing api key from the ws url by removing keys after last '/'
     let pos = ws_rpc_url.rfind('/').unwrap();
     ws_rpc_url.truncate(pos + 1);
     ws_rpc_url.push_str(mutable_config.ws_api_key.as_str());
 
-    *mutable_params_injected_guard = true;
+    if *mutable_params_injected_guard == false {
+        *app_state.http_rpc_txn_manager.lock().unwrap() = Some(http_rpc_txn_manager);
+        *mutable_params_injected_guard = true;
+        drop(mutable_params_injected_guard);
+    } else {
+        if let Err(err) = app_state
+            .http_rpc_txn_manager
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .update_private_signer(mutable_config.executor_gas_key)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Failed to update the signer for the http rpc txn manager: {:?}\n",
+                    err
+                ),
+            )
+                .into_response();
+        }
+    }
 
     (StatusCode::OK, "Mutable params configured!\n").into_response()
 }
 
 // Endpoint exposed to retrieve executor enclave details
 pub async fn get_tee_details(app_state: State<AppState>) -> Response {
-    let mut gas_address = H160::zero();
+    let mut gas_address = Address::ZERO;
     if *app_state.mutable_params_injected.lock().unwrap() == true {
         gas_address = app_state
-            .http_rpc_client
+            .http_rpc_txn_manager
             .lock()
             .unwrap()
             .clone()
             .unwrap()
+            .get_private_signer()
             .address();
     }
 
@@ -365,43 +366,43 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
         .as_secs();
 
     // Encode and hash the job capacity of executor following EIP712 format
-    let domain_separator = keccak256(encode(&[
-        Token::FixedBytes(keccak256("EIP712Domain(string name,string version)").to_vec()),
-        Token::FixedBytes(keccak256("marlin.oyster.TeeManager").to_vec()),
-        Token::FixedBytes(keccak256("1").to_vec()),
-    ]));
+    let domain_separator = keccak256(
+        DynSolValue::Tuple(vec![
+            DynSolValue::FixedBytes(keccak256("EIP712Domain(string name,string version)"), 32),
+            DynSolValue::FixedBytes(keccak256("marlin.oyster.TeeManager"), 32),
+            DynSolValue::FixedBytes(keccak256("1"), 32),
+        ])
+        .abi_encode(),
+    );
     let register_typehash =
         keccak256("Register(address owner,uint256 jobCapacity,uint256 storageCapacity,uint8 env,uint256 signTimestamp)");
 
-    let hash_struct = keccak256(encode(&[
-        Token::FixedBytes(register_typehash.to_vec()),
-        Token::Address(owner),
-        Token::Uint(job_capacity.into()),
-        Token::Uint(secret_storage_capacity.into()),
-        Token::Uint(EXECUTION_ENV_ID.into()),
-        Token::Uint(sign_timestamp.into()),
-    ]));
+    let hash_struct = keccak256(
+        DynSolValue::Tuple(vec![
+            DynSolValue::FixedBytes(register_typehash, 32),
+            DynSolValue::Address(owner),
+            DynSolValue::Uint(U256::from(job_capacity), 256),
+            DynSolValue::Uint(U256::from(secret_storage_capacity), 256),
+            DynSolValue::Uint(U256::from(EXECUTION_ENV_ID), 256),
+            DynSolValue::Uint(U256::from(sign_timestamp), 256),
+        ])
+        .abi_encode(),
+    );
 
     // Create the digest
-    let digest = encode_packed(&[
-        Token::String("\x19\x01".to_string()),
-        Token::FixedBytes(domain_separator.to_vec()),
-        Token::FixedBytes(hash_struct.to_vec()),
-    ]);
-    let Ok(digest) = digest else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to encode the registration message for signing: {:?}\n",
-                digest.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-    let digest = keccak256(digest);
+    let digest = keccak256(
+        DynSolValue::Tuple(vec![
+            DynSolValue::String("\x19\x01".to_string()),
+            DynSolValue::FixedBytes(domain_separator, 32),
+            DynSolValue::FixedBytes(hash_struct, 32),
+        ])
+        .abi_encode_packed(),
+    );
 
     // Sign the digest using enclave key
-    let sig = app_state.enclave_signer.sign_prehash_recoverable(&digest);
+    let sig = app_state
+        .enclave_signer
+        .sign_prehash_recoverable(&digest.to_vec());
     let Ok((rs, v)) = sig else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -414,8 +415,7 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
     };
     let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
 
-    let http_rpc_client = app_state.http_rpc_client.lock().unwrap().clone().unwrap();
-    let current_block_number = http_rpc_client.get_block_number().await;
+    let current_block_number = get_latest_block_number(&app_state.http_rpc_url).await;
 
     let mut events_listener_active_guard = app_state.events_listener_active.lock().unwrap();
     if *events_listener_active_guard == false {

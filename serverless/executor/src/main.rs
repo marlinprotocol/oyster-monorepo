@@ -2,21 +2,20 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock};
 
+use alloy::primitives::Address;
+use alloy::signers::utils::public_key_to_address;
 use anyhow::{anyhow, Context, Result};
 use axum::http::Uri;
 use axum::routing::{get, post};
 use axum::Router;
 use clap::Parser;
-use ethers::types::{H160, U256};
-use ethers::utils::public_key_to_address;
 use http_on_vsock_server::{VsockAddrParser, VsockServer};
 use k256::ecdsa::SigningKey;
-use serde_json::from_str;
 use tokio::fs;
 
 use serverless::cgroups::Cgroups;
 use serverless::model::{AppState, ConfigManager};
-use serverless::node_handler::{
+use serverless::server::{
     export_signed_registration_message, get_tee_details, index, inject_immutable_config,
     inject_mutable_config,
 };
@@ -98,13 +97,10 @@ async fn main() -> Result<()> {
         enclave_registered: Arc::new(AtomicBool::new(false)),
         events_listener_active: Arc::new(Mutex::new(false)),
         enclave_draining: Arc::new(AtomicBool::new(false)),
-        enclave_owner: Arc::new(Mutex::new(H160::zero())),
-        http_rpc_client: Arc::new(Mutex::new(None)),
-        job_requests_running: Arc::new(Mutex::new(HashSet::new())),
+        enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         last_block_seen: Arc::new(AtomicU64::new(0)),
-        nonce_to_send: Arc::new(Mutex::new(U256::from(0))),
-        jobs_contract_abi: from_str(include_str!("../Jobs.json"))?,
-        code_contract_abi: from_str(include_str!("../CodeContract.json"))?,
+        http_rpc_txn_manager: Arc::new(Mutex::new(None)),
+        job_requests_running: Arc::new(Mutex::new(HashSet::new())),
     };
 
     // Create App using Router
