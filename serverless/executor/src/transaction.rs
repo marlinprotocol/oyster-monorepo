@@ -5,7 +5,7 @@ use axum::extract::State;
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    constant::TIMEOUT_TXN_RESEND_DEADLINE,
+    constant::TIMEOUT_TXN_RESEND_DEADLINE_SECS,
     model::{AppState, JobsTransaction},
 };
 
@@ -46,7 +46,7 @@ pub async fn send_transaction(
                     .call_contract_function(
                         app_state.jobs_contract_addr,
                         call.abi_encode().into(),
-                        Instant::now() + Duration::from_secs(TIMEOUT_TXN_RESEND_DEADLINE),
+                        Instant::now() + Duration::from_secs(TIMEOUT_TXN_RESEND_DEADLINE_SECS),
                     )
                     .await
                 {

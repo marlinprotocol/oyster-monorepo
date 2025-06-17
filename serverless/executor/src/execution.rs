@@ -2,20 +2,19 @@ use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{keccak256, U256};
+use alloy::primitives::U256;
+use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::SignerSync;
+use alloy::sol_types::eip712_domain;
 use anyhow::Context;
-use axum::body::Bytes;
 use axum::extract::State;
-use k256::ecdsa::SigningKey;
-use k256::elliptic_curve::generic_array::sequence::Lengthen;
 use scopeguard::defer;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 
 use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
 use crate::model::JobsContract::submitOutputCall;
-use crate::model::{AppState, JobOutput, JobsTransaction};
+use crate::model::{AppState, JobOutput, JobsTransaction, SubmitOutput};
 use crate::workerd;
 use crate::workerd::ServerlessError::*;
 
@@ -32,12 +31,12 @@ pub async fn handle_job(
     job_id: U256,
     secret_id: U256,
     code_hash: String,
-    code_inputs: Bytes,
+    code_inputs: Vec<u8>,
     user_deadline: u64, // time in millis
     app_state: State<AppState>,
     tx_sender: Sender<JobsTransaction>,
 ) {
-    let slug = &hex::encode(rand::random::<u32>().to_ne_bytes());
+    let slug = &alloy::hex::encode(rand::random::<u32>().to_ne_bytes());
 
     // Execute the job request under the specified user deadline
     let response = timeout(
@@ -52,7 +51,7 @@ pub async fn handle_job(
 
     // Initialize the default timeout response and build on that based on the above response
     let mut job_output = Some(JobOutput {
-        output: Bytes::new(),
+        output: Vec::new(),
         error_code: 4,
         total_time: user_deadline.into(),
     });
@@ -75,7 +74,7 @@ pub async fn handle_job(
     let Some(signature) = sign_response(
         &app_state.enclave_signer,
         job_id,
-        &job_output.output,
+        job_output.output.clone(),
         job_output.total_time,
         job_output.error_code,
         sign_timestamp,
@@ -110,7 +109,7 @@ pub async fn handle_job(
 async fn execute_job(
     secret_id: U256,
     code_hash: &String,
-    code_inputs: Bytes,
+    code_inputs: Vec<u8>,
     slug: &String,
     app_state: State<AppState>,
 ) -> Option<JobOutput> {
@@ -128,12 +127,12 @@ async fn execute_job(
     {
         return match err {
             TxNotFound | InvalidTxToType | InvalidTxToValue(_, _) => Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 1,
                 total_time: execution_timer_start.elapsed().as_millis(),
             }),
             InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 2,
                 total_time: execution_timer_start.elapsed().as_millis(),
             }),
@@ -210,7 +209,7 @@ async fn execute_job(
         // Check if there was a syntax error in the user code
         if stderr_output != "" && stderr_output.contains("SyntaxError") {
             return Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 3,
                 total_time: execution_timer_start.elapsed().as_millis(),
             });
@@ -228,7 +227,7 @@ async fn execute_job(
 
     if response.len() > MAX_OUTPUT_BYTES_LENGTH {
         return Some(JobOutput {
-            output: Bytes::new(),
+            output: Vec::new(),
             error_code: 5,
             total_time: execution_timer_start.elapsed().as_millis(),
         });
@@ -243,49 +242,29 @@ async fn execute_job(
 
 // Sign the execution response with the enclave key to be verified by the jobs contract
 fn sign_response(
-    signer_key: &SigningKey,
+    signer_key: &PrivateKeySigner,
     job_id: U256,
-    output: &Bytes,
+    output: Vec<u8>,
     total_time: u128,
     error_code: u8,
     sign_timestamp: U256,
 ) -> Option<Vec<u8>> {
-    // Encode and hash the job response details following EIP712 format
-    let domain_separator = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::FixedBytes(keccak256("EIP712Domain(string name,string version)"), 32),
-            DynSolValue::FixedBytes(keccak256("marlin.oyster.Jobs"), 32),
-            DynSolValue::FixedBytes(keccak256("1"), 32),
-        ])
-        .abi_encode(),
-    );
-    let submit_output_typehash = keccak256("SubmitOutput(uint256 jobId,bytes output,uint256 totalTime,uint8 errorCode,uint256 signTimestamp)");
+    let submit_output_data = SubmitOutput {
+        jobId: job_id,
+        output: output.into(),
+        totalTime: U256::from(total_time),
+        errorCode: error_code,
+        signTimestamp: U256::from(sign_timestamp),
+    };
 
-    let hash_struct = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::FixedBytes(submit_output_typehash, 32),
-            DynSolValue::Uint(job_id, 256),
-            DynSolValue::FixedBytes(keccak256(output), 256),
-            DynSolValue::Uint(U256::from(total_time), 256),
-            DynSolValue::Uint(U256::from(error_code), 256),
-            DynSolValue::Uint(U256::from(sign_timestamp), 256),
-        ])
-        .abi_encode(),
-    );
-
-    // Create the digest
-    let digest = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::String("\x19\x01".to_string()),
-            DynSolValue::FixedBytes(domain_separator, 32),
-            DynSolValue::FixedBytes(hash_struct, 32),
-        ])
-        .abi_encode_packed(),
-    );
+    let domain_separator = eip712_domain! {
+        name: "marlin.oyster.Jobs",
+        version: "1",
+    };
 
     // Sign the response details using enclave key
-    let Ok((rs, v)) = signer_key
-        .sign_prehash_recoverable(&digest.to_vec())
+    let Ok(sig) = signer_key
+        .sign_typed_data_sync(&submit_output_data, &domain_separator)
         .map_err(|err| {
             eprintln!("Failed to sign the job response: {:?}", err);
             err
@@ -294,5 +273,5 @@ fn sign_response(
         return None;
     };
 
-    Some(rs.to_bytes().append(27 + v.to_byte()).to_vec())
+    Some(sig.as_bytes().to_vec())
 }

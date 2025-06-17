@@ -17,8 +17,11 @@ pub mod serverless_executor_test {
     use std::sync::{Arc, Mutex, RwLock};
 
     use alloy::dyn_abi::DynSolValue;
+    use alloy::hex;
     use alloy::primitives::{keccak256, Address, Bytes, LogData, B256, U256};
     use alloy::rpc::types::Log;
+    use alloy::signers::k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use alloy::signers::local::PrivateKeySigner;
     use alloy::signers::utils::public_key_to_address;
     use alloy::sol_types::SolEvent;
     use axum::extract::State;
@@ -27,9 +30,6 @@ pub mod serverless_executor_test {
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use axum_test::TestServer;
-    use k256::ecdsa::SigningKey;
-    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
-    use rand::rngs::OsRng;
     use serde_json::{json, Value};
     use tempfile::Builder;
     use tokio::runtime::Handle;
@@ -59,8 +59,7 @@ pub mod serverless_executor_test {
 
     // Generate test app state
     async fn generate_app_state(code_contract_uppercase: bool) -> AppState {
-        let signer = SigningKey::random(&mut OsRng);
-        let signer_verifier_address = public_key_to_address(signer.verifying_key());
+        let signer = PrivateKeySigner::random();
 
         AppState {
             job_capacity: 20,
@@ -80,7 +79,6 @@ pub mod serverless_executor_test {
                 CODE_CONTRACT_ADDR.to_owned()
             },
             num_selected_executors: 1,
-            enclave_address: signer_verifier_address,
             enclave_signer: signer,
             immutable_params_injected: Arc::new(Mutex::new(false)),
             mutable_params_injected: Arc::new(Mutex::new(false)),
@@ -262,7 +260,7 @@ pub mod serverless_executor_test {
         resp.assert_text("Invalid gas private key provided: signature::Error { source: None }\n");
 
         // Initialise executor gas wallet key
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
 
         // Inject invalid ws_api_key hex string with invalid character
         let resp = server
@@ -362,7 +360,7 @@ pub mod serverless_executor_test {
             let mut state = mock_state.lock().unwrap();
             *state = (StatusCode::OK, String::from("Mutable params configured!\n"));
         }
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
 
         let resp = server
             .post("/mutable-config")
@@ -384,7 +382,7 @@ pub mod serverless_executor_test {
                 .unwrap()
                 .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -409,7 +407,7 @@ pub mod serverless_executor_test {
         }
 
         // Inject valid mutable config params again to test mutability
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -430,7 +428,7 @@ pub mod serverless_executor_test {
                 .unwrap()
                 .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -472,12 +470,13 @@ pub mod serverless_executor_test {
             *state = (
                 StatusCode::OK,
                 json!({
-                    "enclave_address": app_state.enclave_address,
+                    "enclave_address": app_state.enclave_signer.address(),
                     "enclave_public_key": format!(
                         "0x{}",
                         hex::encode(
                             &(app_state
                                 .enclave_signer
+                                .credential()
                                 .verifying_key()
                                 .to_encoded_point(false)
                                 .as_bytes())[1..]
@@ -493,12 +492,13 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
@@ -528,12 +528,13 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
@@ -546,8 +547,8 @@ pub mod serverless_executor_test {
         }));
 
         // Inject valid mutable config params
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -568,7 +569,7 @@ pub mod serverless_executor_test {
                 .unwrap()
                 .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -582,19 +583,20 @@ pub mod serverless_executor_test {
             *state = (
                 StatusCode::OK,
                 json!({
-                    "enclave_address": app_state.enclave_address,
+                    "enclave_address": app_state.enclave_signer.address(),
                     "enclave_public_key": format!(
                         "0x{}",
                         hex::encode(
                             &(app_state
                                 .enclave_signer
+                                .credential()
                                 .verifying_key()
                                 .to_encoded_point(false)
                                 .as_bytes())[1..]
                         )
                     ),
                     "owner_address": valid_owner,
-                    "gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
+                    "gas_address": public_key_to_address(secret_store_gas_wallet_key.credential().verifying_key()),
                     "ws_rpc_url": WS_URL,
                 }),
             );
@@ -603,20 +605,21 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
                 )
             ),
             "owner_address": valid_owner,
-            "executor_gas_address": public_key_to_address(executor_gas_wallet_key.verifying_key()),
-            "secret_store_gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
+            "executor_gas_address": public_key_to_address(executor_gas_wallet_key.credential().verifying_key()),
+            "secret_store_gas_address": public_key_to_address(secret_store_gas_wallet_key.credential().verifying_key()),
             "ws_rpc_url": WS_URL.to_owned() + "ws_api_key",
         }));
     }
@@ -627,7 +630,11 @@ pub mod serverless_executor_test {
         let metrics = Handle::current().metrics();
 
         let app_state = generate_app_state(false).await;
-        let verifying_key = app_state.enclave_signer.verifying_key().to_owned();
+        let verifying_key = app_state
+            .enclave_signer
+            .credential()
+            .verifying_key()
+            .to_owned();
 
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
@@ -661,8 +668,8 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params not configured yet!\n");
 
         // Inject valid mutable config params
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -683,7 +690,7 @@ pub mod serverless_executor_test {
                 .unwrap()
                 .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -778,7 +785,7 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -795,7 +802,7 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         ));
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -812,13 +819,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         ));
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1, U256::ZERO, app_state.enclave_address),
-            get_job_responded_log(1, U256::ONE, app_state.enclave_address),
-            get_job_responded_log(1, U256::from(2), app_state.enclave_address),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::from(2), app_state.enclave_signer.address()),
         ];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -886,12 +893,12 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -946,12 +953,12 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1015,7 +1022,7 @@ pub mod serverless_executor_test {
                 "fed8ab36cc27831836f6dcb7291049158b4d8df31c0ffb05a3d36ba6555e29d7",
                 code_input_bytes.clone(),
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             // Given transaction hash doesn't exist in the expected rpc network
             get_job_created_log(
@@ -1026,13 +1033,13 @@ pub mod serverless_executor_test {
                 "37b0b2d9dd58d9130781fc914da456c16ec403010e8d4c27b0ea4657a24c8546",
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
         ];
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1, U256::ZERO, app_state.enclave_address),
-            get_job_responded_log(1, U256::ONE, app_state.enclave_address),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
         ];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1095,13 +1102,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1157,13 +1164,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1219,13 +1226,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1344,7 +1351,7 @@ pub mod serverless_executor_test {
         let log_data = LogData::new(
             vec![
                 TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH.into(),
-                B256::from(app_state.enclave_address.into_word()),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
             Bytes::new(),
         )
@@ -1411,7 +1418,7 @@ pub mod serverless_executor_test {
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             Log {
                 ..Default::default()
@@ -1469,13 +1476,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1535,13 +1542,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1611,7 +1618,7 @@ pub mod serverless_executor_test {
                 code_hash,
                 code_input_bytes.clone(),
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             get_job_created_log(
                 1,
@@ -1621,13 +1628,13 @@ pub mod serverless_executor_test {
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
         ];
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1, U256::ZERO, app_state.enclave_address),
-            get_job_responded_log(1, U256::ONE, app_state.enclave_address),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
         ];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1713,13 +1720,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1775,13 +1782,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1842,13 +1849,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);
@@ -1906,7 +1913,7 @@ pub mod serverless_executor_test {
         let log_data = LogData::new(
             vec![
                 TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH.into(),
-                B256::from(app_state.enclave_address.into_word()),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
             Bytes::new(),
         )
@@ -1931,7 +1938,7 @@ pub mod serverless_executor_test {
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             Log {
                 ..Default::default()
@@ -1990,7 +1997,7 @@ pub mod serverless_executor_test {
         let log_data = LogData::new(
             vec![
                 TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH.into(),
-                B256::from(app_state.enclave_address.into_word()),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
             Bytes::new(),
         )
@@ -2014,13 +2021,13 @@ pub mod serverless_executor_test {
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let jobs_responded_logs = vec![get_job_responded_log(
             1,
             U256::ZERO,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let (tx, mut rx) = channel::<JobsTransaction>(10);

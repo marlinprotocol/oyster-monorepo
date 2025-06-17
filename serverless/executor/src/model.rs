@@ -3,9 +3,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock};
 
 use alloy::primitives::{Address, U256};
+use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
-use axum::body::Bytes;
-use k256::ecdsa::SigningKey;
 use multi_block_txns::TxnManager;
 use serde::{Deserialize, Serialize};
 use JobsContract::{slashOnExecutionTimeoutCall, submitOutputCall};
@@ -32,6 +31,27 @@ sol!(
     TeeManagerContract,
     "./TeeManager.json"
 );
+
+// Define the EIP-712 struct that matches your Solidity contract
+sol! {
+    #[derive(Debug)]
+    struct Register {
+        address owner;
+        uint256 jobCapacity;
+        uint256 storageCapacity;
+        uint8 env;
+        uint256 signTimestamp;
+    }
+
+    #[derive(Debug)]
+    struct SubmitOutput {
+        uint256 jobId;
+        bytes output;
+        uint256 totalTime;
+        uint8 errorCode;
+        uint256 signTimestamp;
+    }
+}
 
 pub struct ConfigManager {
     pub path: String,
@@ -70,8 +90,7 @@ pub struct AppState {
     pub jobs_contract_addr: Address,
     pub code_contract_addr: String,
     pub num_selected_executors: u8,
-    pub enclave_address: Address,
-    pub enclave_signer: SigningKey,
+    pub enclave_signer: PrivateKeySigner,
     pub immutable_params_injected: Arc<Mutex<bool>>,
     pub mutable_params_injected: Arc<Mutex<bool>>,
     pub enclave_registered: Arc<AtomicBool>,
@@ -117,7 +136,7 @@ pub struct RegistrationMessage {
 
 #[derive(Clone)]
 pub struct JobOutput {
-    pub output: Bytes,
+    pub output: Vec<u8>,
     pub error_code: u8,
     pub total_time: u128,
 }

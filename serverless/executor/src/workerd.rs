@@ -2,7 +2,6 @@ use std::process::Child;
 use std::time::{Duration, Instant};
 
 use alloy::sol_types::SolCall;
-use axum::body::Bytes;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -33,7 +32,7 @@ pub enum ServerlessError {
     #[error("calldata doesn't belong to the expected method")]
     InvalidTxCalldata,
     #[error("calldata field is not a valid hex string")]
-    BadCalldata(#[from] hex::FromHexError),
+    BadCalldata(#[from] alloy::hex::FromHexError),
     #[error("Failed to create/write to the code file")]
     CodeFileCreate(#[source] tokio::io::Error),
     #[error("Failed to create/write to the config file")]
@@ -90,7 +89,7 @@ pub async fn create_code_file(
         _ => Err(ServerlessError::InvalidTxCalldataType),
     }?;
 
-    let input_bytes = hex::decode(&input[2..])?;
+    let input_bytes = alloy::hex::decode(&input[2..])?;
 
     // Now decode the data
     let Ok(tokens) = saveCodeInCallDataCall::abi_decode(&input_bytes, true) else {
@@ -284,7 +283,7 @@ pub async fn cleanup_config_file(
 }
 
 // Get response from the user code server run by the workerd runtime
-pub async fn get_workerd_response(port: u16, inputs: Bytes) -> Result<Bytes, ServerlessError> {
+pub async fn get_workerd_response(port: u16, inputs: Vec<u8>) -> Result<Vec<u8>, ServerlessError> {
     let port_str = port.to_string();
     let req_url = "http://127.0.0.1:".to_string() + &port_str + "/";
 
@@ -361,8 +360,8 @@ async fn create_and_populate_file(path: String, data: &[u8]) -> Result<(), tokio
 async fn client_call(
     client: &Client,
     req_url: &str,
-    inputs: &Bytes,
-) -> Result<Bytes, reqwest::Error> {
+    inputs: &Vec<u8>,
+) -> Result<Vec<u8>, reqwest::Error> {
     let response = client
         .post(req_url)
         .body(inputs.to_owned())
@@ -373,8 +372,12 @@ async fn client_call(
             err
         })?;
 
-    Ok(response.bytes().await.map_err(|err| {
-        eprintln!("Failed to parse response from the worker: {:?}", err);
-        err
-    })?)
+    Ok(response
+        .bytes()
+        .await
+        .map_err(|err| {
+            eprintln!("Failed to parse response from the worker: {:?}", err);
+            err
+        })?
+        .to_vec())
 }

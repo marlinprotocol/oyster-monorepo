@@ -1,19 +1,21 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{keccak256, Address, U256};
+use alloy::primitives::{Address, U256};
 use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::SignerSync;
+use alloy::sol_types::eip712_domain;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use k256::elliptic_curve::generic_array::sequence::Lengthen;
 use multi_block_txns::TxnManager;
 use serde_json::{json, Value};
 
 use crate::constant::EXECUTION_ENV_ID;
 use crate::events::events_listener;
-use crate::model::{AppState, ImmutableConfig, MutableConfig, RegistrationMessage, TeeConfig};
+use crate::model::{
+    AppState, ImmutableConfig, MutableConfig, Register, RegistrationMessage, TeeConfig,
+};
 use crate::utils::{
     call_secret_store_endpoint_get, call_secret_store_endpoint_post, get_latest_block_number,
 };
@@ -25,7 +27,7 @@ pub async fn inject_immutable_config(
     app_state: State<AppState>,
     Json(immutable_config): Json<ImmutableConfig>,
 ) -> Response {
-    let owner_address = hex::decode(
+    let owner_address = alloy::hex::decode(
         &immutable_config
             .owner_address_hex
             .strip_prefix("0x")
@@ -122,7 +124,7 @@ pub async fn inject_mutable_config(
 
     // Decode the gas private key from the payload
     let mut bytes32_gas_key = [0u8; 32];
-    if let Err(err) = hex::decode_to_slice(
+    if let Err(err) = alloy::hex::decode_to_slice(
         &mutable_config
             .executor_gas_key
             .strip_prefix("0x")
@@ -284,12 +286,13 @@ pub async fn get_tee_details(app_state: State<AppState>) -> Response {
     };
 
     let details = TeeConfig {
-        enclave_address: app_state.enclave_address,
+        enclave_address: app_state.enclave_signer.address(),
         enclave_public_key: format!(
             "0x{}",
-            hex::encode(
+            alloy::hex::encode(
                 &(app_state
                     .enclave_signer
+                    .credential()
                     .verifying_key()
                     .to_encoded_point(false)
                     .as_bytes())[1..]
@@ -365,45 +368,24 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
         .unwrap()
         .as_secs();
 
-    // Encode and hash the job capacity of executor following EIP712 format
-    let domain_separator = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::FixedBytes(keccak256("EIP712Domain(string name,string version)"), 32),
-            DynSolValue::FixedBytes(keccak256("marlin.oyster.TeeManager"), 32),
-            DynSolValue::FixedBytes(keccak256("1"), 32),
-        ])
-        .abi_encode(),
-    );
-    let register_typehash =
-        keccak256("Register(address owner,uint256 jobCapacity,uint256 storageCapacity,uint8 env,uint256 signTimestamp)");
+    let register_data = Register {
+        owner: owner,
+        jobCapacity: U256::from(job_capacity),
+        storageCapacity: U256::from(secret_storage_capacity),
+        env: EXECUTION_ENV_ID,
+        signTimestamp: U256::from(sign_timestamp),
+    };
 
-    let hash_struct = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::FixedBytes(register_typehash, 32),
-            DynSolValue::Address(owner),
-            DynSolValue::Uint(U256::from(job_capacity), 256),
-            DynSolValue::Uint(U256::from(secret_storage_capacity), 256),
-            DynSolValue::Uint(U256::from(EXECUTION_ENV_ID), 256),
-            DynSolValue::Uint(U256::from(sign_timestamp), 256),
-        ])
-        .abi_encode(),
-    );
-
-    // Create the digest
-    let digest = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::String("\x19\x01".to_string()),
-            DynSolValue::FixedBytes(domain_separator, 32),
-            DynSolValue::FixedBytes(hash_struct, 32),
-        ])
-        .abi_encode_packed(),
-    );
+    let domain_separator = eip712_domain! {
+        name: "marlin.oyster.TeeManager",
+        version: "1",
+    };
 
     // Sign the digest using enclave key
     let sig = app_state
         .enclave_signer
-        .sign_prehash_recoverable(&digest.to_vec());
-    let Ok((rs, v)) = sig else {
+        .sign_typed_data_sync(&register_data, &domain_separator);
+    let Ok(sig) = sig else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(
@@ -413,7 +395,7 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
         )
             .into_response();
     };
-    let signature = hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec());
+    let signature = alloy::hex::encode(sig.as_bytes());
 
     let current_block_number = get_latest_block_number(&app_state.http_rpc_url).await;
 
