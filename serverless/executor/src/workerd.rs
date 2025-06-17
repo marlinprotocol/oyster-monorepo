@@ -2,7 +2,7 @@ use std::process::Child;
 use std::time::{Duration, Instant};
 
 use alloy::sol_types::SolCall;
-use bytes::Bytes;
+use axum::body::Bytes;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde_json::{json, Value};

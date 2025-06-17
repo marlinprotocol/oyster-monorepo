@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use alloy::primitives::{Address, U256};
 use alloy::sol;
+use axum::body::Bytes;
 use k256::ecdsa::SigningKey;
 use multi_block_txns::TxnManager;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ sol!(
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
-    ExecutorsContract,
+    TeeManagerContract,
     "./TeeManager.json"
 );
 
@@ -109,9 +110,16 @@ pub struct RegistrationMessage {
     pub job_capacity: usize,
     pub storage_capacity: usize,
     pub sign_timestamp: u64,
-    pub env: U256,
+    pub env: u8,
     pub owner: Address,
     pub signature: String,
+}
+
+#[derive(Clone)]
+pub struct JobOutput {
+    pub output: Bytes,
+    pub error_code: u8,
+    pub total_time: u128,
 }
 
 #[derive(Clone)]

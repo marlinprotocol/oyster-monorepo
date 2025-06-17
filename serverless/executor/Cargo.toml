@@ -20,10 +20,8 @@ path = "src/cgroups_retriever.rs"
 anyhow = "1.0.75"
 alloy = { version = "0.6.4", features = ["full"] }
 axum = "0.6.20"
-bytes = "1.9.0"
 clap = { version = "4.4.7", features = ["derive"] }
 config = "0.14.0"
-data-encoding = "2.5.0"
 hex = "0.4.3"
 http-on-vsock-server = { git = "https://github.com/marlinprotocol/oyster-monorepo.git", branch = "master" }
 hyper = { version = "0.14.28", features = ["full"] }

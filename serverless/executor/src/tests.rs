@@ -41,12 +41,13 @@ pub mod serverless_executor_test {
     use crate::constant::{EXECUTION_ENV_ID, MAX_OUTPUT_BYTES_LENGTH};
     use crate::events::handle_event_logs;
     use crate::model::{
-        AppState, ExecutorsContract, JobsContract, JobsTransaction, RegistrationMessage,
+        AppState, JobsContract, JobsTransaction, RegistrationMessage, TeeManagerContract,
     };
     use crate::server::{
         export_signed_registration_message, get_tee_details, index, inject_immutable_config,
         inject_mutable_config,
     };
+    use crate::utils::get_byte_slice;
 
     // Testnet or Local blockchain (Hardhat) configurations
     const CHAIN_ID: u64 = 421614;
@@ -713,7 +714,7 @@ pub mod serverless_executor_test {
         assert_eq!(response.job_capacity, 20);
         assert_eq!(response.storage_capacity, STORAGE_CAPACITY);
         assert_eq!(response.owner, valid_owner);
-        assert_eq!(response.env, U256::ONE);
+        assert_eq!(response.env, 1);
         assert_eq!(response.signature.len(), 132);
         assert_eq!(
             recover_key(
@@ -1342,7 +1343,7 @@ pub mod serverless_executor_test {
         // Add log for deregistering the current executor
         let log_data = LogData::new(
             vec![
-                ExecutorsContract::TeeNodeDeregistered::SIGNATURE_HASH.into(),
+                TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH.into(),
                 B256::from(app_state.enclave_address.into_word()),
             ],
             Bytes::new(),
@@ -1406,7 +1407,7 @@ pub mod serverless_executor_test {
                 1,
                 U256::ZERO,
                 U256::ZERO,
-                U256::from(2),
+                2,
                 code_hash,
                 code_input_bytes,
                 user_deadline,
@@ -1904,7 +1905,7 @@ pub mod serverless_executor_test {
         // Add drain log for the executor
         let log_data = LogData::new(
             vec![
-                ExecutorsContract::TeeNodeDrained::SIGNATURE_HASH.into(),
+                TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH.into(),
                 B256::from(app_state.enclave_address.into_word()),
             ],
             Bytes::new(),
@@ -1988,7 +1989,7 @@ pub mod serverless_executor_test {
         // Add revive log for the executor
         let log_data = LogData::new(
             vec![
-                ExecutorsContract::TeeNodeRevived::SIGNATURE_HASH.into(),
+                TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH.into(),
                 B256::from(app_state.enclave_address.into_word()),
             ],
             Bytes::new(),
@@ -2071,7 +2072,7 @@ pub mod serverless_executor_test {
         block_number: u64,
         job_id: U256,
         secret_id: U256,
-        env_id: U256,
+        env_id: u8,
         code_hash: &str,
         code_inputs: Bytes,
         user_deadline: u64,
@@ -2081,7 +2082,7 @@ pub mod serverless_executor_test {
             vec![
                 JobsContract::JobCreated::SIGNATURE_HASH.into(),
                 B256::from(job_id),
-                B256::from(env_id),
+                B256::from(&get_byte_slice(env_id)),
                 B256::from(Address::from(&[0x11; 20]).into_word()),
             ],
             DynSolValue::Tuple(vec![

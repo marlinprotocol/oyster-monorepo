@@ -16,8 +16,9 @@ use tokio_stream::{Stream, StreamExt};
 use crate::constant::EXECUTION_ENV_ID;
 use crate::execution::handle_job;
 use crate::model::JobsContract::slashOnExecutionTimeoutCall;
-use crate::model::{AppState, ExecutorsContract, JobsContract, JobsTransaction};
+use crate::model::{AppState, JobsContract, JobsTransaction, TeeManagerContract};
 use crate::transaction::send_transaction;
+use crate::utils::get_byte_slice;
 
 // Start listening to Job requests emitted by the Jobs contract if enclave is registered else listen for Executor registered events first
 pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
@@ -45,7 +46,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
             // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
             let register_executor_filter = Filter::new()
                 .address(app_state.tee_manager_contract_addr)
-                .event(ExecutorsContract::TeeNodeRegistered::SIGNATURE)
+                .event(TeeManagerContract::TeeNodeRegistered::SIGNATURE)
                 .topic1(B256::from(app_state.enclave_address.into_word()))
                 .topic2(B256::from(
                     *app_state.enclave_owner.lock().unwrap().into_word(),
@@ -102,7 +103,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         let jobs_created_filter = Filter::new()
             .address(app_state.jobs_contract_addr)
             .event(JobsContract::JobCreated::SIGNATURE)
-            .topic2(B256::from(EXECUTION_ENV_ID))
+            .topic2(B256::from(&get_byte_slice(EXECUTION_ENV_ID)))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
         // Subscribe to the filter through the rpc web socket client
         let jobs_created_stream = match web_socket_client.subscribe_logs(&jobs_created_filter).await
@@ -143,9 +144,9 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         let executors_filter = Filter::new()
             .address(app_state.tee_manager_contract_addr)
             .events(vec![
-                ExecutorsContract::TeeNodeDeregistered::SIGNATURE.as_bytes(),
-                ExecutorsContract::TeeNodeDrained::SIGNATURE.as_bytes(),
-                ExecutorsContract::TeeNodeRevived::SIGNATURE.as_bytes(),
+                TeeManagerContract::TeeNodeDeregistered::SIGNATURE.as_bytes(),
+                TeeManagerContract::TeeNodeDrained::SIGNATURE.as_bytes(),
+                TeeManagerContract::TeeNodeRevived::SIGNATURE.as_bytes(),
             ])
             .topic1(B256::from(app_state.enclave_address.into_word()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
@@ -210,25 +211,29 @@ pub async fn handle_event_logs(
                 }
                 app_state.last_block_seen.store(current_block, Ordering::SeqCst);
 
-                // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
-                if event.topic0() == Some(&ExecutorsContract::TeeNodeDeregistered::SIGNATURE_HASH) {
-                    println!("Executor deregistered from the common chain!");
+                match event.topic0() {
+                    // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
+                    Some(&TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH) => {
+                        println!("Executor deregistered from the common chain!");
                     app_state.enclave_registered.store(false, Ordering::SeqCst);
 
                     println!("Stopped listening to 'Jobs' events!");
                     return;
-                }
-                // Capture the Enclave drained event emitted by the 'TeeManager' contract
-                else if event.topic0() == Some(&ExecutorsContract::TeeNodeDrained::SIGNATURE_HASH) {
+                    }
+                    // Capture the Enclave drained event emitted by the 'TeeManager' contract
+                    Some(&TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH) => {
                     println!("Executor put in draining mode!");
                     app_state.enclave_draining.store(true, Ordering::SeqCst);
                     // Clear the pending jobs map
                     app_state.job_requests_running.lock().unwrap().clear();
                 }
-                // Capture the Enclave revived event emitted by the 'TeeManager' contract
-                else if event.topic0() == Some(&ExecutorsContract::TeeNodeRevived::SIGNATURE_HASH) {
+                    // Capture the Enclave revived event emitted by the 'TeeManager' contract
+                Some(&TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH) => {
                     println!("Executor revived from draining mode!");
                     app_state.enclave_draining.store(false, Ordering::SeqCst);
+                }
+                    Some(_) => println!("Unrecognized event topic received!"),
+                    None => println!("No event topic received!")
                 }
             }
             // Capture the Job created event emitted by the jobs contract
@@ -291,7 +296,7 @@ pub async fn handle_event_logs(
 
                 if is_node_selected {
                     let code_hash =
-                        String::from("0x".to_owned() + &data_encoding::HEXLOWER.encode(event_decoded.codehash.as_slice()));
+                        String::from("0x".to_owned() + &hex::encode(event_decoded.codehash.as_slice()));
                     let app_state_clone = app_state.clone();
                     let tx_clone = tx_sender.clone();
 

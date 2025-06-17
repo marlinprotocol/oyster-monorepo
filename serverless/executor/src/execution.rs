@@ -5,8 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use alloy::dyn_abi::DynSolValue;
 use alloy::primitives::{keccak256, U256};
 use anyhow::Context;
+use axum::body::Bytes;
 use axum::extract::State;
-use bytes::Bytes;
 use k256::ecdsa::SigningKey;
 use k256::elliptic_curve::generic_array::sequence::Lengthen;
 use scopeguard::defer;
@@ -15,7 +15,7 @@ use tokio::time::timeout;
 
 use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
 use crate::model::JobsContract::submitOutputCall;
-use crate::model::{AppState, JobsTransaction};
+use crate::model::{AppState, JobOutput, JobsTransaction};
 use crate::workerd;
 use crate::workerd::ServerlessError::*;
 
@@ -51,7 +51,11 @@ pub async fn handle_job(
     let _ = workerd::cleanup_code_file(&code_hash, slug, &app_state.workerd_runtime_path).await;
 
     // Initialize the default timeout response and build on that based on the above response
-    let mut job_output = Some((Bytes::new(), 4, user_deadline.into()));
+    let mut job_output = Some(JobOutput {
+        output: Bytes::new(),
+        error_code: 4,
+        total_time: user_deadline.into(),
+    });
     if response.is_ok() {
         job_output = response.unwrap();
     }
@@ -71,9 +75,9 @@ pub async fn handle_job(
     let Some(signature) = sign_response(
         &app_state.enclave_signer,
         job_id,
-        &job_output.0,
-        job_output.2,
-        job_output.1,
+        &job_output.output,
+        job_output.total_time,
+        job_output.error_code,
         sign_timestamp,
     ) else {
         return;
@@ -85,9 +89,9 @@ pub async fn handle_job(
             submitOutputCall {
                 _signature: signature.into(),
                 _jobId: job_id,
-                _output: job_output.0.into(),
-                _totalTime: U256::from(job_output.2),
-                _errorCode: job_output.1,
+                _output: job_output.output.into(),
+                _totalTime: U256::from(job_output.total_time),
+                _errorCode: job_output.error_code,
                 _signTimestamp: sign_timestamp,
             },
             user_deadline,
@@ -109,7 +113,7 @@ async fn execute_job(
     code_inputs: Bytes,
     slug: &String,
     app_state: State<AppState>,
-) -> Option<(Bytes, u8, u128)> {
+) -> Option<JobOutput> {
     let execution_timer_start = Instant::now();
 
     // Create the code file in the desired location
@@ -123,12 +127,16 @@ async fn execute_job(
     .await
     {
         return match err {
-            TxNotFound | InvalidTxToType | InvalidTxToValue(_, _) => {
-                Some((Bytes::new(), 1, execution_timer_start.elapsed().as_millis()))
-            }
-            InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => {
-                Some((Bytes::new(), 2, execution_timer_start.elapsed().as_millis()))
-            }
+            TxNotFound | InvalidTxToType | InvalidTxToValue(_, _) => Some(JobOutput {
+                output: Bytes::new(),
+                error_code: 1,
+                total_time: execution_timer_start.elapsed().as_millis(),
+            }),
+            InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => Some(JobOutput {
+                output: Bytes::new(),
+                error_code: 2,
+                total_time: execution_timer_start.elapsed().as_millis(),
+            }),
             _ => None,
         };
     }
@@ -201,7 +209,11 @@ async fn execute_job(
 
         // Check if there was a syntax error in the user code
         if stderr_output != "" && stderr_output.contains("SyntaxError") {
-            return Some((Bytes::new(), 3, execution_timer_start.elapsed().as_millis()));
+            return Some(JobOutput {
+                output: Bytes::new(),
+                error_code: 3,
+                total_time: execution_timer_start.elapsed().as_millis(),
+            });
         }
 
         eprintln!("Failed to execute worker service to serve the user code: {stderr_output}");
@@ -210,15 +222,23 @@ async fn execute_job(
     }
 
     // Worker is ready, Make the request with the expected user timeout
-    let Ok(response) = workerd::get_workerd_response(port, code_inputs).await else {
+    let Ok(response) = workerd::get_workerd_response(port, code_inputs.into()).await else {
         return None;
     };
 
     if response.len() > MAX_OUTPUT_BYTES_LENGTH {
-        return Some((Bytes::new(), 5, execution_timer_start.elapsed().as_millis()));
+        return Some(JobOutput {
+            output: Bytes::new(),
+            error_code: 5,
+            total_time: execution_timer_start.elapsed().as_millis(),
+        });
     }
 
-    Some((response, 0, execution_timer_start.elapsed().as_millis()))
+    Some(JobOutput {
+        output: response,
+        error_code: 0,
+        total_time: execution_timer_start.elapsed().as_millis(),
+    })
 }
 
 // Sign the execution response with the enclave key to be verified by the jobs contract
