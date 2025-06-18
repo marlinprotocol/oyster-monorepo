@@ -33,7 +33,6 @@ pub struct ImageArgs {
 }
 
 pub fn compute_image_id(args: ImageArgs) -> Result<()> {
-    // the preset is used here for flag since debug is not part of command line arguments
     let pcrs = args
         .init_params
         .pcrs
