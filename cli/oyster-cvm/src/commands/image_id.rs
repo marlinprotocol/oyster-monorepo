@@ -42,7 +42,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args
         .init_params
-        .load(args.preset, args.arch, false)
+        .load(args.preset, args.arch, args.debug)
         .context("Failed to load init params")?
     {
         let init_param_json = String::from_utf8(BASE64_STANDARD.decode(init_param_b64)?)?;
