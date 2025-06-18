@@ -164,10 +164,11 @@ impl InitParamsArgs {
 
         // load pcrs
         // use pcrs of the blue base image by default
+        // if debug flag is true, use zero pcrs
         let pcrs = self
             .pcrs
-            .load_required(preset_to_pcr_preset(&preset, &arch))
-            .context("Failed to load PCRs")?;
+            .load_required(preset_to_pcr_preset(if debug { "debug" } else { &preset }, &arch))
+            .context("failed to load PCRs")?;
 
         // calculate pcr16 by extending the digest onto zero pcrs
         let mut pcr_hasher = Sha384::new();
