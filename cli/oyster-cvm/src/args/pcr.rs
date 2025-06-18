@@ -130,7 +130,6 @@ pub fn preset_to_pcr_preset(preset: &str, arch: &Platform, debug: bool) -> Optio
         return Some("debug".to_owned());
     }
 
-    // debug in preset can be removed in the future. keeping it here for backward compatibility
     match preset {
         "blue" => match arch {
             Platform::AMD64 => Some("base/blue/v3.0.0/amd64"),
