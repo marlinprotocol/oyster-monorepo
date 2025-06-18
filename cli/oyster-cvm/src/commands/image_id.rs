@@ -27,7 +27,7 @@ pub struct ImageArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 
-    /// Enable debug mode
+    /// debug mode 
     #[arg(long)]
     debug: bool,
 }

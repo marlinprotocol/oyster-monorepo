@@ -125,7 +125,7 @@ impl PcrArgs {
 }
 
 pub fn preset_to_pcr_preset(preset: &str, arch: &Platform, debug: bool) -> Option<String> {
-    // if debug flag is true, return debug preset
+    // if debug flag is true, return debug pcr preset
     if debug {
         return Some("debug".to_owned());
     }
