@@ -168,7 +168,7 @@ impl InitParamsArgs {
         let pcrs = self
             .pcrs
             .load_required(preset_to_pcr_preset(if debug { "debug" } else { &preset }, &arch))
-            .context("failed to load PCRs")?;
+            .context("Failed to load PCRs")?;
 
         // calculate pcr16 by extending the digest onto zero pcrs
         let mut pcr_hasher = Sha384::new();
