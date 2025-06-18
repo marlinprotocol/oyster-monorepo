@@ -128,7 +128,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/immutable-config")
             .json(&json!({
-                "owner_address_hex": "32255G",
+                "owner_address_hex": "0x32255G",
             }))
             .await;
 
@@ -141,7 +141,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/immutable-config")
             .json(&json!({
-                "owner_address_hex": "322557",
+                "owner_address_hex": "0x322557",
             }))
             .await;
 
@@ -220,7 +220,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "executor_gas_key": "322557",
+                "executor_gas_key": "0x322557",
                 "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
@@ -250,7 +250,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "executor_gas_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "executor_gas_key": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))

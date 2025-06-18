@@ -1,6 +1,7 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+use alloy::hex;
 use alloy::sol_types::SolCall;
 use reqwest::redirect::Policy;
 use reqwest::Client;
@@ -32,7 +33,7 @@ pub enum ServerlessError {
     #[error("calldata doesn't belong to the expected method")]
     InvalidTxCalldata,
     #[error("calldata field is not a valid hex string")]
-    BadCalldata(#[from] alloy::hex::FromHexError),
+    BadCalldata(#[from] hex::FromHexError),
     #[error("Failed to create/write to the code file")]
     CodeFileCreate(#[source] tokio::io::Error),
     #[error("Failed to create/write to the config file")]
@@ -89,7 +90,7 @@ pub async fn create_code_file(
         _ => Err(ServerlessError::InvalidTxCalldataType),
     }?;
 
-    let input_bytes = alloy::hex::decode(&input[2..])?;
+    let input_bytes = hex::decode(&input)?;
 
     // Now decode the data
     let Ok(tokens) = saveCodeInCallDataCall::abi_decode(&input_bytes, true) else {

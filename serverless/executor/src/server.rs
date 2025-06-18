@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use alloy::hex;
 use alloy::primitives::{Address, U256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::SignerSync;
@@ -27,12 +28,7 @@ pub async fn inject_immutable_config(
     app_state: State<AppState>,
     Json(immutable_config): Json<ImmutableConfig>,
 ) -> Response {
-    let owner_address = alloy::hex::decode(
-        &immutable_config
-            .owner_address_hex
-            .strip_prefix("0x")
-            .unwrap_or(&immutable_config.owner_address_hex),
-    );
+    let owner_address = hex::decode(&immutable_config.owner_address_hex);
     let Ok(owner_address) = owner_address else {
         return (
             StatusCode::BAD_REQUEST,
@@ -124,13 +120,7 @@ pub async fn inject_mutable_config(
 
     // Decode the gas private key from the payload
     let mut bytes32_gas_key = [0u8; 32];
-    if let Err(err) = alloy::hex::decode_to_slice(
-        &mutable_config
-            .executor_gas_key
-            .strip_prefix("0x")
-            .unwrap_or(&mutable_config.executor_gas_key),
-        &mut bytes32_gas_key,
-    ) {
+    if let Err(err) = hex::decode_to_slice(&mutable_config.executor_gas_key, &mut bytes32_gas_key) {
         return (
             StatusCode::BAD_REQUEST,
             format!(
@@ -289,7 +279,7 @@ pub async fn get_tee_details(app_state: State<AppState>) -> Response {
         enclave_address: app_state.enclave_signer.address(),
         enclave_public_key: format!(
             "0x{}",
-            alloy::hex::encode(
+            hex::encode(
                 &(app_state
                     .enclave_signer
                     .credential()
@@ -395,7 +385,7 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
         )
             .into_response();
     };
-    let signature = alloy::hex::encode(sig.as_bytes());
+    let signature = hex::encode(sig.as_bytes());
 
     let current_block_number = get_latest_block_number(&app_state.http_rpc_url).await;
 

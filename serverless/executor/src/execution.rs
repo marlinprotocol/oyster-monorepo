@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use alloy::hex;
 use alloy::primitives::U256;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::SignerSync;
@@ -36,7 +37,7 @@ pub async fn handle_job(
     app_state: State<AppState>,
     tx_sender: Sender<JobsTransaction>,
 ) {
-    let slug = &alloy::hex::encode(rand::random::<u32>().to_ne_bytes());
+    let slug = &hex::encode(rand::random::<u32>().to_ne_bytes());
 
     // Execute the job request under the specified user deadline
     let response = timeout(

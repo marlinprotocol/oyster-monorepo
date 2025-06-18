@@ -2,6 +2,7 @@ use std::pin::pin;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use alloy::hex;
 use alloy::primitives::{B256, U256};
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::{Filter, Log};
@@ -296,7 +297,7 @@ pub async fn handle_event_logs(
 
                 if is_node_selected {
                     let code_hash =
-                        String::from("0x".to_owned() + &alloy::hex::encode(event_decoded.codehash.as_slice()));
+                        String::from("0x".to_owned() + &hex::encode(event_decoded.codehash.as_slice()));
                     let app_state_clone = app_state.clone();
                     let tx_clone = tx_sender.clone();
 
