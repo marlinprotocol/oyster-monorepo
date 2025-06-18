@@ -178,7 +178,7 @@ fn get_pcrs(
     arch: Platform,
 ) -> Result<Option<[[u8; 48]; 4]>> {
     let Some((pcr0, pcr1, pcr2)) =
-        pcr.load(preset.and_then(|x| preset_to_pcr_preset(&x, &arch)))?
+        pcr.load(preset.and_then(|x| preset_to_pcr_preset(&x, &arch, false)))?
     else {
         tracing::info!("No PCR values provided - skipping PCR verification");
         return Ok(None);

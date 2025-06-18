@@ -26,14 +26,19 @@ pub struct ImageArgs {
 
     #[command(flatten)]
     init_params: InitParamsArgs,
+
+    /// Enable debug mode
+    #[arg(long)]
+    debug: bool,
 }
 
 pub fn compute_image_id(args: ImageArgs) -> Result<()> {
+    // the preset is used here for flag since debug is not part of command line arguments
     let pcrs = args
         .init_params
         .pcrs
         .clone()
-        .load_required(preset_to_pcr_preset(&args.preset, &args.arch))
+        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug)) 
         .context("Failed to load PCRs")?;
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args
