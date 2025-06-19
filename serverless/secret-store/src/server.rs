@@ -5,17 +5,18 @@ use actix_web::web::{Data, Json};
 use actix_web::{get, post, HttpResponse, Responder};
 use alloy::dyn_abi::DynSolValue;
 use alloy::hex;
-use alloy::primitives::{keccak256, Address, U256};
-use alloy::signers::k256::elliptic_curve::generic_array::sequence::Lengthen;
+use alloy::primitives::{keccak256, Address, PrimitiveSignature, U256};
 use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::Signature;
+use alloy::signers::SignerSync;
+use alloy::sol_types::SolCall;
 use ecies::decrypt;
 use multi_block_txns::TxnManager;
 use serde_json::json;
 
 use crate::constants::{DOMAIN_SEPARATOR, SECRET_STORAGE_CAPACITY_BYTES};
 use crate::events::events_listener;
-use crate::model::{AppState, CreateSecret, ImmutableConfig, MutableConfig};
+use crate::model::SecretManagerContract::acknowledgeStoreCall;
+use crate::model::{Acknowledge, AppState, CreateSecret, ImmutableConfig, MutableConfig};
 use crate::utils::{create_and_populate_file, get_latest_block_number};
 
 #[get("/")]
@@ -30,12 +31,7 @@ async fn inject_immutable_config(
     app_state: Data<AppState>,
 ) -> impl Responder {
     // Extract the owner address from the payload
-    let owner_address = hex::decode(
-        &immutable_config
-            .owner_address_hex
-            .strip_prefix("0x")
-            .unwrap_or(&immutable_config.owner_address_hex),
-    );
+    let owner_address = hex::decode(&immutable_config.owner_address_hex);
     let Ok(owner_address) = owner_address else {
         return HttpResponse::BadRequest().body(format!(
             "Invalid owner address hex string: {:?}\n",
@@ -76,13 +72,7 @@ async fn inject_mutable_config(
 
     // Decode the gas private key from the payload
     let mut bytes32_gas_key = [0u8; 32];
-    if let Err(err) = hex::decode_to_slice(
-        &mutable_config
-            .gas_key_hex
-            .strip_prefix("0x")
-            .unwrap_or(&mutable_config.gas_key_hex),
-        &mut bytes32_gas_key,
-    ) {
+    if let Err(err) = hex::decode_to_slice(&mutable_config.gas_key_hex, &mut bytes32_gas_key) {
         return HttpResponse::BadRequest().body(format!(
             "Failed to hex decode the gas private key into 32 bytes: {:?}\n",
             err
@@ -166,8 +156,8 @@ async fn get_secret_store_details(app_state: Data<AppState>) -> impl Responder {
     }
 
     HttpResponse::Ok().json(json!({
-        "enclave_address": app_state.enclave_address,
-        "enclave_public_key": format!("0x{}", hex::encode(&(app_state.enclave_signer.verifying_key().to_encoded_point(false).as_bytes())[1..])),
+        "enclave_address": app_state.enclave_signer.address(),
+        "enclave_public_key": format!("0x{}", hex::encode(&(app_state.enclave_signer.credential().verifying_key().to_encoded_point(false).as_bytes())[1..])),
         "owner_address": *app_state.enclave_owner.lock().unwrap(),
         "gas_address": gas_address,
         "ws_rpc_url": app_state.web_socket_url.read().unwrap().clone(),
@@ -221,12 +211,7 @@ async fn inject_and_store_secret(
     }
 
     // Decode the encrypted secret from the payload
-    let encrypted_secret_bytes = hex::decode(
-        &create_secret
-            .encrypted_secret_hex
-            .strip_prefix("0x")
-            .unwrap_or(&create_secret.encrypted_secret_hex),
-    );
+    let encrypted_secret_bytes = hex::decode(&create_secret.encrypted_secret_hex);
     let Ok(encrypted_secret_bytes) = encrypted_secret_bytes else {
         return HttpResponse::BadRequest().body(format!(
             "Invalid encrypted secret hex string: {:?}\n",
@@ -235,12 +220,7 @@ async fn inject_and_store_secret(
     };
 
     // Decode the signature from the payload
-    let signature_bytes = hex::decode(
-        &create_secret
-            .signature_hex
-            .strip_prefix("0x")
-            .unwrap_or(&create_secret.signature_hex),
-    );
+    let signature_bytes = hex::decode(&create_secret.signature_hex);
     let Ok(signature_bytes) = signature_bytes else {
         return HttpResponse::BadRequest().body(format!(
             "Invalid signature hex string: {:?}\n",
@@ -249,7 +229,7 @@ async fn inject_and_store_secret(
     };
 
     // Reconstruct the signature from the bytes data
-    let signature = Signature::try_from(signature_bytes.as_slice());
+    let signature = PrimitiveSignature::try_from(signature_bytes.as_slice());
     let Ok(signature) = signature else {
         return HttpResponse::BadRequest().body(format!(
             "Invalid signature : {:?}\n",
@@ -299,7 +279,7 @@ async fn inject_and_store_secret(
 
     // Decrypt the secret data using the enclave signer key
     let decrypted_secret = decrypt(
-        &app_state.enclave_signer.to_bytes(),
+        &app_state.enclave_signer.to_bytes().0,
         &encrypted_secret_bytes,
     );
     let Ok(decrypted_secret) = decrypted_secret else {
@@ -355,48 +335,30 @@ async fn inject_and_store_secret(
     let sign_timestamp = sign_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     // Encode and hash the acknowledgement of storing the secret following EIP712 format
-    let acknowledge_typehash = keccak256("Acknowledge(uint256 secretId,uint256 signTimestamp)");
-
-    let hash_struct = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::FixedBytes(acknowledge_typehash, 32),
-            DynSolValue::Uint(create_secret.secret_id, 256),
-            DynSolValue::Uint(U256::from(sign_timestamp), 256),
-        ])
-        .abi_encode(),
-    );
-
-    // Create the digest
-    let digest = keccak256(
-        DynSolValue::Tuple(vec![
-            DynSolValue::String("\x19\x01".to_string()),
-            DynSolValue::FixedBytes(*DOMAIN_SEPARATOR, 32),
-            DynSolValue::FixedBytes(hash_struct, 32),
-        ])
-        .abi_encode_packed(),
-    );
+    let acknowledge_data = Acknowledge {
+        secretId: create_secret.secret_id,
+        signTimestamp: U256::from(sign_timestamp),
+    };
 
     // Sign the digest using enclave key
     let sig = app_state
         .enclave_signer
-        .sign_prehash_recoverable(&digest.to_vec());
-    let Ok((rs, v)) = sig else {
+        .sign_typed_data_sync(&acknowledge_data, &DOMAIN_SEPARATOR);
+    let Ok(sig) = sig else {
         return HttpResponse::InternalServerError().body(format!(
             "Secret Stored! \nFailed to sign the acknowledgement message using enclave key: {:?}\n",
             sig.unwrap_err()
         ));
     };
-    let signature = rs.to_bytes().append(27 + v.to_byte()).to_vec();
+    let signature = sig.as_bytes();
 
-    let txn_data = app_state
-        .secret_manager_contract_instance
-        .acknowledgeStore(
-            create_secret.secret_id,
-            U256::from(sign_timestamp),
-            signature.clone().into(),
-        )
-        .calldata()
-        .to_owned();
+    let txn_data = acknowledgeStoreCall {
+        _secretId: create_secret.secret_id,
+        _signTimestamp: U256::from(sign_timestamp),
+        _signature: signature.clone().into(),
+    }
+    .abi_encode()
+    .to_owned();
 
     // Send the txn response with the acknowledgement counterpart to the common chain txn sender
     if let Err(err) = app_state
@@ -407,7 +369,7 @@ async fn inject_and_store_secret(
         .unwrap()
         .call_contract_function(
             app_state.secret_manager_contract_addr,
-            txn_data.clone(),
+            txn_data.clone().into(),
             secret_created.acknowledgement_deadline,
         )
         .await

@@ -4,13 +4,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use alloy::primitives::{Address, U256};
-use alloy::providers::RootProvider;
-use alloy::signers::k256::ecdsa::SigningKey;
+use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
-use alloy::transports::http::{Client, Http};
 use multi_block_txns::TxnManager;
 use serde::{Deserialize, Serialize};
-use SecretManagerContract::SecretManagerContractInstance;
 
 sol!(
     #[allow(missing_docs)]
@@ -19,8 +16,26 @@ sol!(
     "./SecretManager.json"
 );
 
-// Define type for SecretManagerContract instances
-pub type SecretManagerAbi = SecretManagerContractInstance<Http<Client>, RootProvider<Http<Client>>>;
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    TeeManagerContract,
+    "./TeeManager.json"
+);
+
+// Define the EIP-712 struct that matches your Solidity contract
+sol! {
+    #[derive(Debug)]
+    struct Alive {
+        uint256 signTimestamp;
+    }
+
+    #[derive(Debug)]
+    struct Acknowledge {
+        uint256 secretId;
+        uint256 signTimestamp;
+    }
+}
 
 pub struct ConfigManager {
     pub path: String,
@@ -51,10 +66,8 @@ pub struct AppState {
     pub web_socket_url: Arc<RwLock<String>>,
     pub tee_manager_contract_addr: Address,
     pub secret_manager_contract_addr: Address,
-    pub secret_manager_contract_instance: SecretManagerAbi,
     pub num_selected_stores: u8,
-    pub enclave_address: Address,
-    pub enclave_signer: SigningKey,
+    pub enclave_signer: PrivateKeySigner,
     pub immutable_params_injected: Mutex<bool>,
     pub mutable_params_injected: Mutex<bool>,
     pub enclave_owner: Mutex<Address>,
