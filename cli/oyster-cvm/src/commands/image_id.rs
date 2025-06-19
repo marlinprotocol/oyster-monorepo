@@ -26,6 +26,10 @@ pub struct ImageArgs {
 
     #[command(flatten)]
     init_params: InitParamsArgs,
+
+    /// debug mode 
+    #[arg(long)]
+    debug: bool,
 }
 
 pub fn compute_image_id(args: ImageArgs) -> Result<()> {
@@ -33,12 +37,12 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
         .init_params
         .pcrs
         .clone()
-        .load_required(preset_to_pcr_preset(&args.preset, &args.arch))
+        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug)) 
         .context("Failed to load PCRs")?;
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args
         .init_params
-        .load(args.preset, args.arch, false)
+        .load(args.preset, args.arch, args.debug)
         .context("Failed to load init params")?
     {
         let init_param_json = String::from_utf8(BASE64_STANDARD.decode(init_param_b64)?)?;
