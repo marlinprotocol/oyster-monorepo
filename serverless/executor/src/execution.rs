@@ -2,20 +2,20 @@ use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use alloy::hex;
+use alloy::primitives::U256;
+use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::SignerSync;
+use alloy::sol_types::eip712_domain;
 use anyhow::Context;
 use axum::extract::State;
-use bytes::Bytes;
-use ethers::abi::{encode, encode_packed, Token};
-use ethers::types::U256;
-use ethers::utils::keccak256;
-use k256::ecdsa::SigningKey;
-use k256::elliptic_curve::generic_array::sequence::Lengthen;
 use scopeguard::defer;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 
 use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
-use crate::model::{AppState, JobOutput, JobsTxnMetadata, JobsTxnType};
+use crate::model::JobsContract::submitOutputCall;
+use crate::model::{AppState, JobOutput, JobsTransaction, SubmitOutput};
 use crate::workerd;
 use crate::workerd::ServerlessError::*;
 
@@ -32,11 +32,10 @@ pub async fn handle_job(
     job_id: U256,
     secret_id: U256,
     code_hash: String,
-    code_inputs: Bytes,
+    code_inputs: Vec<u8>,
     user_deadline: u64, // time in millis
-    job_create_block: u64,
     app_state: State<AppState>,
-    tx: Sender<JobsTxnMetadata>,
+    tx_sender: Sender<JobsTransaction>,
 ) {
     let slug = &hex::encode(rand::random::<u32>().to_ne_bytes());
 
@@ -53,10 +52,9 @@ pub async fn handle_job(
 
     // Initialize the default timeout response and build on that based on the above response
     let mut job_output = Some(JobOutput {
-        output: Bytes::new(),
+        output: Vec::new(),
         error_code: 4,
         total_time: user_deadline.into(),
-        ..Default::default()
     });
     if response.is_ok() {
         job_output = response.unwrap();
@@ -67,16 +65,17 @@ pub async fn handle_job(
     };
 
     // Sign and send the job response to the receiver channel
-    let sign_timestamp: U256 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        .into();
+    let sign_timestamp = U256::from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    );
 
     let Some(signature) = sign_response(
         &app_state.enclave_signer,
         job_id,
-        &job_output.output,
+        job_output.output.clone(),
         job_output.total_time,
         job_output.error_code,
         sign_timestamp,
@@ -84,33 +83,26 @@ pub async fn handle_job(
         return;
     };
 
-    // Send the job response metadata to the receiver channel
-    if let Err(err) = tx
-        .send(JobsTxnMetadata {
-            txn_type: JobsTxnType::OUTPUT,
-            job_id: job_id,
-            job_output: Some(JobOutput {
-                output: job_output.output,
-                error_code: job_output.error_code,
-                total_time: job_output.total_time,
-                sign_timestamp: sign_timestamp,
-                signature: signature.into(),
-            }),
-            gas_estimate_block: Some(job_create_block),
-            // The submit output transaction will be invalidated after this deadline by the 'Jobs' contract
-            retry_deadline: Instant::now()
-                + Duration::from_secs(
-                    app_state.execution_buffer_time + user_deadline
-                        - (job_output.total_time as u64),
-                ),
-        })
+    // Send the txn response with the execution timeout counterpart to the common chain txn sender
+    if let Err(err) = tx_sender
+        .send(JobsTransaction::OUTPUT(
+            submitOutputCall {
+                _signature: signature.into(),
+                _jobId: job_id,
+                _output: job_output.output.into(),
+                _totalTime: U256::from(job_output.total_time),
+                _errorCode: job_output.error_code,
+                _signTimestamp: sign_timestamp,
+            },
+            user_deadline,
+        ))
         .await
     {
         eprintln!(
-            "Failed to send execution response to receiver channel: {:?}",
-            err
+            "Failed to send execution response transaction for job ID {}: {:?}",
+            job_id, err
         );
-    }
+    };
 
     return;
 }
@@ -118,7 +110,7 @@ pub async fn handle_job(
 async fn execute_job(
     secret_id: U256,
     code_hash: &String,
-    code_inputs: Bytes,
+    code_inputs: Vec<u8>,
     slug: &String,
     app_state: State<AppState>,
 ) -> Option<JobOutput> {
@@ -131,22 +123,19 @@ async fn execute_job(
         &app_state.workerd_runtime_path,
         &app_state.http_rpc_url,
         &app_state.code_contract_addr,
-        &app_state.code_contract_abi,
     )
     .await
     {
         return match err {
             TxNotFound | InvalidTxToType | InvalidTxToValue(_, _) => Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 1,
-                total_time: execution_timer_start.elapsed().as_millis().into(),
-                ..Default::default()
+                total_time: execution_timer_start.elapsed().as_millis(),
             }),
             InvalidTxCalldata | InvalidTxCalldataType | BadCalldata(_) => Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 2,
-                total_time: execution_timer_start.elapsed().as_millis().into(),
-                ..Default::default()
+                total_time: execution_timer_start.elapsed().as_millis(),
             }),
             _ => None,
         };
@@ -221,10 +210,9 @@ async fn execute_job(
         // Check if there was a syntax error in the user code
         if stderr_output != "" && stderr_output.contains("SyntaxError") {
             return Some(JobOutput {
-                output: Bytes::new(),
+                output: Vec::new(),
                 error_code: 3,
-                total_time: execution_timer_start.elapsed().as_millis().into(),
-                ..Default::default()
+                total_time: execution_timer_start.elapsed().as_millis(),
             });
         }
 
@@ -234,75 +222,57 @@ async fn execute_job(
     }
 
     // Worker is ready, Make the request with the expected user timeout
-    let Ok(response) = workerd::get_workerd_response(port, code_inputs).await else {
+    let Ok(response) = workerd::get_workerd_response(port, code_inputs.into()).await else {
         return None;
     };
 
     if response.len() > MAX_OUTPUT_BYTES_LENGTH {
         return Some(JobOutput {
-            output: Bytes::new(),
+            output: Vec::new(),
             error_code: 5,
-            total_time: execution_timer_start.elapsed().as_millis().into(),
-            ..Default::default()
+            total_time: execution_timer_start.elapsed().as_millis(),
         });
     }
 
     Some(JobOutput {
         output: response,
         error_code: 0,
-        total_time: execution_timer_start.elapsed().as_millis().into(),
-        ..Default::default()
+        total_time: execution_timer_start.elapsed().as_millis(),
     })
 }
 
 // Sign the execution response with the enclave key to be verified by the jobs contract
 fn sign_response(
-    signer_key: &SigningKey,
+    signer_key: &PrivateKeySigner,
     job_id: U256,
-    output: &Bytes,
+    output: Vec<u8>,
     total_time: u128,
     error_code: u8,
     sign_timestamp: U256,
 ) -> Option<Vec<u8>> {
-    // Encode and hash the job response details following EIP712 format
-    let domain_separator = keccak256(encode(&[
-        Token::FixedBytes(keccak256("EIP712Domain(string name,string version)").to_vec()),
-        Token::FixedBytes(keccak256("marlin.oyster.Jobs").to_vec()),
-        Token::FixedBytes(keccak256("1").to_vec()),
-    ]));
-    let submit_output_typehash = keccak256("SubmitOutput(uint256 jobId,bytes output,uint256 totalTime,uint8 errorCode,uint256 signTimestamp)");
-
-    let hash_struct = keccak256(encode(&[
-        Token::FixedBytes(submit_output_typehash.to_vec()),
-        Token::Uint(job_id),
-        Token::FixedBytes(keccak256(output).to_vec()),
-        Token::Uint(total_time.into()),
-        Token::Uint(error_code.into()),
-        Token::Uint(sign_timestamp),
-    ]));
-
-    // Create the digest
-    let digest = encode_packed(&[
-        Token::String("\x19\x01".to_string()),
-        Token::FixedBytes(domain_separator.to_vec()),
-        Token::FixedBytes(hash_struct.to_vec()),
-    ]);
-    let Ok(digest) = digest else {
-        eprintln!(
-            "Failed to encode the job response for signing: {:?}",
-            digest.unwrap_err()
-        );
-        return None;
+    let submit_output_data = SubmitOutput {
+        jobId: job_id,
+        output: output.into(),
+        totalTime: U256::from(total_time),
+        errorCode: error_code,
+        signTimestamp: U256::from(sign_timestamp),
     };
-    let digest = keccak256(digest);
+
+    let domain_separator = eip712_domain! {
+        name: "marlin.oyster.Jobs",
+        version: "1",
+    };
 
     // Sign the response details using enclave key
-    let Ok((rs, v)) = signer_key.sign_prehash_recoverable(&digest).map_err(|err| {
-        eprintln!("Failed to sign the job response: {:?}", err);
-        err
-    }) else {
+    let Ok(sig) = signer_key
+        .sign_typed_data_sync(&submit_output_data, &domain_separator)
+        .map_err(|err| {
+            eprintln!("Failed to sign the job response: {:?}", err);
+            err
+        })
+    else {
         return None;
     };
 
-    Some(rs.to_bytes().append(27 + v.to_byte()).to_vec())
+    Some(sig.as_bytes().to_vec())
 }

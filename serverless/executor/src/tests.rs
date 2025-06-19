@@ -1,7 +1,7 @@
 // NOTE: Tests have to be run one by one currently
 
 /* To run an unit test 'test_name', hit the following commands on terminal ->
-   1.    sudo ./cgroupv2_setup.sh
+   1.    sudo ../executor-enclave/cgroupv2_setup.sh
    2.    export RUSTFLAGS="--cfg tokio_unstable"
    3.    sudo echo && cargo test 'test name' -- --nocapture &
    4.    sudo echo && cargo test -- --test-threads 1 &           (For running all the tests sequentially)
@@ -16,21 +16,21 @@ pub mod serverless_executor_test {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
 
+    use alloy::dyn_abi::DynSolValue;
+    use alloy::hex;
+    use alloy::primitives::{keccak256, Address, Bytes, LogData, B256, U256};
+    use alloy::rpc::types::Log;
+    use alloy::signers::k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use alloy::signers::local::PrivateKeySigner;
+    use alloy::signers::utils::public_key_to_address;
+    use alloy::sol_types::SolEvent;
     use axum::extract::State;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use axum_test::TestServer;
-    use bytes::Bytes;
-    use ethers::abi::{encode, encode_packed, Token};
-    use ethers::types::{Address, BigEndianHash, Log, H160, H256, U256, U64};
-    use ethers::utils::{keccak256, public_key_to_address};
-    use k256::ecdsa::SigningKey;
-    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
-    use rand::rngs::OsRng;
-    use serde::{Deserialize, Serialize};
-    use serde_json::{from_str, json, Value};
+    use serde_json::{json, Value};
     use tempfile::Builder;
     use tokio::runtime::Handle;
     use tokio::sync::mpsc::channel;
@@ -38,16 +38,16 @@ pub mod serverless_executor_test {
     use tokio_stream::StreamExt as _;
 
     use crate::cgroups::Cgroups;
-    use crate::constant::{
-        EXECUTION_ENV_ID, EXECUTOR_DEREGISTERED_EVENT, EXECUTOR_DRAINED_EVENT,
-        EXECUTOR_REVIVED_EVENT, MAX_OUTPUT_BYTES_LENGTH,
+    use crate::constant::{EXECUTION_ENV_ID, MAX_OUTPUT_BYTES_LENGTH};
+    use crate::events::handle_event_logs;
+    use crate::model::{
+        AppState, JobsContract, JobsTransaction, RegistrationMessage, TeeManagerContract,
     };
-    use crate::event_handler::handle_event_logs;
-    use crate::model::{AppState, JobsTxnMetadata, JobsTxnType};
-    use crate::node_handler::{
+    use crate::server::{
         export_signed_registration_message, get_tee_details, index, inject_immutable_config,
         inject_mutable_config,
     };
+    use crate::utils::get_byte_slice;
 
     // Testnet or Local blockchain (Hardhat) configurations
     const CHAIN_ID: u64 = 421614;
@@ -59,8 +59,7 @@ pub mod serverless_executor_test {
 
     // Generate test app state
     async fn generate_app_state(code_contract_uppercase: bool) -> AppState {
-        let signer = SigningKey::random(&mut OsRng);
-        let signer_verifier_address = public_key_to_address(signer.verifying_key());
+        let signer = PrivateKeySigner::random();
 
         AppState {
             job_capacity: 20,
@@ -80,20 +79,16 @@ pub mod serverless_executor_test {
                 CODE_CONTRACT_ADDR.to_owned()
             },
             num_selected_executors: 1,
-            enclave_address: signer_verifier_address,
             enclave_signer: signer,
             immutable_params_injected: Arc::new(Mutex::new(false)),
             mutable_params_injected: Arc::new(Mutex::new(false)),
             enclave_registered: Arc::new(AtomicBool::new(false)),
             events_listener_active: Arc::new(Mutex::new(false)),
             enclave_draining: Arc::new(AtomicBool::new(false)),
-            enclave_owner: Arc::new(Mutex::new(H160::zero())),
-            http_rpc_client: Arc::new(Mutex::new(None)),
+            enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
+            http_rpc_txn_manager: Arc::new(Mutex::new(None)),
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
             last_block_seen: Arc::new(AtomicU64::new(0)),
-            nonce_to_send: Arc::new(Mutex::new(U256::from(0))),
-            jobs_contract_abi: from_str(include_str!("../Jobs.json")).unwrap(),
-            code_contract_abi: from_str(include_str!("../CodeContract.json")).unwrap(),
         }
     }
 
@@ -133,7 +128,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/immutable-config")
             .json(&json!({
-                "owner_address_hex": "32255G",
+                "owner_address_hex": "0x32255G",
             }))
             .await;
 
@@ -146,7 +141,7 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/immutable-config")
             .json(&json!({
-                "owner_address_hex": "322557",
+                "owner_address_hex": "0x322557",
             }))
             .await;
 
@@ -165,7 +160,7 @@ pub mod serverless_executor_test {
                 String::from("Immutable params configured!\n"),
             );
         }
-        let valid_owner = H160::random();
+        let valid_owner = Address::from([0x42; 20]);
         let resp = server
             .post("/immutable-config")
             .json(&json!({
@@ -194,7 +189,7 @@ pub mod serverless_executor_test {
                 String::from("Immutable params already configured!\n"),
             );
         }
-        let valid_owner_2 = H160::random();
+        let valid_owner_2 = Address::from([0x11; 20]);
         let resp = server
             .post("/immutable-config")
             .json(&json!({
@@ -225,14 +220,16 @@ pub mod serverless_executor_test {
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "executor_gas_key": "322557",
+                "executor_gas_key": "0x322557",
                 "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
             .await;
 
         resp.assert_status_bad_request();
-        resp.assert_text("Gas private key must be 32 bytes long!\n");
+        resp.assert_text(
+            "Failed to hex decode the gas private key into 32 bytes: InvalidStringLength\n",
+        );
 
         // Inject invalid executor gas private key hex string (invalid hex character)
         let resp = server
@@ -246,26 +243,24 @@ pub mod serverless_executor_test {
 
         resp.assert_status_bad_request();
         resp.assert_text(
-            "Invalid gas private key hex string: InvalidHexCharacter { c: 'z', index: 17 }\n",
+            "Failed to hex decode the gas private key into 32 bytes: InvalidHexCharacter { c: 'z', index: 17 }\n",
         );
 
         // Inject invalid executor gas private key hex string (not ecdsa valid key)
         let resp = server
             .post("/mutable-config")
             .json(&json!({
-                "executor_gas_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "executor_gas_key": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "secret_store_gas_key": "",
                 "ws_api_key": "ws_api_key",
             }))
             .await;
 
         resp.assert_status_bad_request();
-        resp.assert_text(
-            "Invalid gas private key provided: EcdsaError(signature::Error { source: None })\n",
-        );
+        resp.assert_text("Invalid gas private key provided: signature::Error { source: None }\n");
 
         // Initialise executor gas wallet key
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
 
         // Inject invalid ws_api_key hex string with invalid character
         let resp = server
@@ -365,7 +360,7 @@ pub mod serverless_executor_test {
             let mut state = mock_state.lock().unwrap();
             *state = (StatusCode::OK, String::from("Mutable params configured!\n"));
         }
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
 
         let resp = server
             .post("/mutable-config")
@@ -380,13 +375,14 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params configured!\n");
         assert_eq!(
             app_state
-                .http_rpc_client
+                .http_rpc_txn_manager
                 .lock()
                 .unwrap()
                 .clone()
                 .unwrap()
+                .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -411,7 +407,7 @@ pub mod serverless_executor_test {
         }
 
         // Inject valid mutable config params again to test mutability
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -425,13 +421,14 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params configured!\n");
         assert_eq!(
             app_state
-                .http_rpc_client
+                .http_rpc_txn_manager
                 .lock()
                 .unwrap()
                 .clone()
                 .unwrap()
+                .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -473,19 +470,20 @@ pub mod serverless_executor_test {
             *state = (
                 StatusCode::OK,
                 json!({
-                    "enclave_address": app_state.enclave_address,
+                    "enclave_address": app_state.enclave_signer.address(),
                     "enclave_public_key": format!(
                         "0x{}",
                         hex::encode(
                             &(app_state
                                 .enclave_signer
+                                .credential()
                                 .verifying_key()
                                 .to_encoded_point(false)
                                 .as_bytes())[1..]
                         )
                     ),
-                    "owner_address": H160::zero(),
-                    "gas_address": H160::zero(),
+                    "owner_address": Address::ZERO,
+                    "gas_address": Address::ZERO,
                     "ws_rpc_url": WS_URL,
                 }),
             );
@@ -494,25 +492,26 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
                 )
             ),
-            "owner_address": H160::zero(),
-            "executor_gas_address": H160::zero(),
-            "secret_store_gas_address": H160::zero(),
+            "owner_address": Address::ZERO,
+            "executor_gas_address": Address::ZERO,
+            "secret_store_gas_address": Address::ZERO,
             "ws_rpc_url": WS_URL,
         }));
 
         // Inject valid immutable config params
-        let valid_owner = H160::random();
+        let valid_owner = Address::from([0x42; 20]);
         let resp = server
             .post("/immutable-config")
             .json(&json!({
@@ -529,26 +528,27 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
                 )
             ),
             "owner_address": valid_owner,
-            "executor_gas_address": H160::zero(),
-            "secret_store_gas_address": H160::zero(),
+            "executor_gas_address": Address::ZERO,
+            "secret_store_gas_address": Address::ZERO,
             "ws_rpc_url": WS_URL,
         }));
 
         // Inject valid mutable config params
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -562,13 +562,14 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params configured!\n");
         assert_eq!(
             app_state
-                .http_rpc_client
+                .http_rpc_txn_manager
                 .lock()
                 .unwrap()
                 .clone()
                 .unwrap()
+                .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -582,19 +583,20 @@ pub mod serverless_executor_test {
             *state = (
                 StatusCode::OK,
                 json!({
-                    "enclave_address": app_state.enclave_address,
+                    "enclave_address": app_state.enclave_signer.address(),
                     "enclave_public_key": format!(
                         "0x{}",
                         hex::encode(
                             &(app_state
                                 .enclave_signer
+                                .credential()
                                 .verifying_key()
                                 .to_encoded_point(false)
                                 .as_bytes())[1..]
                         )
                     ),
                     "owner_address": valid_owner,
-                    "gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
+                    "gas_address": public_key_to_address(secret_store_gas_wallet_key.credential().verifying_key()),
                     "ws_rpc_url": WS_URL,
                 }),
             );
@@ -603,32 +605,23 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
         resp.assert_json(&json!({
-            "enclave_address": app_state.enclave_address,
+            "enclave_address": app_state.enclave_signer.address(),
             "enclave_public_key": format!(
                 "0x{}",
                 hex::encode(
                     &(app_state
                         .enclave_signer
+                        .credential()
                         .verifying_key()
                         .to_encoded_point(false)
                         .as_bytes())[1..]
                 )
             ),
             "owner_address": valid_owner,
-            "executor_gas_address": public_key_to_address(executor_gas_wallet_key.verifying_key()),
-            "secret_store_gas_address": public_key_to_address(secret_store_gas_wallet_key.verifying_key()),
+            "executor_gas_address": public_key_to_address(executor_gas_wallet_key.credential().verifying_key()),
+            "secret_store_gas_address": public_key_to_address(secret_store_gas_wallet_key.credential().verifying_key()),
             "ws_rpc_url": WS_URL.to_owned() + "ws_api_key",
         }));
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct ExportResponse {
-        job_capacity: usize,
-        storage_capacity: usize,
-        sign_timestamp: usize,
-        env: u8,
-        owner: H160,
-        signature: String,
     }
 
     #[tokio::test]
@@ -637,7 +630,11 @@ pub mod serverless_executor_test {
         let metrics = Handle::current().metrics();
 
         let app_state = generate_app_state(false).await;
-        let verifying_key = app_state.enclave_signer.verifying_key().to_owned();
+        let verifying_key = app_state
+            .enclave_signer
+            .credential()
+            .verifying_key()
+            .to_owned();
 
         let server = TestServer::new(new_app(app_state.clone())).unwrap();
 
@@ -652,7 +649,7 @@ pub mod serverless_executor_test {
         resp.assert_text("Immutable params not configured yet!\n");
 
         // Inject valid immutable config params
-        let valid_owner = H160::random();
+        let valid_owner = Address::from([0x42; 20]);
         let resp = server
             .post("/immutable-config")
             .json(&json!({
@@ -671,8 +668,8 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params not configured yet!\n");
 
         // Inject valid mutable config params
-        let executor_gas_wallet_key = SigningKey::random(&mut OsRng);
-        let secret_store_gas_wallet_key = SigningKey::random(&mut OsRng);
+        let executor_gas_wallet_key = PrivateKeySigner::random();
+        let secret_store_gas_wallet_key = PrivateKeySigner::random();
         let resp = server
             .post("/mutable-config")
             .json(&json!({
@@ -686,13 +683,14 @@ pub mod serverless_executor_test {
         resp.assert_text("Mutable params configured!\n");
         assert_eq!(
             app_state
-                .http_rpc_client
+                .http_rpc_txn_manager
                 .lock()
                 .unwrap()
                 .clone()
                 .unwrap()
+                .get_private_signer()
                 .address(),
-            public_key_to_address(executor_gas_wallet_key.verifying_key())
+            public_key_to_address(executor_gas_wallet_key.credential().verifying_key())
         );
         assert_eq!(
             app_state.ws_rpc_url.read().unwrap().as_str(),
@@ -715,7 +713,7 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
 
-        let response: Result<ExportResponse, serde_json::Error> =
+        let response: Result<RegistrationMessage, serde_json::Error> =
             serde_json::from_slice(&resp.as_bytes());
         assert!(response.is_ok());
 
@@ -730,7 +728,7 @@ pub mod serverless_executor_test {
                 response.owner,
                 response.job_capacity,
                 response.storage_capacity,
-                response.sign_timestamp,
+                response.sign_timestamp as usize,
                 response.signature
             ),
             verifying_key
@@ -743,7 +741,7 @@ pub mod serverless_executor_test {
 
         resp.assert_status_ok();
 
-        let response: Result<ExportResponse, serde_json::Error> =
+        let response: Result<RegistrationMessage, serde_json::Error> =
             serde_json::from_slice(&resp.as_bytes());
         assert!(response.is_ok());
 
@@ -756,7 +754,7 @@ pub mod serverless_executor_test {
                 response.owner,
                 response.job_capacity,
                 response.storage_capacity,
-                response.sign_timestamp,
+                response.sign_timestamp as usize,
                 response.signature
             ),
             verifying_key
@@ -780,14 +778,14 @@ pub mod serverless_executor_test {
 
         // Prepare the logs for JobCreated and JobResponded events accordingly
         let mut jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -797,14 +795,14 @@ pub mod serverless_executor_test {
         .into();
 
         jobs_created_logs.push(get_job_created_log(
-            1.into(),
-            1.into(),
-            0.into(),
+            1,
+            U256::ONE,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         ));
 
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({
@@ -814,23 +812,23 @@ pub mod serverless_executor_test {
         .into();
 
         jobs_created_logs.push(get_job_created_log(
-            1.into(),
-            2.into(),
-            0.into(),
+            1,
+            U256::from(2),
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         ));
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1.into(), 0.into()),
-            get_job_responded_log(1.into(), 1.into()),
-            get_job_responded_log(1.into(), 2.into()),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::from(2), app_state.enclave_signer.address()),
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             // Introduce time interval between events to be polled
@@ -859,7 +857,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -868,9 +866,9 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 3);
 
-        assert_response(responses[0].clone(), 0.into(), 0, "2,5".into());
-        assert_response(responses[1].clone(), 1.into(), 0, "2,2,5".into());
-        assert_response(responses[2].clone(), 2.into(), 0, "2,2,2,3,5,5".into());
+        assert_response(responses[0].clone(), U256::ZERO, 0, "2,5".into());
+        assert_response(responses[1].clone(), U256::ONE, 0, "2,2,5".into());
+        assert_response(responses[2].clone(), U256::from(2), 0, "2,2,2,3,5,5".into());
     }
 
     #[tokio::test]
@@ -888,18 +886,22 @@ pub mod serverless_executor_test {
         .into();
 
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -921,7 +923,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -930,7 +932,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 0, "2,5".into());
+        assert_response(responses[0].clone(), U256::ZERO, 0, "2,5".into());
     }
 
     #[tokio::test]
@@ -944,18 +946,22 @@ pub mod serverless_executor_test {
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
 
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -977,7 +983,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -988,7 +994,7 @@ pub mod serverless_executor_test {
 
         assert_response(
             responses[0].clone(),
-            0.into(),
+            U256::ZERO,
             0,
             "Please provide a valid integer as input in the format{'num':10}".into(),
         );
@@ -1009,34 +1015,34 @@ pub mod serverless_executor_test {
         let jobs_created_logs = vec![
             // Given transaction hash doesn't belong to the expected smart contract
             get_job_created_log(
-                1.into(),
-                0.into(),
-                0.into(),
+                1,
+                U256::ZERO,
+                U256::ZERO,
                 EXECUTION_ENV_ID,
                 "fed8ab36cc27831836f6dcb7291049158b4d8df31c0ffb05a3d36ba6555e29d7",
                 code_input_bytes.clone(),
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             // Given transaction hash doesn't exist in the expected rpc network
             get_job_created_log(
-                1.into(),
-                1.into(),
-                0.into(),
+                1,
+                U256::ONE,
+                U256::ZERO,
                 EXECUTION_ENV_ID,
                 "37b0b2d9dd58d9130781fc914da456c16ec403010e8d4c27b0ea4657a24c8546",
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
         ];
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1.into(), 0.into()),
-            get_job_responded_log(1.into(), 1.into()),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
@@ -1064,7 +1070,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1073,8 +1079,8 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 2);
 
-        assert_response(responses[0].clone(), 0.into(), 1, "".into());
-        assert_response(responses[1].clone(), 1.into(), 1, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 1, "".into());
+        assert_response(responses[1].clone(), U256::ONE, 1, "".into());
     }
 
     #[tokio::test]
@@ -1089,19 +1095,23 @@ pub mod serverless_executor_test {
 
         // Calldata corresponding to the provided transaction hash is invalid
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1123,7 +1133,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1132,7 +1142,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 2, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 2, "".into());
     }
 
     #[tokio::test]
@@ -1147,19 +1157,23 @@ pub mod serverless_executor_test {
 
         // Code corresponding to the provided transaction hash has a syntax error
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1181,7 +1195,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1190,7 +1204,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 3, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 3, "".into());
     }
 
     #[tokio::test]
@@ -1205,19 +1219,23 @@ pub mod serverless_executor_test {
 
         // User code didn't return a response in the expected period
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1239,7 +1257,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1248,7 +1266,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 4, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 4, "".into());
     }
 
     #[tokio::test]
@@ -1265,21 +1283,21 @@ pub mod serverless_executor_test {
         // Add log entry to relay a job but job response event is not sent and the executor doesn't execute the job request
         let jobs_created_logs = vec![
             get_job_created_log(
-                1.into(),
-                0.into(),
-                0.into(),
+                1,
+                U256::ZERO,
+                U256::ZERO,
                 EXECUTION_ENV_ID,
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                H160::random(),
+                Address::from([0x42; 20]),
             ),
             Log {
                 ..Default::default()
             },
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
@@ -1305,7 +1323,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1314,9 +1332,11 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
         let job_response = responses[0].clone();
-        assert_eq!(job_response.txn_type, JobsTxnType::TIMEOUT);
-        assert_eq!(job_response.job_id, 0.into());
-        assert!(job_response.job_output.is_none());
+        if let JobsTransaction::TIMEOUT(call) = job_response {
+            assert_eq!(call._jobId, U256::ZERO);
+        } else {
+            assert!(false, "Job timeout response not received!");
+        }
     }
 
     #[tokio::test]
@@ -1325,17 +1345,24 @@ pub mod serverless_executor_test {
         let app_state = generate_app_state(false).await;
         app_state.enclave_registered.store(true, Ordering::SeqCst);
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         // Add log for deregistering the current executor
-        let executor_deregistered_logs = vec![Log {
-            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
-            topics: vec![
-                keccak256(EXECUTOR_DEREGISTERED_EVENT).into(),
-                H256::from(app_state.enclave_address),
+        let log_data = LogData::new(
+            vec![
+                TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH.into(),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
-            removed: Some(false),
-            block_number: Some(1.into()),
+            Bytes::new(),
+        )
+        .unwrap();
+        let executor_deregistered_logs = vec![Log {
+            inner: alloy::primitives::Log {
+                address: Address::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
+                data: log_data,
+            },
+            removed: false,
+            block_number: Some(1),
             ..Default::default()
         }];
 
@@ -1384,21 +1411,21 @@ pub mod serverless_executor_test {
         // Prepare the logs for JobCreated log for different env ID '2'
         let jobs_created_logs = vec![
             get_job_created_log(
-                1.into(),
-                0.into(),
-                0.into(),
+                1,
+                U256::ZERO,
+                U256::ZERO,
                 2,
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             Log {
                 ..Default::default()
             },
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
@@ -1442,19 +1469,23 @@ pub mod serverless_executor_test {
         .into();
 
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1476,7 +1507,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1485,7 +1516,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 5, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 5, "".into());
     }
 
     #[tokio::test]
@@ -1504,19 +1535,23 @@ pub mod serverless_executor_test {
         .into();
 
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1538,7 +1573,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1546,7 +1581,7 @@ pub mod serverless_executor_test {
         }
         assert_eq!(responses.len(), 1);
         let expected_resp: Bytes = Bytes::from_static(&[0u8; MAX_OUTPUT_BYTES_LENGTH]);
-        assert_response(responses[0].clone(), 0.into(), 0, expected_resp);
+        assert_response(responses[0].clone(), U256::ZERO, 0, expected_resp);
     }
 
     #[tokio::test]
@@ -1576,33 +1611,33 @@ pub mod serverless_executor_test {
         // User code returning a string containing the secret data
         let jobs_created_logs = vec![
             get_job_created_log(
-                1.into(),
-                0.into(),
-                1.into(),
+                1,
+                U256::ZERO,
+                U256::ONE,
                 EXECUTION_ENV_ID,
                 code_hash,
                 code_input_bytes.clone(),
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             get_job_created_log(
-                1.into(),
-                1.into(),
-                2.into(),
+                1,
+                U256::ONE,
+                U256::from(2),
                 EXECUTION_ENV_ID,
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
         ];
 
         let jobs_responded_logs = vec![
-            get_job_responded_log(1.into(), 0.into()),
-            get_job_responded_log(1.into(), 1.into()),
+            get_job_responded_log(1, U256::ZERO, app_state.enclave_signer.address()),
+            get_job_responded_log(1, U256::ONE, app_state.enclave_signer.address()),
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             // Introduce time interval between events to be polled
@@ -1632,7 +1667,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1643,13 +1678,13 @@ pub mod serverless_executor_test {
 
         assert_response(
             responses[0].clone(),
-            0.into(),
+            U256::ZERO,
             0,
             "Hello World my secret is Secret!".into(),
         );
         assert_response(
             responses[1].clone(),
-            1.into(),
+            U256::ONE,
             0,
             "Hello World my secret is Oyster123!".into(),
         );
@@ -1678,19 +1713,23 @@ pub mod serverless_executor_test {
 
         // User code returning a string containing the secret data after 10 secs delay
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            1.into(),
+            1,
+            U256::ZERO,
+            U256::ONE,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1712,7 +1751,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1721,7 +1760,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 4, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 4, "".into());
     }
 
     #[tokio::test]
@@ -1736,19 +1775,23 @@ pub mod serverless_executor_test {
 
         // User code invokes deep recursion
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1770,7 +1813,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1781,7 +1824,7 @@ pub mod serverless_executor_test {
 
         assert_response(
             responses[0].clone(),
-            0.into(),
+            U256::ZERO,
             0,
             "Internal Server Error".into(),
         );
@@ -1799,19 +1842,23 @@ pub mod serverless_executor_test {
 
         // User code invokes excessive heap allocation
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes.clone(),
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_responded_stream = pin!(tokio_stream::iter(jobs_responded_logs.into_iter())
@@ -1833,7 +1880,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -1844,7 +1891,7 @@ pub mod serverless_executor_test {
 
         assert_response(
             responses[0].clone(),
-            0.into(),
+            U256::ZERO,
             0,
             "Internal Server Error".into(),
         );
@@ -1863,35 +1910,42 @@ pub mod serverless_executor_test {
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
 
         // Add drain log for the executor
-        let executor_drain_log = vec![Log {
-            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
-            topics: vec![
-                keccak256(EXECUTOR_DRAINED_EVENT).into(),
-                H256::from(app_state.enclave_address),
+        let log_data = LogData::new(
+            vec![
+                TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH.into(),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
-            removed: Some(false),
-            block_number: Some(1.into()),
+            Bytes::new(),
+        )
+        .unwrap();
+        let executor_drain_logs = vec![Log {
+            inner: alloy::primitives::Log {
+                address: Address::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
+                data: log_data,
+            },
+            removed: false,
+            block_number: Some(1),
             ..Default::default()
         }];
 
         // Add log entry to relay a job but job response event is not sent
         let jobs_created_logs = vec![
             get_job_created_log(
-                1.into(),
-                0.into(),
-                0.into(),
+                1,
+                U256::ZERO,
+                U256::ZERO,
                 EXECUTION_ENV_ID,
                 code_hash,
                 code_input_bytes,
                 user_deadline,
-                app_state.enclave_address,
+                app_state.enclave_signer.address(),
             ),
             Log {
                 ..Default::default()
             },
         ];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
@@ -1908,7 +1962,7 @@ pub mod serverless_executor_test {
             handle_event_logs(
                 jobs_created_stream,
                 pin!(tokio_stream::empty()),
-                pin!(tokio_stream::iter(executor_drain_log.into_iter())),
+                pin!(tokio_stream::iter(executor_drain_logs.into_iter())),
                 State {
                     0: app_state.clone(),
                 },
@@ -1940,32 +1994,43 @@ pub mod serverless_executor_test {
         let code_input_bytes: Bytes = serde_json::to_vec(&json!({})).unwrap().into();
 
         // Add revive log for the executor
-        let executor_revive_log = vec![Log {
-            address: H160::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
-            topics: vec![
-                keccak256(EXECUTOR_REVIVED_EVENT).into(),
-                H256::from(app_state.enclave_address),
+        let log_data = LogData::new(
+            vec![
+                TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH.into(),
+                B256::from(app_state.enclave_signer.address().into_word()),
             ],
-            removed: Some(false),
-            block_number: Some(1.into()),
+            Bytes::new(),
+        )
+        .unwrap();
+        let executor_revive_logs = vec![Log {
+            inner: alloy::primitives::Log {
+                address: Address::from_str(TEE_MANAGER_CONTRACT_ADDR).unwrap(),
+                data: log_data,
+            },
+            removed: false,
+            block_number: Some(1),
             ..Default::default()
         }];
 
         // Add log entry to relay a job
         let jobs_created_logs = vec![get_job_created_log(
-            1.into(),
-            0.into(),
-            0.into(),
+            1,
+            U256::ZERO,
+            U256::ZERO,
             EXECUTION_ENV_ID,
             code_hash,
             code_input_bytes,
             user_deadline,
-            app_state.enclave_address,
+            app_state.enclave_signer.address(),
         )];
 
-        let jobs_responded_logs = vec![get_job_responded_log(1.into(), 0.into())];
+        let jobs_responded_logs = vec![get_job_responded_log(
+            1,
+            U256::ZERO,
+            app_state.enclave_signer.address(),
+        )];
 
-        let (tx, mut rx) = channel::<JobsTxnMetadata>(10);
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
 
         tokio::spawn(async move {
             let jobs_created_stream = pin!(tokio_stream::iter(jobs_created_logs.into_iter()).then(
@@ -1985,7 +2050,7 @@ pub mod serverless_executor_test {
             handle_event_logs(
                 jobs_created_stream,
                 jobs_responded_stream,
-                pin!(tokio_stream::iter(executor_revive_log.into_iter())),
+                pin!(tokio_stream::iter(executor_revive_logs.into_iter())),
                 State {
                     0: app_state.clone(),
                 },
@@ -1994,7 +2059,7 @@ pub mod serverless_executor_test {
             .await;
         });
 
-        let mut responses: Vec<JobsTxnMetadata> = vec![];
+        let mut responses: Vec<JobsTransaction> = vec![];
 
         // Receive and store the responses
         while let Some(job_response) = rx.recv().await {
@@ -2003,7 +2068,7 @@ pub mod serverless_executor_test {
 
         assert_eq!(responses.len(), 1);
 
-        assert_response(responses[0].clone(), 0.into(), 4, "".into());
+        assert_response(responses[0].clone(), U256::ZERO, 4, "".into());
         assert!(
             !app_state_clone.enclave_draining.load(Ordering::SeqCst),
             "Executor still draining in the app_state!"
@@ -2011,54 +2076,72 @@ pub mod serverless_executor_test {
     }
 
     fn get_job_created_log(
-        block_number: U64,
+        block_number: u64,
         job_id: U256,
         secret_id: U256,
         env_id: u8,
         code_hash: &str,
         code_inputs: Bytes,
         user_deadline: u64,
-        enclave: H160,
+        enclave: Address,
     ) -> Log {
+        let log_data = LogData::new(
+            vec![
+                JobsContract::JobCreated::SIGNATURE_HASH.into(),
+                B256::from(job_id),
+                B256::from(&get_byte_slice(env_id)),
+                B256::from(Address::from(&[0x11; 20]).into_word()),
+            ],
+            DynSolValue::Tuple(vec![
+                DynSolValue::Uint(secret_id, 256),
+                DynSolValue::FixedBytes(B256::from_slice(&hex::decode(code_hash).unwrap()), 32),
+                DynSolValue::Bytes(code_inputs.to_vec()),
+                DynSolValue::Uint(U256::from(user_deadline), 256),
+                DynSolValue::Array(vec![DynSolValue::Address(enclave)]),
+            ])
+            .abi_encode_sequence()
+            .unwrap()
+            .into(),
+        )
+        .unwrap();
+
         Log {
             block_number: Some(block_number),
-            address: H160::from_str(JOBS_CONTRACT_ADDR).unwrap(),
-            topics: vec![
-                keccak256("JobCreated(uint256,uint8,address,bytes32,bytes,uint256,address[])")
-                    .into(),
-                H256::from_uint(&job_id),
-                H256::from_uint(&env_id.into()),
-                H256::from(H160::random()),
-            ],
-            data: encode(&[
-                Token::Uint(secret_id),
-                Token::FixedBytes(hex::decode(code_hash).unwrap()),
-                Token::Bytes(code_inputs.into()),
-                Token::Uint(user_deadline.into()),
-                Token::Array(vec![Token::Address(enclave)]),
-            ])
-            .into(),
-            removed: Some(false),
+            inner: alloy::primitives::Log {
+                address: Address::from_str(JOBS_CONTRACT_ADDR).unwrap(),
+                data: log_data,
+            },
+            removed: false,
             ..Default::default()
         }
     }
 
-    fn get_job_responded_log(block_number: U64, job_id: U256) -> Log {
+    fn get_job_responded_log(block_number: u64, job_id: U256, enclave: Address) -> Log {
+        let log_data = LogData::new(
+            vec![
+                JobsContract::JobResponded::SIGNATURE_HASH.into(),
+                B256::from(job_id),
+                B256::from(enclave.into_word()),
+            ],
+            DynSolValue::Tuple(vec![
+                DynSolValue::Bytes([].into()),
+                DynSolValue::Uint(U256::ONE, 256),
+                DynSolValue::Uint(U256::ZERO, 8),
+                DynSolValue::Uint(U256::ONE, 8),
+            ])
+            .abi_encode_sequence()
+            .unwrap()
+            .into(),
+        )
+        .unwrap();
+
         Log {
             block_number: Some(block_number),
-            address: H160::from_str(JOBS_CONTRACT_ADDR).unwrap(),
-            topics: vec![
-                keccak256("JobResponded(uint256,bytes,uint256,uint8,uint8)").into(),
-                H256::from_uint(&job_id),
-            ],
-            data: encode(&[
-                Token::Bytes([].into()),
-                Token::Uint(U256::one()),
-                Token::Uint((0 as u8).into()),
-                Token::Uint((1 as u8).into()),
-            ])
-            .into(),
-            removed: Some(false),
+            inner: alloy::primitives::Log {
+                address: Address::from_str(JOBS_CONTRACT_ADDR).unwrap(),
+                data: log_data,
+            },
+            removed: false,
             ..Default::default()
         }
     }
@@ -2142,52 +2225,61 @@ pub mod serverless_executor_test {
     }
 
     fn recover_key(
-        owner: H160,
+        owner: Address,
         job_capacity: usize,
         storage_capacity: usize,
         sign_timestamp: usize,
         sign: String,
     ) -> VerifyingKey {
         // Regenerate the digest for verification
-        let domain_separator = keccak256(encode(&[
-            Token::FixedBytes(keccak256("EIP712Domain(string name,string version)").to_vec()),
-            Token::FixedBytes(keccak256("marlin.oyster.TeeManager").to_vec()),
-            Token::FixedBytes(keccak256("1").to_vec()),
-        ]));
+        let domain_separator = keccak256(
+            DynSolValue::Tuple(vec![
+                DynSolValue::FixedBytes(keccak256("EIP712Domain(string name,string version)"), 32),
+                DynSolValue::FixedBytes(keccak256("marlin.oyster.TeeManager"), 32),
+                DynSolValue::FixedBytes(keccak256("1"), 32),
+            ])
+            .abi_encode(),
+        );
         let register_typehash = keccak256(
             "Register(address owner,uint256 jobCapacity,uint256 storageCapacity,uint8 env,uint256 signTimestamp)",
         );
-        let hash_struct = keccak256(encode(&[
-            Token::FixedBytes(register_typehash.to_vec()),
-            Token::Address(owner),
-            Token::Uint(job_capacity.into()),
-            Token::Uint(storage_capacity.into()),
-            Token::Uint(EXECUTION_ENV_ID.into()),
-            Token::Uint(sign_timestamp.into()),
-        ]));
-        let digest = encode_packed(&[
-            Token::String("\x19\x01".to_string()),
-            Token::FixedBytes(domain_separator.to_vec()),
-            Token::FixedBytes(hash_struct.to_vec()),
-        ])
-        .unwrap();
-        let digest = keccak256(digest);
+
+        let hash_struct = keccak256(
+            DynSolValue::Tuple(vec![
+                DynSolValue::FixedBytes(register_typehash, 32),
+                DynSolValue::Address(owner),
+                DynSolValue::Uint(U256::from(job_capacity), 256),
+                DynSolValue::Uint(U256::from(storage_capacity), 256),
+                DynSolValue::Uint(U256::from(EXECUTION_ENV_ID), 256),
+                DynSolValue::Uint(U256::from(sign_timestamp), 256),
+            ])
+            .abi_encode(),
+        );
+        let digest = keccak256(
+            DynSolValue::Tuple(vec![
+                DynSolValue::String("\x19\x01".to_string()),
+                DynSolValue::FixedBytes(domain_separator, 32),
+                DynSolValue::FixedBytes(hash_struct, 32),
+            ])
+            .abi_encode_packed(),
+        );
 
         let signature =
             Signature::from_slice(hex::decode(&sign[2..130]).unwrap().as_slice()).unwrap();
         let v = RecoveryId::try_from((hex::decode(&sign[130..]).unwrap()[0]) - 27).unwrap();
-        let recovered_key = VerifyingKey::recover_from_prehash(&digest, &signature, v).unwrap();
+        let recovered_key =
+            VerifyingKey::recover_from_prehash(&digest.to_vec(), &signature, v).unwrap();
 
         return recovered_key;
     }
 
-    fn assert_response(job_response: JobsTxnMetadata, id: U256, error: u8, output: Bytes) {
-        assert_eq!(job_response.txn_type, JobsTxnType::OUTPUT);
-        assert_eq!(job_response.job_id, id);
-        assert!(job_response.job_output.is_some());
-        let job_output = job_response.job_output.unwrap();
-
-        assert_eq!(job_output.error_code, error);
-        assert_eq!(job_output.output, output);
+    fn assert_response(job_response: JobsTransaction, id: U256, error: u8, output: Bytes) {
+        if let JobsTransaction::OUTPUT(call, _) = job_response {
+            assert_eq!(call._jobId, id);
+            assert_eq!(call._errorCode, error);
+            assert_eq!(call._output, output);
+        } else {
+            assert!(false, "Job output not received");
+        }
     }
 }
