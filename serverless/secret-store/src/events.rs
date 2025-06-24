@@ -6,16 +6,16 @@ use actix_web::web::Data;
 use alloy::primitives::{B256, U256};
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::{Filter, Log};
-use alloy::sol_types::{SolCall, SolEvent};
+use alloy::sol_types::SolEvent;
 use scopeguard::defer;
 use tokio::select;
 use tokio::time::sleep;
 use tokio_stream::{Stream, StreamExt};
 
-use crate::constants::*;
 use crate::model::SecretManagerContract::acknowledgeStoreFailedCall;
 use crate::model::{
-    AppState, SecretCreatedMetadata, SecretManagerContract, SecretMetadata, TeeManagerContract,
+    AppState, SecretCreatedMetadata, SecretManagerContract, SecretMetadata, StoresTransaction,
+    TeeManagerContract,
 };
 use crate::scheduler::{garbage_cleaner, remove_expired_secrets_and_mark_store_alive};
 use crate::utils::*;
@@ -163,7 +163,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
 }
 
 // Listen to the "SecretStore" & "SecretManager" contract event logs and process them accordingly
-async fn handle_event_logs(
+pub async fn handle_event_logs(
     mut secrets_stream: impl Stream<Item = Log> + Unpin,
     mut store_stream: impl Stream<Item = Log> + Unpin,
     app_state: Data<AppState>,
@@ -455,26 +455,14 @@ async fn handle_acknowledgement_timeout(secret_id: U256, app_state: Data<AppStat
         return;
     }
 
-    let txn_data = acknowledgeStoreFailedCall {
-        _secretId: secret_id,
-    }
-    .abi_encode()
-    .to_owned();
-
-    let http_rpc_txn_manager = app_state
-        .http_rpc_txn_manager
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap();
-
-    // Send the txn response with the acknowledgement counterpart to the common chain txn sender
-    if let Err(err) = http_rpc_txn_manager
-        .call_contract_function(
-            app_state.secret_manager_contract_addr,
-            txn_data.clone().into(),
-            Instant::now() + Duration::from_secs(ACKNOWLEDGEMENT_TIMEOUT_TXN_RESEND_DEADLINE_SECS),
-        )
+    // Send the txn response with the acknowledgement timeout counterpart to the common chain txn sender
+    if let Err(err) = app_state
+        .tx_sender
+        .send(StoresTransaction::AcknowledgeStoreFailed(
+            acknowledgeStoreFailedCall {
+                _secretId: secret_id,
+            },
+        ))
         .await
     {
         eprintln!(

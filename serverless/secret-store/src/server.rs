@@ -8,7 +8,6 @@ use alloy::hex;
 use alloy::primitives::{keccak256, Address, PrimitiveSignature, U256};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::SignerSync;
-use alloy::sol_types::SolCall;
 use ecies::decrypt;
 use multi_block_txns::TxnManager;
 use serde_json::json;
@@ -16,7 +15,9 @@ use serde_json::json;
 use crate::constants::{DOMAIN_SEPARATOR, SECRET_STORAGE_CAPACITY_BYTES};
 use crate::events::events_listener;
 use crate::model::SecretManagerContract::acknowledgeStoreCall;
-use crate::model::{Acknowledge, AppState, CreateSecret, ImmutableConfig, MutableConfig};
+use crate::model::{
+    Acknowledge, AppState, CreateSecret, ImmutableConfig, MutableConfig, StoresTransaction,
+};
 use crate::utils::{create_and_populate_file, get_latest_block_number};
 
 #[get("/")]
@@ -268,13 +269,16 @@ async fn inject_and_store_secret(
 
     // Exit if the secret owner is not the same as the secret signer
     if recovered_address != secret_created.secret_metadata.owner {
+        println!("Owner address: {}", secret_created.secret_metadata.owner);
         app_state
             .secrets_created
             .lock()
             .unwrap()
             .insert(create_secret.secret_id, secret_created);
-        return HttpResponse::BadRequest()
-            .body("Signer address not the same as secret owner address!\n");
+        return HttpResponse::BadRequest().body(format!(
+            "Signer address {} not the same as secret owner address!\n",
+            recovered_address
+        ));
     }
 
     // Decrypt the secret data using the enclave signer key
@@ -352,30 +356,21 @@ async fn inject_and_store_secret(
     };
     let signature = sig.as_bytes();
 
-    let txn_data = acknowledgeStoreCall {
-        _secretId: create_secret.secret_id,
-        _signTimestamp: U256::from(sign_timestamp),
-        _signature: signature.clone().into(),
-    }
-    .abi_encode()
-    .to_owned();
-
-    // Send the txn response with the acknowledgement counterpart to the common chain txn sender
+    // Send the txn response with the secret acknowledgement counterpart to the common chain txn sender
     if let Err(err) = app_state
-        .http_rpc_txn_manager
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap()
-        .call_contract_function(
-            app_state.secret_manager_contract_addr,
-            txn_data.clone().into(),
+        .tx_sender
+        .send(StoresTransaction::AcknowledgeStore(
+            acknowledgeStoreCall {
+                _secretId: create_secret.secret_id,
+                _signTimestamp: U256::from(sign_timestamp),
+                _signature: signature.clone().into(),
+            },
             secret_created.acknowledgement_deadline,
-        )
+        ))
         .await
     {
         eprintln!(
-            "Failed to send acknowledgement transaction for secret ID {}: {:?}",
+            "Failed to send acknowledgement transaction for secret id {}: {:?}",
             create_secret.secret_id, err
         );
     };

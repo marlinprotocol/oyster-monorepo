@@ -1,17 +1,16 @@
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use actix_web::web::Data;
 use alloy::primitives::U256;
 use alloy::signers::SignerSync;
-use alloy::sol_types::SolCall;
 use tokio::time::interval;
 
 use crate::constants::{
     DOMAIN_SEPARATOR, SECRET_EXPIRATION_BUFFER_SECS, SEND_TRANSACTION_BUFFER_SECS,
 };
 use crate::model::SecretManagerContract::markStoreAliveCall;
-use crate::model::{Alive, AppState, SecretMetadata};
+use crate::model::{Alive, AppState, SecretMetadata, StoresTransaction};
 use crate::utils::check_and_delete_file;
 
 // Periodic job for sending alive acknowledgement transaction and removing expired secret files
@@ -55,30 +54,16 @@ pub async fn remove_expired_secrets_and_mark_store_alive(app_state: Data<AppStat
         };
         let signature = sign.as_bytes();
 
-        let txn_data = markStoreAliveCall {
-            _signTimestamp: U256::from(sign_timestamp),
-            _signature: signature.into(),
-        }
-        .abi_encode()
-        .to_owned();
-
-        let http_rpc_txn_manager = app_state
-            .http_rpc_txn_manager
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-
-        // Send the txn response with the mark alive counterpart
-        if let Err(err) = http_rpc_txn_manager
-            .call_contract_function(
-                app_state.secret_manager_contract_addr,
-                txn_data.into(),
-                Instant::now() + Duration::from_secs(SEND_TRANSACTION_BUFFER_SECS),
-            )
+        // Send the txn response with the mark alive counterpart to the common chain txn sender
+        if let Err(err) = app_state
+            .tx_sender
+            .send(StoresTransaction::MarkStoreAlive(markStoreAliveCall {
+                _signTimestamp: U256::from(sign_timestamp),
+                _signature: signature.into(),
+            }))
             .await
         {
-            eprintln!("Failed to send store alive transaction: {:?}", err);
+            eprintln!("Failed to send mark alive transaction: {:?}", err);
         };
 
         // Call the garbage cleaner

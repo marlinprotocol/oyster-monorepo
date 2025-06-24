@@ -4,10 +4,12 @@ mod events;
 mod model;
 mod scheduler;
 mod server;
+mod tests;
+mod transaction;
 mod utils;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use actix_web::http::Uri;
 use actix_web::web::{Data, JsonConfig};
@@ -19,8 +21,10 @@ use clap::Parser;
 use tokio::fs;
 
 use constants::INJECT_SECRET_JSON_PAYLOAD_SIZE_LIMIT;
-use model::{AppState, ConfigManager};
+use model::{AppState, ConfigManager, StoresTransaction};
 use server::*;
+use tokio::sync::mpsc::channel;
+use transaction::send_transaction;
 use utils::verify_rpc_url;
 
 // SECRET STORE CONFIGURATION PARAMETERS
@@ -68,12 +72,14 @@ async fn main() -> Result<()> {
         config.web_socket_url.push('/');
     }
 
+    let (tx, rx) = channel::<StoresTransaction>(100);
+
     // Initialize App data that will be shared across multiple threads and tasks
     let app_data = Data::new(AppState {
         secret_store_path: config.secret_store_path,
         common_chain_id: config.common_chain_id,
         http_rpc_url: config.http_rpc_url,
-        web_socket_url: Arc::new(RwLock::new(config.web_socket_url)),
+        web_socket_url: RwLock::new(config.web_socket_url),
         tee_manager_contract_addr: config.tee_manager_contract_addr,
         secret_manager_contract_addr: config.secret_manager_contract_addr,
         num_selected_stores: config.num_selected_stores,
@@ -91,6 +97,12 @@ async fn main() -> Result<()> {
         secrets_awaiting_acknowledgement: HashMap::new().into(),
         secrets_created: HashMap::new().into(),
         secrets_stored: HashMap::new().into(),
+        tx_sender: tx,
+    });
+
+    let app_state_clone = app_data.clone();
+    tokio::spawn(async move {
+        send_transaction(app_state_clone, rx).await;
     });
 
     let app_data_clone = app_data.clone();

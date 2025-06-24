@@ -8,6 +8,8 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
 use multi_block_txns::TxnManager;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::Sender;
+use SecretManagerContract::{acknowledgeStoreCall, acknowledgeStoreFailedCall, markStoreAliveCall};
 
 sol!(
     #[allow(missing_docs)]
@@ -63,7 +65,7 @@ pub struct AppState {
     pub secret_store_path: String,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
-    pub web_socket_url: Arc<RwLock<String>>,
+    pub web_socket_url: RwLock<String>,
     pub tee_manager_contract_addr: Address,
     pub secret_manager_contract_addr: Address,
     pub num_selected_stores: u8,
@@ -81,6 +83,7 @@ pub struct AppState {
     pub secrets_awaiting_acknowledgement: Mutex<HashMap<U256, u8>>,
     pub secrets_created: Mutex<HashMap<U256, SecretCreatedMetadata>>,
     pub secrets_stored: Mutex<HashMap<U256, SecretMetadata>>,
+    pub tx_sender: Sender<StoresTransaction>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,4 +115,11 @@ pub struct SecretMetadata {
 pub struct SecretCreatedMetadata {
     pub secret_metadata: SecretMetadata,
     pub acknowledgement_deadline: Instant,
+}
+
+#[derive(Clone)]
+pub enum StoresTransaction {
+    AcknowledgeStore(acknowledgeStoreCall, Instant),
+    AcknowledgeStoreFailed(acknowledgeStoreFailedCall),
+    MarkStoreAlive(markStoreAliveCall),
 }
