@@ -9,7 +9,7 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
-use alloy::transports::ws::WsConnect;
+use alloy::transports::ws::{WebSocketConfig, WsConnect};
 use anyhow::{Context, Result};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -206,8 +206,10 @@ pub async fn run(
     let mut job_count = 0;
     loop {
         info!("Connecting to RPC endpoint...");
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .on_ws(WsConnect::new(url.clone()))
+            .on_ws(WsConnect::new(url.clone()).with_config(ws_config))
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
@@ -381,8 +383,10 @@ async fn job_manager(
     // since subscriptions are stateful
     loop {
         info!("Connecting to RPC endpoint...");
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .on_ws(WsConnect::new(url.clone()))
+            .on_ws(WsConnect::new(url.clone()).with_config(ws_config))
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
