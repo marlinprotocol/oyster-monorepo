@@ -57,7 +57,7 @@ To check whether the cgroups were successfully created or not on your system, ve
 
 <b>Signer file setup</b>
 
-A signer secret is required to run the serverless executor applicaton. It'll also be the identity of the executor enclave on chain i.e, the enclave address will be derived from the corresponding public key. The signer must be a `secp256k1` binary secret.
+A signer secret is required to run the serverless executor application. It'll also be the identity of the executor enclave on chain i.e, the enclave address will be derived from the corresponding public key. The signer must be a `secp256k1` binary secret.
 The <a href="https://github.com/marlinprotocol/oyster-monorepo/tree/master/initialization/keygen">Keygen repo</a> can be used to generate this.
 
 <b> RPC and smart contracts configuration</b>
