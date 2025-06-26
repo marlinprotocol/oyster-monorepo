@@ -84,6 +84,7 @@ fn verify(attestation: &[u8], commit_slice: impl Fn(&[u8])) {
     assert_eq!(attestation[offset + 33], 0x64); // text of size 4
     assert_eq!(&attestation[offset + 34..offset + 38], b"pcrs");
     assert!(attestation[offset + 38] == 0xb0 || attestation[offset + 38] == 0xb1); // pcrs is a map of size 16 or 17
+
     // is there a custom PCR
     let is_custom = attestation[offset + 38] == 0xb1;
 
@@ -538,9 +539,10 @@ mod tests {
     fn test_aws_pcr16() {
         // generated using `curl <ip>:<port>/attestation/raw` on the attestation server of a
         // real Nitro enclave
-        let attestation =
-            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws_pcr16.bin")
-                .unwrap();
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws_pcr16.bin",
+        )
+        .unwrap();
 
         let (journal, committer) = create_committer();
 
@@ -572,9 +574,10 @@ mod tests {
     fn test_custom_pcr16() {
         // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
         // on a custom mock attestation server running locally
-        let attestation =
-            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom_pcr16.bin")
-                .unwrap();
+        let attestation = std::fs::read(
+            file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom_pcr16.bin",
+        )
+        .unwrap();
 
         let (journal, committer) = create_committer();
 
