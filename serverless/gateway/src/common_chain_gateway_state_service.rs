@@ -6,12 +6,12 @@ use alloy::sol_types::SolEvent;
 use alloy::transports::http::reqwest::Url;
 use alloy::transports::http::{Client, Http};
 use anyhow::{Error, Result};
-use log::{error, info};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 use tokio::time::{self, sleep, Duration, Instant};
+use tracing::{error, info};
 
 use crate::chain_util::get_block_number_by_timestamp;
 use crate::constant::{

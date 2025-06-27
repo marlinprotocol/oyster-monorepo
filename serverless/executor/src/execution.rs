@@ -12,6 +12,7 @@ use axum::extract::State;
 use scopeguard::defer;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
+use tracing::{error, warn};
 
 use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
 use crate::model::JobsContract::submitOutputCall;
@@ -42,7 +43,14 @@ pub async fn handle_job(
     // Execute the job request under the specified user deadline
     let response = timeout(
         Duration::from_millis(user_deadline),
-        execute_job(secret_id, &code_hash, code_inputs, slug, app_state.clone()),
+        execute_job(
+            job_id,
+            secret_id,
+            &code_hash,
+            code_inputs,
+            slug,
+            app_state.clone(),
+        ),
     )
     .await;
 
@@ -98,9 +106,10 @@ pub async fn handle_job(
         ))
         .await
     {
-        eprintln!(
-            "Failed to send execution response transaction for job ID {}: {:?}",
-            job_id, err
+        error!(
+            %job_id,
+            "Failed to send execution response via the channel sender: {:?}",
+            err
         );
     };
 
@@ -108,6 +117,7 @@ pub async fn handle_job(
 }
 
 async fn execute_job(
+    job_id: U256,
     secret_id: U256,
     code_hash: &String,
     code_inputs: Vec<u8>,
@@ -143,7 +153,7 @@ async fn execute_job(
 
     // Reserve a 'cgroup' for code execution
     let Ok(cgroup) = app_state.cgroups.lock().unwrap().reserve() else {
-        eprintln!("No free cgroup available to execute the job");
+        error!(%job_id, "No free cgroup available to execute the code");
         return None;
     };
 
@@ -188,7 +198,7 @@ async fn execute_job(
             .unwrap()
             .kill()
             .context("CRITICAL: Failed to kill worker {cgroup}")
-            .unwrap_or_else(|err| println!("{err:?}"));
+            .unwrap_or_else(|err| warn!(%job_id, "{err:?}"));
     }
 
     // Wait for worker to be available to receive inputs
@@ -196,7 +206,7 @@ async fn execute_job(
 
     if !res {
         let Some(stderr) = child.lock().unwrap().stderr.take() else {
-            eprintln!("Failed to retrieve cgroup execution error");
+            error!(%job_id, "Failed to retrieve cgroup {} execution error", cgroup);
             return None;
         };
         let reader = BufReader::new(stderr);
@@ -216,7 +226,7 @@ async fn execute_job(
             });
         }
 
-        eprintln!("Failed to execute worker service to serve the user code: {stderr_output}");
+        error!(%job_id, "Failed to execute worker service to serve the user code: {stderr_output}");
 
         return None;
     }
@@ -267,7 +277,7 @@ fn sign_response(
     let Ok(sig) = signer_key
         .sign_typed_data_sync(&submit_output_data, &domain_separator)
         .map_err(|err| {
-            eprintln!("Failed to sign the job response: {:?}", err);
+            error!(%job_id, "Failed to sign the job response: {:?}", err);
             err
         })
     else {
