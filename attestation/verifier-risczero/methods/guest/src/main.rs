@@ -56,7 +56,7 @@ fn verify(attestation: &[u8], commit_slice: impl Fn(&[u8])) {
     // attestation doc payload is map of size at least 8
     // expected keys: module_id, digest, timestamp, pcrs, certificate, cabundle,
     // public_key, user_data
-    assert!(attestation[10] >= 0xa9 || attestation[10] <= 0xbf);
+    assert!(attestation[10] >= 0xa9 && attestation[10] <= 0xbf);
 
     // skip fields and simply assert length
     assert_eq!(attestation[11], 0x69); // text of size 9, "module_id" key
