@@ -4,13 +4,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use alloy::primitives::{Address, U256};
-use alloy::providers::RootProvider;
-use alloy::signers::k256::ecdsa::SigningKey;
+use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
-use alloy::transports::http::{Client, Http};
 use multi_block_txns::TxnManager;
 use serde::{Deserialize, Serialize};
-use SecretManagerContract::SecretManagerContractInstance;
+use tokio::sync::mpsc::Sender;
+use SecretManagerContract::{acknowledgeStoreCall, acknowledgeStoreFailedCall, markStoreAliveCall};
 
 sol!(
     #[allow(missing_docs)]
@@ -19,8 +18,26 @@ sol!(
     "./SecretManager.json"
 );
 
-// Define type for SecretManagerContract instances
-pub type SecretManagerAbi = SecretManagerContractInstance<Http<Client>, RootProvider<Http<Client>>>;
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    TeeManagerContract,
+    "./TeeManager.json"
+);
+
+// Define the EIP-712 struct that matches your Solidity contract
+sol! {
+    #[derive(Debug)]
+    struct Alive {
+        uint256 signTimestamp;
+    }
+
+    #[derive(Debug)]
+    struct Acknowledge {
+        uint256 secretId;
+        uint256 signTimestamp;
+    }
+}
 
 pub struct ConfigManager {
     pub path: String,
@@ -48,13 +65,11 @@ pub struct AppState {
     pub secret_store_path: String,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
-    pub web_socket_url: Arc<RwLock<String>>,
+    pub web_socket_url: RwLock<String>,
     pub tee_manager_contract_addr: Address,
     pub secret_manager_contract_addr: Address,
-    pub secret_manager_contract_instance: SecretManagerAbi,
     pub num_selected_stores: u8,
-    pub enclave_address: Address,
-    pub enclave_signer: SigningKey,
+    pub enclave_signer: PrivateKeySigner,
     pub immutable_params_injected: Mutex<bool>,
     pub mutable_params_injected: Mutex<bool>,
     pub enclave_owner: Mutex<Address>,
@@ -68,6 +83,7 @@ pub struct AppState {
     pub secrets_awaiting_acknowledgement: Mutex<HashMap<U256, u8>>,
     pub secrets_created: Mutex<HashMap<U256, SecretCreatedMetadata>>,
     pub secrets_stored: Mutex<HashMap<U256, SecretMetadata>>,
+    pub tx_sender: Sender<StoresTransaction>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,4 +115,11 @@ pub struct SecretMetadata {
 pub struct SecretCreatedMetadata {
     pub secret_metadata: SecretMetadata,
     pub acknowledgement_deadline: Instant,
+}
+
+#[derive(Clone)]
+pub enum StoresTransaction {
+    AcknowledgeStore(acknowledgeStoreCall, Instant),
+    AcknowledgeStoreFailed(acknowledgeStoreFailedCall),
+    MarkStoreAlive(markStoreAliveCall),
 }

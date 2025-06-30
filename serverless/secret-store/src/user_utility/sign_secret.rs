@@ -25,25 +25,8 @@ use tokio_retry::Retry;
 sol! {
     #[allow(missing_docs)]
     #[sol(rpc)]
-    contract SecretManager {
-        event SecretCreated(
-            uint256 indexed secretId,
-            address indexed owner,
-            uint256 sizeLimit,
-            uint256 endTimestamp,
-            uint256 usdcDeposit,
-            address[] selectedEnclaves
-        );
-
-        struct SelectedEnclave {
-            address enclaveAddress;
-            bool hasAcknowledgedStore;
-            uint256 selectTimestamp;
-            uint256 replacedAckTimestamp;
-        }
-
-        function getSelectedEnclaves(uint256 _secretId) external view returns (SelectedEnclave[] memory);
-    }
+    SecretManagerContract,
+    "./SecretManager.json"
 }
 
 struct ConfigManager {
@@ -219,13 +202,9 @@ async fn main() -> Result<()> {
         fs::read(cli.secret_data_file).context("Failed to read the secret data file")?;
 
     let user_private_key = SigningKey::from_slice(
-        hex::decode(
-            cli.user_private_hex
-                .strip_prefix("0x")
-                .unwrap_or(&cli.user_private_hex),
-        )
-        .context("Failed to decode the user private key hex")?
-        .as_slice(),
+        hex::decode(cli.user_private_hex)
+            .context("Failed to decode the user private key hex")?
+            .as_slice(),
     )
     .context("Invalid user signer key")?;
 
@@ -258,7 +237,8 @@ async fn main() -> Result<()> {
 
     let secrets_filter = Filter::new()
         .address(contract_address)
-        .event("SecretCreated(uint256,address,uint256,uint256,uint256,address[])")
+        .event(SecretManagerContract::SecretCreated::SIGNATURE)
+        .topic2(user_address.into_word())
         .at_block_hash(block_hash);
 
     let secret_create_log = http_rpc_client
@@ -286,7 +266,7 @@ async fn main() -> Result<()> {
     }
 
     let log = secret_create_log.first().unwrap().to_owned();
-    let decoded_log = SecretManager::SecretCreated::decode_log_data(log.data(), true)
+    let decoded_log = SecretManagerContract::SecretCreated::decode_log_data(log.data(), true)
         .context("Failed to decode secret created log")?;
 
     if user_address != decoded_log.owner {
@@ -297,7 +277,7 @@ async fn main() -> Result<()> {
         return Err(anyhow!("Secret data length exceeds limit"));
     }
 
-    let secret_manager_contract = SecretManager::new(contract_address, http_rpc_client);
+    let secret_manager_contract = SecretManagerContract::new(contract_address, http_rpc_client);
 
     let response = secret_manager_contract
         .getSelectedEnclaves(decoded_log.secretId)

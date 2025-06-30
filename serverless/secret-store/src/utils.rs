@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
-use crate::model::{SecretManagerAbi, SecretMetadata};
+use crate::model::{SecretManagerContract, SecretMetadata};
 
 pub fn verify_rpc_url(rpc_url: &str) -> Result<()> {
     let url = Url::parse(rpc_url).context(format!("Failed to parse the RPC {:?}", rpc_url))?;
@@ -127,9 +127,15 @@ pub async fn get_block_timestamp(http_rpc_url: &String, block_number: u64) -> Re
 }
 
 pub async fn get_secret_metadata(
-    secret_manager_contract: &SecretManagerAbi,
+    http_rpc_url: &String,
+    secret_manager_contract_addr: Address,
     secret_id: U256,
 ) -> Result<SecretMetadata> {
+    let http_rpc_client = ProviderBuilder::new()
+        .on_http(Url::parse(http_rpc_url).context("Failed to parse the RPC URL")?);
+    let secret_manager_contract =
+        SecretManagerContract::new(secret_manager_contract_addr, http_rpc_client);
+
     let user_storage = secret_manager_contract
         .userStorage(secret_id)
         .call()

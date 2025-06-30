@@ -1,0 +1,78 @@
+[
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "enclaveAddress",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "owner",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "jobCapacity",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "storageCapacity",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint8",
+                "name": "env",
+                "type": "uint8"
+            }
+        ],
+        "name": "TeeNodeRegistered",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "enclaveAddress",
+                "type": "address"
+            }
+        ],
+        "name": "TeeNodeDrained",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "enclaveAddress",
+                "type": "address"
+            }
+        ],
+        "name": "TeeNodeRevived",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "enclaveAddress",
+                "type": "address"
+            }
+        ],
+        "name": "TeeNodeDeregistered",
+        "type": "event"
+    }
+]
