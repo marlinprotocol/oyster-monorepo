@@ -1492,6 +1492,9 @@ EOF
                 .await
                 .context("could not disassociate address")?;
         }
+        self.terminate_instance(instance_id, region)
+            .await
+            .context("could not terminate instance")?;
         let (exist, alloc_id, _) = self
             .get_job_elastic_ip(job, region)
             .await
@@ -1503,9 +1506,6 @@ EOF
             info!("Elastic IP released");
         }
 
-        self.terminate_instance(instance_id, region)
-            .await
-            .context("could not terminate instance")?;
         Ok(())
     }
 }
