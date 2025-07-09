@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use actix_web::web::Data;
 use alloy::primitives::U256;
-use alloy::signers::SignerSync;
+use alloy::signers::Signer;
 use tokio::time::interval;
 
 use crate::constants::{
@@ -23,16 +23,6 @@ pub async fn remove_expired_secrets_and_mark_store_alive(app_state: Data<AppStat
     loop {
         interval.tick().await; // Wait for the next tick
 
-        // If enclave is deregistered, stop the job because acknowledgments won't be accepted then
-        if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            return;
-        }
-
-        // If enclave is drained, skip the alive transaction because acknowledgments won't be accepted then
-        if app_state.enclave_draining.load(Ordering::SeqCst) {
-            continue;
-        }
-
         // Get the current sign timestamp for signing
         let sign_timestamp = SystemTime::now();
         let sign_timestamp = sign_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs();
@@ -44,7 +34,8 @@ pub async fn remove_expired_secrets_and_mark_store_alive(app_state: Data<AppStat
         // Sign the digest using enclave key
         let sign = app_state
             .enclave_signer
-            .sign_typed_data_sync(&alive_data, &DOMAIN_SEPARATOR);
+            .sign_typed_data(&alive_data, &DOMAIN_SEPARATOR)
+            .await;
         let Ok(sign) = sign else {
             eprintln!(
                 "Failed to sign the alive message using enclave key: {:?}",
@@ -68,6 +59,11 @@ pub async fn remove_expired_secrets_and_mark_store_alive(app_state: Data<AppStat
 
         // Call the garbage cleaner
         garbage_cleaner(app_state.clone(), false).await;
+
+        // If enclave is deregistered, stop the job because acknowledgments won't be accepted then
+        if !app_state.enclave_registered.load(Ordering::SeqCst) {
+            return;
+        }
     }
 }
 

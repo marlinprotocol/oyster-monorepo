@@ -5,7 +5,7 @@ pub mod secret_store_test {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Mutex, RwLock};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use actix_web::body::MessageBody;
     use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
@@ -24,7 +24,7 @@ pub mod secret_store_test {
     use serde_json::json;
     use tokio::runtime::Handle;
     use tokio::sync::mpsc::{channel, Receiver};
-    use tokio::time::{sleep, timeout};
+    use tokio::time::sleep;
     use tokio_stream::StreamExt;
 
     use crate::constants::{DOMAIN_SEPARATOR, SECRET_STORAGE_CAPACITY_BYTES};
@@ -46,6 +46,8 @@ pub mod secret_store_test {
     const TEE_MANAGER_CONTRACT_ADDR: &str = "0xFbc9cB063848Db801B382A1Da13E5A213dD378c0";
     const SECRET_MANAGER_CONTRACT_ADDR: &str = "0x6cc663135635c71175a35E4710fC7Ef4e12a085b";
 
+    const SECRET_STORE_PATH: &str = "./store";
+
     // Generate test app state
     fn generate_app_state() -> (Data<AppState>, Receiver<StoresTransaction>) {
         let signer = PrivateKeySigner::random();
@@ -53,7 +55,7 @@ pub mod secret_store_test {
 
         (
             Data::new(AppState {
-                secret_store_path: "./store".to_owned(),
+                secret_store_path: SECRET_STORE_PATH.to_owned(),
                 acknowledgement_timeout: 60,
                 mark_alive_timeout: 150,
                 common_chain_id: CHAIN_ID,
@@ -727,7 +729,7 @@ pub mod secret_store_test {
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.into_body().try_into_bytes().unwrap(),
-            "Secret ID not created yet or undergoing injection!\n"
+            "Secret ID is not created yet or is not assigned to this secret store or is currently undergoing injection!\n"
         );
     }
 
@@ -771,34 +773,18 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.acknowledgement_timeout + 15);
-        let start_time = Instant::now();
-
         tokio::spawn(async move {
             // Call the event handler for the contract logs
             handle_event_logs(
                 pin!(tokio_stream::iter(secret_created_log)),
                 pin!(tokio_stream::empty()),
-                app_state.clone(),
+                app_state,
             )
             .await;
         });
 
-        // add sleep delay for the first log to get processed
-        sleep(Duration::from_secs(1)).await;
-
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 1);
@@ -852,23 +838,18 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.acknowledgement_timeout + 15);
-        let start_time = Instant::now();
-
-        let app_state_clone = app_state.clone();
         tokio::spawn(async move {
             // Call the event handler for the contract logs
             handle_event_logs(
                 pin!(tokio_stream::iter(secret_created_log)),
                 pin!(tokio_stream::empty()),
-                app_state_clone,
+                app_state,
             )
             .await;
         });
 
         // add sleep delay for the first log to get processed
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(2)).await;
 
         let encrypted_secret = [0u8; 7];
         // Create the digest
@@ -898,20 +879,13 @@ pub mod secret_store_test {
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.into_body().try_into_bytes().unwrap(),
-            "Secret ID not created yet or undergoing injection!\n"
+            "Secret ID is not created yet or is not assigned to this secret store or is currently undergoing injection!\n"
         );
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        drop(app);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 1);
@@ -921,6 +895,10 @@ pub mod secret_store_test {
         } else {
             assert!(false, "Acknowledgement timeout transaction not received!");
         }
+
+        let (app_state, mut rx) = generate_app_state();
+        let app = test::init_service(new_app(app_state.clone())).await;
+        app_state.enclave_registered.store(true, Ordering::SeqCst);
 
         // Update secret details
         let secret_id = U256::from(2);
@@ -969,12 +947,8 @@ pub mod secret_store_test {
         ];
 
         let mut responses: Vec<StoresTransaction> = vec![];
+        let enclave_signer = app_state.enclave_signer.clone();
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.acknowledgement_timeout + 15);
-        let start_time = Instant::now();
-
-        let app_state_clone = app_state.clone();
         tokio::spawn(async move {
             let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
                 |(delay, log)| async move {
@@ -984,11 +958,11 @@ pub mod secret_store_test {
             ));
 
             // Call the event handler for the contract logs
-            handle_event_logs(secrets_stream, pin!(tokio_stream::empty()), app_state_clone).await;
+            handle_event_logs(secrets_stream, pin!(tokio_stream::empty()), app_state).await;
         });
 
         // add sleep delay for the first log to get processed
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(2)).await;
 
         let wallet = PrivateKeySigner::random();
         // Create the digest
@@ -1048,8 +1022,7 @@ pub mod secret_store_test {
 
         // Encrypt the secret with enclave's private key
         let encrypted_secret = encrypt(
-            &(app_state
-                .enclave_signer
+            &(enclave_signer
                 .credential()
                 .verifying_key()
                 .to_encoded_point(false)
@@ -1086,17 +1059,10 @@ pub mod secret_store_test {
             "Secret data bigger than the expected size limit!\n"
         );
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        drop(app);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 1);
@@ -1106,23 +1072,6 @@ pub mod secret_store_test {
         } else {
             assert!(false, "Acknowledgement timeout transaction not received!");
         }
-
-        // Inject secret after the it is terminated because of acknowledgement fail
-        let req = test::TestRequest::post()
-            .uri("/inject-secret")
-            .set_json(&json!({
-                "secret_id": 2,
-                "encrypted_secret_hex": hex::encode(encrypted_secret),
-                "signature_hex": hex::encode(rs.to_bytes().append(27 + v.to_byte()).to_vec()),
-            }))
-            .to_request();
-        let resp = test::call_service(&app, req).await;
-
-        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.into_body().try_into_bytes().unwrap(),
-            "Secret ID not created yet or undergoing injection!\n"
-        );
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -1200,11 +1149,9 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.mark_alive_timeout + 15);
-        let start_time = Instant::now();
-
         let app_state_clone = app_state.clone();
+        let enclave_address = app_state.enclave_signer.address();
+
         tokio::spawn(async move {
             let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
                 |(delay, log)| async move {
@@ -1218,7 +1165,7 @@ pub mod secret_store_test {
         });
 
         // add sleep delay for the first log to get processed
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(2)).await;
 
         // Encrypt the secret with enclave's private key and sign it with owner's wallet
         let secret = [1u8; 6];
@@ -1280,17 +1227,12 @@ pub mod secret_store_test {
 
         assert_eq!(secret_stored, secret.to_vec());
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        app_state.enclave_registered.store(false, Ordering::SeqCst);
+        drop(app);
+        drop(app_state);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 3);
@@ -1298,7 +1240,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1312,7 +1254,7 @@ pub mod secret_store_test {
                     call._signTimestamp,
                     hex::encode(call._signature)
                 ),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(
@@ -1324,7 +1266,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[2].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1332,7 +1274,7 @@ pub mod secret_store_test {
 
         // Verify that the secret has been deleted after the garbage collection
         let secret_stored = open_and_read_file(
-            app_state.secret_store_path.to_owned() + "/" + &secret_id.to_string() + ".bin",
+            SECRET_STORE_PATH.to_owned() + "/" + &secret_id.to_string() + ".bin",
         )
         .await;
 
@@ -1419,10 +1361,7 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.mark_alive_timeout - 2);
-        let start_time = Instant::now();
-
+        let enclave_address = app_state.enclave_signer.address();
         let app_state_clone = app_state.clone();
         tokio::spawn(async move {
             let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
@@ -1509,17 +1448,12 @@ pub mod secret_store_test {
 
         assert!(secret_stored.is_err());
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        app_state.enclave_registered.store(false, Ordering::SeqCst);
+        drop(app);
+        drop(app_state);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 3);
@@ -1527,7 +1461,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1541,7 +1475,7 @@ pub mod secret_store_test {
                     call._signTimestamp,
                     hex::encode(call._signature)
                 ),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(
@@ -1553,7 +1487,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[2].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1641,10 +1575,7 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(2 * app_state.mark_alive_timeout + 2);
-        let start_time = Instant::now();
-
+        let enclave_address = app_state.enclave_signer.address();
         let app_state_clone = app_state.clone();
         tokio::spawn(async move {
             let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
@@ -1734,17 +1665,14 @@ pub mod secret_store_test {
 
         assert_eq!(secret_stored, secret.to_vec());
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        sleep(Duration::from_secs(app_state.mark_alive_timeout + 10)).await;
+
+        app_state.enclave_registered.store(false, Ordering::SeqCst);
+        drop(app);
+        drop(app_state);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 4);
@@ -1752,7 +1680,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1766,7 +1694,7 @@ pub mod secret_store_test {
                     call._signTimestamp,
                     hex::encode(call._signature)
                 ),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(
@@ -1778,7 +1706,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[2].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1787,7 +1715,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[3].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -1795,7 +1723,7 @@ pub mod secret_store_test {
 
         // check that the secret has been terminated by the garbage collector
         let secret_stored = open_and_read_file(
-            app_state.secret_store_path.to_owned() + "/" + &secret_id.to_string() + ".bin",
+            SECRET_STORE_PATH.to_owned() + "/" + &secret_id.to_string() + ".bin",
         )
         .await;
 
@@ -1827,37 +1755,35 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.mark_alive_timeout + 10);
-        let start_time = Instant::now();
-
         let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            let store_stream =
-                pin!(tokio_stream::iter(store_logs.into_iter()).chain(tokio_stream::pending()));
+        let store_stream =
+            pin!(tokio_stream::iter(store_logs.into_iter()).chain(tokio_stream::pending()));
 
-            // Call the event handler for the contract logs
-            handle_event_logs(pin!(tokio_stream::pending()), store_stream, app_state_clone).await;
-        });
+        // Call the event handler for the contract logs
+        handle_event_logs(pin!(tokio_stream::pending()), store_stream, app_state_clone).await;
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
-        }
-
-        assert!(responses.is_empty());
         assert!(
             !app_state.enclave_registered.load(Ordering::SeqCst),
             "Enclave not set to deregistered in the app_state!"
         );
+
+        let enclave_address = app_state.enclave_signer.address();
+        drop(app_state);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
+        }
+
+        assert_eq!(responses.len(), 1);
+
+        if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
+            assert_eq!(
+                recover_address(None, call._signTimestamp, hex::encode(call._signature)),
+                enclave_address
+            );
+        } else {
+            assert!(false, "Mark store alive transaction not received!");
+        }
     }
 
     #[tokio::test]
@@ -1924,30 +1850,26 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.mark_alive_timeout + 10);
-        let start_time = Instant::now();
-
         let app_state_clone = app_state.clone();
-        tokio::spawn(async move {
-            let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
-                |(delay, log)| async move {
-                    sleep(Duration::from_secs(delay)).await;
-                    log
-                }
-            ));
+        let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
+            |(delay, log)| async move {
+                sleep(Duration::from_secs(delay)).await;
+                log
+            }
+        ));
 
-            // Call the event handler for the contract logs
-            handle_event_logs(
-                secrets_stream,
-                pin!(tokio_stream::iter(store_logs.into_iter())),
-                app_state_clone,
-            )
-            .await;
-        });
+        // Call the event handler for the contract logs
+        handle_event_logs(
+            secrets_stream,
+            pin!(tokio_stream::iter(store_logs.into_iter())),
+            app_state_clone,
+        )
+        .await;
 
-        // add sleep delay for the first log to get processed
-        sleep(Duration::from_secs(2)).await;
+        assert!(
+            app_state.enclave_draining.load(Ordering::SeqCst),
+            "Secret store not set to draining in the app_state"
+        );
 
         // Encrypt the secret with enclave's private key and sign it with owner's wallet
         let secret = [1u8; 6];
@@ -1988,27 +1910,37 @@ pub mod secret_store_test {
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.into_body().try_into_bytes().unwrap(),
-            "Secret ID not created yet or undergoing injection!\n"
+            "Secret ID is not created yet or is not assigned to this secret store or is currently undergoing injection!\n"
         );
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        let enclave_address = app_state.enclave_signer.address();
+        app_state.enclave_registered.store(false, Ordering::SeqCst);
+        drop(app_state);
+        drop(app);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
-        assert!(responses.is_empty());
-        assert!(
-            app_state.enclave_draining.load(Ordering::SeqCst),
-            "Secret store not set to draining in the app_state"
-        );
+        assert_eq!(responses.len(), 2);
+
+        if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
+            assert_eq!(
+                recover_address(None, call._signTimestamp, hex::encode(call._signature)),
+                enclave_address
+            );
+        } else {
+            assert!(false, "Mark store alive transaction not received!");
+        }
+
+        if let StoresTransaction::MarkStoreAlive(call) = responses[1].clone() {
+            assert_eq!(
+                recover_address(None, call._signTimestamp, hex::encode(call._signature)),
+                enclave_address
+            );
+        } else {
+            assert!(false, "Mark store alive transaction not received!");
+        }
     }
 
     #[tokio::test]
@@ -2091,10 +2023,6 @@ pub mod secret_store_test {
 
         let mut responses: Vec<StoresTransaction> = vec![];
 
-        // Time for listening to transactions from the receiver channel
-        let max_duration = Duration::from_secs(app_state.mark_alive_timeout + 10);
-        let start_time = Instant::now();
-
         let app_state_clone = app_state.clone();
         tokio::spawn(async move {
             let secrets_stream = pin!(tokio_stream::iter(secret_logs.into_iter()).then(
@@ -2115,6 +2043,11 @@ pub mod secret_store_test {
 
         // add sleep delay for the first log to get processed
         sleep(Duration::from_secs(2)).await;
+
+        assert!(
+            !app_state.enclave_draining.load(Ordering::SeqCst),
+            "Secret store still draining in the app_state!"
+        );
 
         // Encrypt the secret with enclave's private key and sign it with owner's wallet
         let secret = [1u8; 6];
@@ -2176,17 +2109,13 @@ pub mod secret_store_test {
 
         assert_eq!(secret_stored, secret.to_vec());
 
-        while start_time.elapsed() < max_duration {
-            // Use a small timeout per `recv` to prevent indefinite blocking
-            match timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(tx)) => {
-                    responses.push(tx);
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(_) => {}
-            }
+        let enclave_address = app_state.enclave_signer.address();
+        app_state.enclave_registered.store(false, Ordering::SeqCst);
+        drop(app_state);
+        drop(app);
+
+        while let Some(tx) = rx.recv().await {
+            responses.push(tx);
         }
 
         assert_eq!(responses.len(), 3);
@@ -2194,7 +2123,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[0].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -2208,7 +2137,7 @@ pub mod secret_store_test {
                     call._signTimestamp,
                     hex::encode(call._signature)
                 ),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(
@@ -2220,7 +2149,7 @@ pub mod secret_store_test {
         if let StoresTransaction::MarkStoreAlive(call) = responses[2].clone() {
             assert_eq!(
                 recover_address(None, call._signTimestamp, hex::encode(call._signature)),
-                app_state.enclave_signer.address()
+                enclave_address
             );
         } else {
             assert!(false, "Mark store alive transaction not received!");
@@ -2228,16 +2157,11 @@ pub mod secret_store_test {
 
         // Verify that the secret has been deleted after the garbage collection
         let secret_stored = open_and_read_file(
-            app_state.secret_store_path.to_owned() + "/" + &secret_id.to_string() + ".bin",
+            SECRET_STORE_PATH.to_owned() + "/" + &secret_id.to_string() + ".bin",
         )
         .await;
 
         assert!(secret_stored.is_err());
-
-        assert!(
-            !app_state.enclave_draining.load(Ordering::SeqCst),
-            "Secret store still draining in the app_state!"
-        );
     }
 
     // Recover signer address from the signature and data

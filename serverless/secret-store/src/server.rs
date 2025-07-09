@@ -7,7 +7,7 @@ use alloy::dyn_abi::DynSolValue;
 use alloy::hex;
 use alloy::primitives::{keccak256, Address, PrimitiveSignature, U256};
 use alloy::signers::local::PrivateKeySigner;
-use alloy::signers::SignerSync;
+use alloy::signers::Signer;
 use ecies::decrypt;
 use multi_block_txns::TxnManager;
 use serde_json::json;
@@ -264,7 +264,7 @@ async fn inject_and_store_secret(
         .remove(&create_secret.secret_id)
     else {
         return HttpResponse::BadRequest()
-            .body("Secret ID not created yet or undergoing injection!\n");
+            .body("Secret ID is not created yet or is not assigned to this secret store or is currently undergoing injection!\n");
     };
 
     // Exit if the secret owner is not the same as the secret signer
@@ -347,7 +347,8 @@ async fn inject_and_store_secret(
     // Sign the digest using enclave key
     let sig = app_state
         .enclave_signer
-        .sign_typed_data_sync(&acknowledge_data, &DOMAIN_SEPARATOR);
+        .sign_typed_data(&acknowledge_data, &DOMAIN_SEPARATOR)
+        .await;
     let Ok(sig) = sig else {
         return HttpResponse::InternalServerError().body(format!(
             "Secret Stored! \nFailed to sign the acknowledgement message using enclave key: {:?}\n",
