@@ -13,6 +13,7 @@ use tokio::select;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::time::sleep;
 use tokio_stream::{Stream, StreamExt};
+use tracing::{debug, error, info, warn};
 
 use crate::constant::{EXECUTION_ENV_ID, TIMEOUT_TXN_SEND_BUFFER_MS};
 use crate::execution::handle_job;
@@ -34,7 +35,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         let web_socket_client = match ProviderBuilder::new().on_ws(ws_connect).await {
             Ok(client) => client,
             Err(err) => {
-                eprintln!(
+                warn!(
                     "Failed to connect to the common chain websocket provider: {}",
                     err
                 );
@@ -61,9 +62,9 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
             {
                 Ok(stream) => stream,
                 Err(err) => {
-                    eprintln!(
-                        "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeRegistered' event logs: {:?}",
-                        app_state.tee_manager_contract_addr,
+                    warn!(
+                        contract_address = %app_state.tee_manager_contract_addr,
+                        "Failed to subscribe to 'TeeNodeRegistered' event logs: {:?}",
                         err,
                     );
                     continue;
@@ -99,7 +100,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
             }
         }
 
-        println!("Executor registered successfully on the common chain!");
+        info!("Executor registered successfully on the common chain!");
         // Create filter to listen to JobCreated events emitted by the Jobs contract for executor's environment
         let jobs_created_filter = Filter::new()
             .address(app_state.jobs_contract_addr)
@@ -111,9 +112,10 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         {
             Ok(stream) => stream,
             Err(err) => {
-                eprintln!(
-                    "Failed to subscribe to Jobs ({:?}) contract 'JobCreated' event logs: {:?}",
-                    app_state.jobs_contract_addr, err,
+                warn!(
+                    %app_state.jobs_contract_addr,
+                    "Failed to subscribe 'JobCreated' event logs: {:?}",
+                    err,
                 );
                 continue;
             }
@@ -132,9 +134,10 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         {
             Ok(stream) => stream,
             Err(err) => {
-                eprintln!(
-                    "Failed to subscribe to Jobs ({:?}) contract 'JobResponded' event logs: {:?}",
-                    app_state.jobs_contract_addr, err,
+                warn!(
+                    %app_state.jobs_contract_addr,
+                    "Failed to subscribe to 'JobResponded' event logs: {:?}",
+                    err,
                 );
                 continue;
             }
@@ -155,9 +158,10 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         let executors_stream = match web_socket_client.subscribe_logs(&executors_filter).await {
             Ok(stream) => stream,
             Err(err) => {
-                eprintln!(
-                    "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
-                    app_state.tee_manager_contract_addr, err
+                warn!(
+                    %app_state.tee_manager_contract_addr,
+                    "Failed to subscribe to event logs: {:?}",
+                    err
                 );
                 continue;
             }
@@ -194,7 +198,7 @@ pub async fn handle_event_logs(
     app_state: State<AppState>,
     tx_sender: Sender<JobsTransaction>,
 ) {
-    println!("Started listening to 'Jobs' and 'TeeManager' events!");
+    debug!("Started listening to 'Jobs' and 'TeeManager' events!");
 
     loop {
         select! {
@@ -215,26 +219,26 @@ pub async fn handle_event_logs(
                 match event.topic0() {
                     // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
                     Some(&TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH) => {
-                        println!("Executor deregistered from the common chain!");
+                        info!("Executor deregistered from the common chain!");
                         app_state.enclave_registered.store(false, Ordering::SeqCst);
 
-                        println!("Stopped listening to 'Jobs' events!");
+                        debug!("Stopped listening to 'Jobs' events!");
                         return;
                     }
                     // Capture the Enclave drained event emitted by the 'TeeManager' contract
                     Some(&TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH) => {
-                        println!("Executor put in draining mode!");
+                        info!("Executor put in draining mode!");
                         app_state.enclave_draining.store(true, Ordering::SeqCst);
                         // Clear the pending jobs map
                         app_state.job_requests_running.lock().unwrap().clear();
                     }
                     // Capture the Enclave revived event emitted by the 'TeeManager' contract
                     Some(&TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH) => {
-                        println!("Executor revived from draining mode!");
+                        info!("Executor revived from draining mode!");
                         app_state.enclave_draining.store(false, Ordering::SeqCst);
                     }
-                    Some(_) => println!("Unrecognized event topic received!"),
-                    None => println!("No event topic received!")
+                    Some(_) => warn!("Unrecognized event topic received!"),
+                    None => warn!("No event topic received!")
                 }
             }
             // Capture the Job created event emitted by the jobs contract
@@ -268,9 +272,9 @@ pub async fn handle_event_logs(
                 // Decode the event parameters using the ABI information
                 let event_decoded = JobsContract::JobCreated::decode_log(&event.inner, true);
                 let Ok(event_decoded) = event_decoded else {
-                        eprintln!(
-                            "Failed to decode 'JobCreated' event data for job id {}: {}",
-                            job_id,
+                        error!(
+                            %job_id,
+                            "Failed to decode 'JobCreated' event data: {}",
                             event_decoded.err().unwrap()
                         );
                         continue;
@@ -339,9 +343,9 @@ pub async fn handle_event_logs(
                 // Decode the event parameters using the ABI information
                 let event_decoded = JobsContract::JobResponded::decode_log(&event.inner, true);
                 let Ok(event_decoded) = event_decoded else {
-                        eprintln!(
-                            "Failed to decode 'JobResponded' event data for job id {}: {}",
-                            job_id,
+                        error!(
+                            %job_id,
+                            "Failed to decode 'JobResponded' event data: {}",
                             event_decoded.err().unwrap()
                         );
                         continue;
@@ -360,7 +364,7 @@ pub async fn handle_event_logs(
         }
     }
 
-    println!("Both the 'Jobs' and 'TeeManager' subscription streams have ended!");
+    debug!("Both the 'Jobs' and 'TeeManager' subscription streams have ended!");
 }
 
 // Start task to handle the execution timeout scenario for a job request
@@ -392,9 +396,10 @@ async fn handle_timeout(
         }))
         .await
     {
-        eprintln!(
-            "Failed to send execution timeout transaction for job ID {}: {:?}",
-            job_id, err
+        error!(
+            %job_id,
+            "Failed to send execution timeout transaction via the channel sender: {:?}",
+            err
         );
     };
 }

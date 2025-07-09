@@ -4,6 +4,7 @@ use reqwest::Url;
 use serde_json::Value;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tracing::{error, warn};
 
 pub async fn call_secret_store_endpoint_post(
     port: u16,
@@ -25,9 +26,10 @@ pub async fn call_secret_store_endpoint_post(
     )
     .await
     .map_err(|err| {
-        eprintln!(
-            "Failed to send the request to secret store endpoint {}: {:?}",
-            endpoint, err
+        error!(
+            %req_url,
+            "Failed to send request to the secret store POST endpoint: {:?}",
+            err
         );
         err
     })?;
@@ -48,9 +50,10 @@ pub async fn call_secret_store_endpoint_get(
     )
     .await
     .map_err(|err| {
-        eprintln!(
-            "Failed to send the request to secret store endpoint {}: {:?}",
-            endpoint, err
+        error!(
+            %req_url,
+            "Failed to send request to secret store GET endpoint: {:?}",
+            err
         );
         err
     })?;
@@ -74,7 +77,8 @@ async fn parse_response(
 
     if content_type.contains("application/json") {
         response_json = Some(response.json::<Value>().await.map_err(|err| {
-            eprintln!(
+            warn!(
+                %status_code,
                 "Failed to parse the response json from the secret store response: {:?}",
                 err
             );
@@ -82,7 +86,8 @@ async fn parse_response(
         })?);
     } else {
         response_body = response.text().await.map_err(|err| {
-            eprintln!(
+            warn!(
+                %status_code,
                 "Failed to parse the response body from the secret store response: {:?}",
                 err
             );
