@@ -1,16 +1,16 @@
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use actix_web::web::Data;
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{keccak256, U256};
-use alloy::signers::k256::elliptic_curve::generic_array::sequence::Lengthen;
+use alloy::primitives::U256;
+use alloy::signers::Signer;
 use tokio::time::interval;
 
 use crate::constants::{
     DOMAIN_SEPARATOR, SECRET_EXPIRATION_BUFFER_SECS, SEND_TRANSACTION_BUFFER_SECS,
 };
-use crate::model::{AppState, SecretMetadata};
+use crate::model::SecretManagerContract::markStoreAliveCall;
+use crate::model::{Alive, AppState, SecretMetadata, StoresTransaction};
 use crate::utils::check_and_delete_file;
 
 // Periodic job for sending alive acknowledgement transaction and removing expired secret files
@@ -23,81 +23,47 @@ pub async fn remove_expired_secrets_and_mark_store_alive(app_state: Data<AppStat
     loop {
         interval.tick().await; // Wait for the next tick
 
-        // If enclave is deregistered, stop the job because acknowledgments won't be accepted then
-        if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            return;
-        }
-
-        // If enclave is drained, skip the alive transaction because acknowledgments won't be accepted then
-        if app_state.enclave_draining.load(Ordering::SeqCst) {
-            continue;
-        }
-
         // Get the current sign timestamp for signing
         let sign_timestamp = SystemTime::now();
         let sign_timestamp = sign_timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-        // Encode and hash the mark store alive message for the secret following EIP712 format
-        let alive_typehash = keccak256("Alive(uint256 signTimestamp)");
-
-        let hash_struct = keccak256(
-            DynSolValue::Tuple(vec![
-                DynSolValue::FixedBytes(alive_typehash, 32),
-                DynSolValue::Uint(U256::from(sign_timestamp), 256),
-            ])
-            .abi_encode(),
-        );
-
-        // Create the digest
-        let digest = keccak256(
-            DynSolValue::Tuple(vec![
-                DynSolValue::String("\x19\x01".to_string()),
-                DynSolValue::FixedBytes(*DOMAIN_SEPARATOR, 32),
-                DynSolValue::FixedBytes(hash_struct, 32),
-            ])
-            .abi_encode_packed(),
-        );
+        let alive_data = Alive {
+            signTimestamp: U256::from(sign_timestamp),
+        };
 
         // Sign the digest using enclave key
         let sign = app_state
             .enclave_signer
-            .sign_prehash_recoverable(&digest.to_vec());
-        let Ok((rs, v)) = sign else {
+            .sign_typed_data(&alive_data, &DOMAIN_SEPARATOR)
+            .await;
+        let Ok(sign) = sign else {
             eprintln!(
                 "Failed to sign the alive message using enclave key: {:?}",
                 sign.unwrap_err()
             );
             continue;
         };
-        let signature = rs.to_bytes().append(27 + v.to_byte()).to_vec();
+        let signature = sign.as_bytes();
 
-        let txn_data = app_state
-            .secret_manager_contract_instance
-            .markStoreAlive(U256::from(sign_timestamp), signature.into())
-            .calldata()
-            .to_owned();
-
-        let http_rpc_txn_manager = app_state
-            .http_rpc_txn_manager
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-
-        // Send the txn response with the mark alive counterpart
-        if let Err(err) = http_rpc_txn_manager
-            .call_contract_function(
-                app_state.secret_manager_contract_addr,
-                txn_data.clone(),
-                Instant::now() + Duration::from_secs(SEND_TRANSACTION_BUFFER_SECS),
-            )
+        // Send the txn response with the mark alive counterpart to the common chain txn sender
+        if let Err(err) = app_state
+            .tx_sender
+            .send(StoresTransaction::MarkStoreAlive(markStoreAliveCall {
+                _signTimestamp: U256::from(sign_timestamp),
+                _signature: signature.into(),
+            }))
             .await
         {
-            eprintln!("Failed to send store alive transaction: {:?}", err);
+            eprintln!("Failed to send mark alive transaction: {:?}", err);
         };
 
         // Call the garbage cleaner
         garbage_cleaner(app_state.clone(), false).await;
+
+        // If enclave is deregistered, stop the job because acknowledgments won't be accepted then
+        if !app_state.enclave_registered.load(Ordering::SeqCst) {
+            return;
+        }
     }
 }
 
