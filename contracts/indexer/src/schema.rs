@@ -45,6 +45,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    settlement_history (id, block) {
+        #[max_length = 66]
+        id -> Bpchar,
+        amount -> Numeric,
+        timestamp -> Numeric,
+        block -> Int8,
+    }
+}
+
+diesel::table! {
     sync (block) {
         block -> Int8,
     }
@@ -65,6 +75,7 @@ diesel::table! {
 
 diesel::joinable!(rate_revisions -> jobs (job_id));
 diesel::joinable!(revise_rate_requests -> jobs (id));
+diesel::joinable!(settlement_history -> jobs (id));
 diesel::joinable!(transactions -> jobs (job));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -72,6 +83,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     providers,
     rate_revisions,
     revise_rate_requests,
+    settlement_history,
     sync,
     transactions,
 );
