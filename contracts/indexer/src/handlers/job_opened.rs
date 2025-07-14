@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::rate_revisions;
 use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
@@ -54,6 +55,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?block,
         "creating job"
     );
 
@@ -90,6 +92,17 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .execute(conn)
         .context("failed to create deposit")?;
 
+    // add entry for rate revision
+    // TODO: add tests
+    diesel::insert_into(rate_revisions::table)
+        .values((
+            rate_revisions::job_id.eq(&id),
+            rate_revisions::value.eq(&rate),
+            rate_revisions::block.eq(block as i64),
+        ))
+        .execute(conn)
+        .context("failed to insert rate revision")?;
+
     info!(
         id,
         owner,
@@ -98,6 +111,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?block,
         "created job"
     );
 

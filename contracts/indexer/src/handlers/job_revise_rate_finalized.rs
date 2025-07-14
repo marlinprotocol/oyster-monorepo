@@ -61,6 +61,7 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
     }
 
     // add entry for rate revision
+    // TODO: add tests
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),

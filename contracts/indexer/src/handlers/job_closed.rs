@@ -1,6 +1,8 @@
 use crate::schema::jobs;
+use crate::schema::rate_revisions;
 use alloy::hex::ToHexExt;
 use alloy::rpc::types::Log;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -15,14 +17,16 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
-
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
     //
     // do we not have to delete outstanding revise rate requests?
     // no, it is handled by LockDeleted
 
-    info!(id, "closing job");
+    info!(id, ?block, "closing job");
 
     // target sql:
     // UPDATE jobs
@@ -51,7 +55,18 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    info!(id, "closed job");
+    // add entry for rate revision
+    // TODO: add tests
+    diesel::insert_into(rate_revisions::table)
+        .values((
+            rate_revisions::job_id.eq(&id),
+            rate_revisions::value.eq(&BigDecimal::from(0)),
+            rate_revisions::block.eq(block as i64),
+        ))
+        .execute(conn)
+        .context("failed to insert rate revision")?;
+
+    info!(id, ?block, "closed job");
 
     Ok(())
 }
