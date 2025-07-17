@@ -1,0 +1,788 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+/* Contracts */
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ContextUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
+import {ERC165Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {AccessControlEnumerableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+
+/* Interfaces */
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IGovernance} from "./interfaces/IGovernance.sol";
+
+/* Libraries */
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+contract Governance is
+    Initializable, // initializer
+    ContextUpgradeable,
+    ERC165Upgradeable, // supportsInterface
+    AccessControlEnumerableUpgradeable, // RBAC enumeration
+    PausableUpgradeable,
+    UUPSUpgradeable, // public upgrade
+    IGovernance // Governance
+{
+    using SafeERC20 for IERC20;
+    using Strings for uint256;
+    using ECDSA for bytes32;
+
+    /* Errors */
+    error OnlyAdmin();
+    error TokenNotSupported();
+    error ProposalAlreadyExists();
+    error ProposalAlreadySubmitted();
+    error InvalidInputLength();
+    error InvalidTitleLength();
+    error InvalidDescriptionLength();
+    error NotResultSubmissionPhase();
+    error ProposalAlreadyInQueue();
+    error ProposalAlreadyExecuted();
+    error InvalidProposalTimeConfig();
+    error InvalidTokenAddress();
+    error InvalidChainId();
+    error InvalidRpcUrl();
+    error ProposalDoesNotExist();
+    error VotingNotActive();
+    error ResultAlreadySubmitted();
+    error InvalidVoteResult();
+    error InvalidPubKeyLength();
+    error VotingNotDone();
+    error InvalidPCR16Sha256();
+    error InvalidEnclaveSignature();
+    error InvadidKMSSignature();
+
+    /* Events */
+    event DepositThresholdSet(address token, uint256 amount);
+    event VoteActivationDelaySet(uint256 delay);
+    event VoteDurationSet(uint256 duration);
+    event ProposalDurationSet(uint256 duration);
+    event NetworkConfigSet(uint256 chainId, address tokenAddress, string[] rpcUrls);
+    event RpcUrlAdded(uint256 indexed chainId, string rpcUrl);
+    event RpcUrlUpdated(uint256 indexed chainId, uint256 index, string rpcUrl);
+    event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
+    event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2);
+
+    event ProposalCreated(
+        bytes32 indexed proposalId,
+        address indexed proposer,
+        uint256 nonce,
+        address[] targets,
+        uint256[] values,
+        bytes[] calldatas,
+        string title,
+        string description,
+        ProposalTimeInfo proposalTimeInfo
+    );
+    event VoteSubmitted(
+        bytes32 indexed proposalId,
+        uint256 indexed voteIdx,
+        address indexed voter,
+        bytes voteEncryped
+    );
+    event ResultSubmitted(
+        bytes32 indexed proposalId,
+        VoteDecisionCount voteDecisionCount,
+        VoteOutcome voteOutcome
+    );
+
+    uint256[500] private __gap0;
+
+    IERC20 public usdc;
+
+    /* Proposal */
+    /// @notice Token amount required to submit a proposal which will be locked until result is submitted
+    mapping(address token => uint256 amount) proposalDepositAmounts;
+    /// @notice Mapping of proposal IDs to their respective Proposal structs
+    mapping(bytes32 id => Proposal) proposals;
+    /// @notice Mapping of proposal IDs that are queued for execution when the result for the proposal is passed
+    mapping(bytes32 id => bool) executionQueue;
+    /// @notice Used to calculate proposalId
+    /// @notice Each time proposal is submitted, the nonce is incremented to ensure uniqueness of proposalId
+    /// @dev Starts from 0
+    mapping(address proposer => uint256 nonce) proposerNonce;
+
+    /* Admin Config */
+    ProposalTimingConfig public proposalTimingConfig;
+    bytes32 public networkHash;
+    /* KMS */
+    PCR public pcrConfig;
+    bytes public kmsRootServerPubKey;
+    string public kmsPath;
+
+    /* Token Network Config */
+    /// @notice An array of chain IDs where the token used to measure voting power in Governance has been deployed
+    uint256[] public supportedChainIds;
+    /// @notice Mapping of chain IDs to their respective token network configurations
+    mapping(uint256 chainId => TokenNetworkConfig config) tokenNetworkConfigs;
+
+    modifier onlyAdmin() {
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()));
+        _;
+    }
+
+    modifier onlyGovernanceEnclave(bytes32 _proposalId) {
+        // TODO: Verify the signature
+        _;
+    }
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    // initializes the logic contract without any admins
+    // safeguard against takeover of the logic contract
+    constructor() initializer {}
+
+    //-------------------------------- Overrides start --------------------------------//
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        virtual
+        override(ERC165Upgradeable, AccessControlEnumerableUpgradeable)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
+    }
+
+    function _authorizeUpgrade(address /*account*/ ) internal view override onlyAdmin {}
+
+    //-------------------------------- Overrides ends --------------------------------//
+
+    //-------------------------------- Initializer start --------------------------------//
+
+    uint256[50] private __gap1;
+
+    // TODO
+    function initialize(address _admin, address _marketV1) public initializer {
+        __Context_init_unchained();
+        __ERC165_init_unchained();
+        __AccessControl_init_unchained();
+        __AccessControlEnumerable_init_unchained();
+        __ERC1967Upgrade_init_unchained();
+        __UUPSUpgradeable_init_unchained();
+        __Pausable_init_unchained();
+
+        // TODO: set default admin
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    }
+
+    //-------------------------------- Initializer end --------------------------------//
+
+    //-------------------------------- Admin start --------------------------------//
+
+    function setDepositThreshold(address _token, uint256 _amount) external onlyAdmin {
+        proposalDepositAmounts[_token] = _amount;
+        emit DepositThresholdSet(_token, _amount);
+    }
+
+    function setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration)
+        external
+        onlyAdmin
+    {
+        if (_voteActivationDelay > 0) {
+            _setVoteActivationDelay(_voteActivationDelay);
+        }
+
+        if (_voteDuration > 0) {
+            _setVoteDuration(_voteDuration);
+        }
+
+        if (_proposalDuration > 0) {
+            _setProposalDuration(_proposalDuration);
+        }
+
+        _checkProposalTimeConfig();
+    }
+
+    /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` is not checked here
+    function _setVoteActivationDelay(uint256 _voteActivationDelay) internal {
+        proposalTimingConfig.voteActivationDelay = _voteActivationDelay;
+        emit VoteActivationDelaySet(_voteActivationDelay);
+    }
+
+    /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` is not checked here
+    function _setVoteDuration(uint256 _voteDuration) internal {
+        proposalTimingConfig.voteDuration = _voteDuration;
+        emit VoteDurationSet(_voteDuration);
+    }
+
+    /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` is not checked here
+    function _setProposalDuration(uint256 _proposalDuration) internal {
+        proposalTimingConfig.proposalDuration = _proposalDuration;
+        emit ProposalDurationSet(_proposalDuration);
+    }
+
+    /// @dev Checks if the proposal timing configuration is valid
+    /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` must hold true
+    function _checkProposalTimeConfig() internal view {
+        ProposalTimingConfig memory config = proposalTimingConfig;
+
+        // Note: ResultSubmissionDuration = proposalDuration - (voteActivationDelay + voteDuration)
+        require(config.voteActivationDelay + config.voteDuration < config.proposalDuration, InvalidProposalTimeConfig());
+    }
+
+    function _calcNetworkHash() internal view returns (bytes32) {
+        bytes memory chainHashEncoded;
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            uint256 chainId = supportedChainIds[i];
+            bytes32 chainHash = tokenNetworkConfigs[chainId].chainHash;
+            abi.encode(networkHash, chainHash);
+        }
+
+        return keccak256(chainHashEncoded);
+    }
+
+    /// @notice Add or update NetworkConfig for the specified chainId
+    /// @dev If the chainId is not in supportedChainIds, it will be added.
+    /// @param _chainId The chain ID for which the network config is being set
+    /// @param _tokenAddress The address of the token contract on the specified chain
+    /// @param _rpcUrls An array of RPC URLs for the specified chain
+    function setNetworkConfig(uint256 _chainId, address _tokenAddress, string[] calldata _rpcUrls) external onlyAdmin {
+        require(_chainId > 0, InvalidChainId());
+        require(_tokenAddress != address(0), InvalidTokenAddress());
+        require(_rpcUrls.length > 0, InvalidRpcUrl());
+
+        // Check if the token address is already set for the chainId
+        bool chainIdExists = false;
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) {
+                chainIdExists = true;
+                break;
+            }
+        }
+
+        // If the chainId is not supported, add it to the supportedChainIds
+        if (!chainIdExists) {
+            supportedChainIds.push(_chainId);
+        }
+
+        // Update the token network config
+        bytes32 chainHash = keccak256(abi.encode(_chainId, _rpcUrls));
+        tokenNetworkConfigs[_chainId] =
+            TokenNetworkConfig({chainHash: chainHash, tokenAddress: _tokenAddress, rpcUrls: _rpcUrls});
+
+        emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls);
+    }
+
+    /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
+    function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyAdmin {
+        require(_chainId > 0, InvalidChainId());
+
+        // Check RPC url length
+        for(uint256 i = 0; i < _rpcUrl.length; ++i) {
+            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+        }
+
+        // Check if the chainId is supported
+        bool chainIdExists = false;
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) {
+                chainIdExists = true;
+                break;
+            }
+        }
+        require(chainIdExists, InvalidChainId());
+
+        // Add the new RPC URL to the rpcUrls array for the specified chainId
+        TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
+        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+            config.rpcUrls.push(_rpcUrl[i]);
+        }
+
+        // Emit an event for the added RPC URL
+        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+            emit RpcUrlAdded(_chainId, _rpcUrl[i]);
+        }
+    }
+
+    /// @notice Updates an existing RPC URL for the specified chainId at the given index
+    function updateRpcUrl(uint256 _chainId, uint256 _index, string calldata _rpcUrl) external onlyAdmin {
+        require(_chainId > 0, InvalidChainId());
+        require(_index < tokenNetworkConfigs[_chainId].rpcUrls.length, InvalidRpcUrl());
+        require(bytes(_rpcUrl).length > 0, InvalidRpcUrl());
+
+        tokenNetworkConfigs[_chainId].rpcUrls[_index] = _rpcUrl;
+        emit RpcUrlUpdated(_chainId, _index, _rpcUrl);
+    }
+
+    /// @notice Sets KMS Root Server Key
+    function setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) external onlyAdmin {
+        require(_kmsRootServerPubKey.length == 64, InvalidPubKeyLength());
+        kmsRootServerPubKey = _kmsRootServerPubKey;
+        emit KMSRootServerPubKeySet(_kmsRootServerPubKey);
+    }
+
+    /// @notice Set KMS Path to be used for KMS signature verification
+    /// @dev The path should be in the format used by the KMS, e.g., "/derive/secp256k1/public?image_id={imageId}&path={path}"
+    /// @param _kmsPath The KMS path to be set
+    function setKMSPath(string calldata _kmsPath) external onlyAdmin {
+        require(bytes(_kmsPath).length > 0, "KMS path cannot be empty");
+        kmsPath = _kmsPath;
+    }
+
+    function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyAdmin {
+        pcrConfig = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2});
+        emit PCRConfigSet(_pcr0, _pcr1, _pcr2);
+    }
+
+    function pause() external whenNotPaused onlyAdmin {
+        _pause();
+    }
+
+    function unpause() external whenPaused onlyAdmin {
+        _unpause();
+    }
+
+    //-------------------------------- Admin end --------------------------------//
+
+    //-------------------------------- Propose start --------------------------------//
+
+    function propose(
+        address _depositToken,
+        address[] calldata _targets,
+        uint256[] calldata _values,
+        bytes[] calldata _calldatas,
+        string calldata _title,
+        string calldata _description
+    ) external returns (bytes32 proposalId) {
+        // Input Validation
+        require(_targets.length == _values.length, InvalidInputLength());
+        require(_targets.length == _calldatas.length, InvalidInputLength());
+        require(bytes(_title).length > 0, InvalidTitleLength());
+        require(bytes(_description).length > 0, InvalidDescriptionLength());
+
+        // Calculate proposalId
+        bytes32 descriptionHash = getDescriptionHash(_title, _description);
+        proposalId =
+            getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
+        proposerNonce[msg.sender] += 1;
+
+        // Ensure that the proposal does not already exist
+        require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
+
+        // Deposit token and lock
+        uint256 depositAmount = proposalDepositAmounts[_depositToken];
+        // Only Accept tokens with non-zero threshold
+        require(depositAmount > 0, TokenNotSupported());
+        if (proposalDepositAmounts[_depositToken] == 0) {
+            revert TokenNotSupported();
+        }
+        _depositTokenAndLock(proposalId, _depositToken, depositAmount);
+
+        // Store the proposal information
+        proposals[proposalId].proposalInfo = ProposalInfo({
+            proposer: msg.sender,
+            targets: _targets,
+            values: _values,
+            calldatas: _calldatas,
+            title: _title,
+            description: _description
+        });
+
+        // Set the proposal time information
+        proposals[proposalId].proposalTimeInfo = ProposalTimeInfo({
+            proposedTimestamp: block.timestamp,
+            voteActivationTimestamp: block.timestamp + proposalTimingConfig.voteActivationDelay,
+            voteDeadlineTimestamp: block.timestamp + proposalTimingConfig.voteActivationDelay
+                + proposalTimingConfig.voteDuration,
+            proposalDeadlineTimestamp: block.timestamp + proposalTimingConfig.proposalDuration
+        });
+
+        proposals[proposalId].networkHash = getNetworkHash();
+
+        emit ProposalCreated(
+            proposalId,
+            msg.sender,
+            proposerNonce[msg.sender],
+            _targets,
+            _values,
+            _calldatas,
+            _title,
+            _description,
+            proposals[proposalId].proposalTimeInfo
+        );
+    }
+
+    function _updateVoteHash(bytes32 _proposalId, bytes32 _voteEncryptedHash) internal {
+        bytes32 voteHasOld = proposals[_proposalId].proposalVoteInfo.voteHash;
+        bytes32 voteHashUpdated = keccak256(abi.encode(voteHasOld, _voteEncryptedHash));
+        proposals[_proposalId].proposalVoteInfo.voteHash = voteHashUpdated;
+    }
+
+    function _incrementVoteCount(bytes32 _proposalId) internal {
+        proposals[_proposalId].proposalVoteInfo.voteCount++;
+    }
+
+    // TODO: those without any tokens?
+    function vote(bytes32 _proposalId, bytes calldata _voteEncrypted) external {
+        // Check if the proposal exists
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+
+        // Chech if the proposal is active
+        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
+        uint256 voteActivationTimestamp = proposalTimeInfo.voteActivationTimestamp;
+        uint256 voteDeadlineTimestamp = proposalTimeInfo.voteDeadlineTimestamp;
+        require(block.timestamp >= voteActivationTimestamp && block.timestamp < voteDeadlineTimestamp, VotingNotActive());
+
+        // Increment the vote count
+        _incrementVoteCount(_proposalId);
+
+        // Store the vote
+        Proposal storage proposal = proposals[_proposalId];
+        ProposalVoteInfo storage proposalVoteInfo = proposal.proposalVoteInfo;
+        uint256 voteIdx = proposalVoteInfo.voteCount;
+        proposalVoteInfo.votes[voteIdx] = Vote({voter: msg.sender, voteEncrypted: _voteEncrypted});
+
+        // Update Vote Hash of the proposal
+        bytes32 voteEncryptedHash = keccak256(_voteEncrypted);
+        _updateVoteHash(_proposalId, voteEncryptedHash);
+
+        emit VoteSubmitted(
+            _proposalId,
+            voteIdx,
+            msg.sender,
+            _voteEncrypted
+        );
+    }
+
+    //-------------------------------- Propose end --------------------------------//
+
+    //-------------------------------- Result start --------------------------------//
+
+    /// @param _resultData ABI-encoded bytes data of four values: contractDataHash, pcr16Sha256, pcr16Sha384, and voteResult
+    function submitResult(
+        bytes32 _proposalId,
+        bytes calldata _kmsSig,
+	    bytes calldata _enclavePubKey,
+	    bytes calldata _enclaveSig,
+        bytes32 _pcr16Sha256,
+        bytes calldata _pcr16Sha384,
+        bytes calldata _resultData
+    ) external {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+
+        require(_kmsSig.length == 64, "Governance: KMS signature cannot be empty");
+        
+        // Check if the proposal in Result Submission Phase
+        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
+        uint256 voteDeadlineTimestamp = proposalTimeInfo.voteDeadlineTimestamp;
+        uint256 proposalDeadlineTimestamp = proposalTimeInfo.proposalDeadlineTimestamp;
+        require(
+            block.timestamp >= voteDeadlineTimestamp && block.timestamp < proposalDeadlineTimestamp,
+            NotResultSubmissionPhase()
+        );
+
+        // Check if the result of the proposal is not already submitted
+        require(proposals[_proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
+
+        // Decode `_resultData`
+        (bytes32 contractDataHash, bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionCount memory voteDecisionCount) =
+            _decodeResultData(_resultData);
+
+        // Compare pcr16Sha256 with calculated value
+        require(pcr16Sha256 == _getPCR16Sha256(_proposalId), InvalidPCR16Sha256());
+
+        // Verify Enclave Sig
+        require(_verifyEnclaveSig(_enclavePubKey, _enclaveSig, _resultData), InvalidEnclaveSignature());
+
+        // Generate Image ID from pcr16Sha384 and verify KMS signature
+        bytes32 imageId = _generateImageId(_pcr16Sha384);
+        require(verifyKMSSig(imageId, _enclavePubKey, _kmsSig), InvadidKMSSignature());
+
+        // Handle the result
+        VoteOutcome voteCoutome = _calcResult(voteDecisionCount);
+        proposals[_proposalId].voteOutcome = voteCoutome;
+        if (voteCoutome == VoteOutcome.Passed) {
+            _handleProposalPassed(_proposalId);
+        } else if (voteCoutome == VoteOutcome.Failed) {
+            _handleProposalFailed(_proposalId);
+        } else if (voteCoutome == VoteOutcome.Vetoed) {
+            _handleProposalVetoed(_proposalId);
+        }
+
+        emit ResultSubmitted(
+            _proposalId,
+            voteDecisionCount,
+            voteCoutome
+        );
+    }
+
+    /// @notice Calculates the result of the proposal based on the vote result
+    function _calcResult(VoteDecisionCount memory _voteDecisionCount) internal returns(VoteOutcome){
+        if(_voteDecisionCount.yesCount > (_voteDecisionCount.noCount + _voteDecisionCount.noWithVetoCount)) {
+            // Proposal passed
+            return VoteOutcome.Passed;
+        } else {
+            return _voteDecisionCount.noCount > _voteDecisionCount.noWithVetoCount ? VoteOutcome.Failed : VoteOutcome.Vetoed;
+        }
+    }
+
+    function _generateImageId(bytes memory _pcr16Sha384) internal view returns(bytes32) {
+        uint32 flags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16));
+
+        bytes memory data = abi.encode(
+            bytes4(flags),
+            pcrConfig.pcr0,
+            pcrConfig.pcr1,
+            pcrConfig.pcr2,
+            _pcr16Sha384
+        );
+
+        return keccak256(data);
+    }   
+
+    function _handleProposalPassed(bytes32 _proposalId) internal {
+        // Executed only if the proposal has on-chain execution targets
+        if (proposals[_proposalId].proposalInfo.targets.length > 0) {
+            _queueExecution(_proposalId);
+        }
+
+        _unlockDepositAndRefund(_proposalId);
+    }
+
+    function _handleProposalFailed(bytes32 _proposalId) internal {
+        _unlockDepositAndRefund(_proposalId);
+    }
+
+    function _handleProposalVetoed(bytes32 _proposalId) internal {
+        _slashDeposit(_proposalId);
+    }
+
+    function _queueExecution(bytes32 _proposalId) internal {
+        // // Check if the proposal is already queued
+        // // This should never revert
+        // if (executionQueue[_proposalId] == true) {
+        //     revert ProposalAlreadyInQueue();
+        // }
+
+        // // Check if the proposal is not executed yet
+        // // This should never revert
+        // if (proposals[_proposalId].executionInfo.executed == true) {
+        //     revert ProposalAlreadySubmitted();
+        // }
+
+        // // Mark the proposal as queued for execution
+        // executionQueue[_proposalId] = true;
+    }
+
+    // TODO: check reentrancy
+    function _execute(bytes32 _proposalId) internal {
+        // TODO: revert if target is address(this)
+        ProposalInfo storage proposalInfo = proposals[_proposalId].proposalInfo;
+        address[] memory targets = proposalInfo.targets;
+        uint256[] memory values = proposalInfo.values;
+        bytes[] memory calldatas = proposalInfo.calldatas;
+
+        // TODO: what if execution failed?
+        // TODO: prevent address(this)?
+        for (uint256 i = 0; i < targets.length; ++i) {
+            (bool success, bytes memory returndata) = targets[i].call{value: values[i]}(calldatas[i]);
+            Address.verifyCallResult(success, returndata, "Governance: proposal execution failed");
+        }
+    }
+
+    //-------------------------------- Result end --------------------------------//
+
+    //-------------------------------- Helpers start --------------------------------//
+
+    function _depositTokenAndLock(bytes32 _proposalId, address _token, uint256 _amount) internal {
+        IERC20(_token).transferFrom(msg.sender, address(this), _amount);
+        _lockDeposit(_proposalId, _token, _amount);
+    }
+
+    function _unlockDepositAndRefund(bytes32 _proposalId) internal {
+        TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
+        _deleteDepositLock(_proposalId);
+        IERC20(tokenLockInfo.token).transfer(proposals[_proposalId].proposalInfo.proposer, tokenLockInfo.amount);
+    }
+
+    function _slashDeposit(bytes32 _proposalId) internal {
+        // TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
+        _deleteDepositLock(_proposalId);
+        // TODO: Transfer to?
+    }
+
+    function _lockDeposit(bytes32 _proposalId, address _token, uint256 _amount) internal {
+        proposals[_proposalId].tokenLockInfo = TokenLockInfo({token: _token, amount: _amount});
+        // TODO: event?
+    }
+
+    function _deleteDepositLock(bytes32 _proposalId) internal {
+        delete proposals[_proposalId].tokenLockInfo;
+    }
+
+    function _boolToString(bool v) internal pure returns (string memory) {
+        return v ? "true" : "false";
+    }
+
+    function _pubKeyToAddress(bytes memory _pubKey) internal pure returns (address) {
+        require(_pubKey.length == 64, InvalidPubKeyLength());
+
+        bytes32 hash = keccak256(_pubKey);
+        return address(uint160(uint256(hash)));
+    }
+
+    function _getPCR16Sha256(bytes32 _proposalId) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                address(this),
+                _proposalId,
+                proposals[_proposalId].proposalTimeInfo.proposedTimestamp,
+                getContractDataHash(_proposalId)
+            )
+        );
+    } 
+
+    function _decodeResultData(bytes memory _resultData) internal pure returns (
+        bytes32 contractDataHash,
+        bytes32 pcr16Sha256,
+        bytes memory pcr16Sha384,
+        VoteDecisionCount memory voteResult
+    ) {
+        // Decode the result data
+        (contractDataHash, pcr16Sha256, pcr16Sha384, voteResult) = abi.decode(
+            _resultData,
+            (bytes32, bytes32, bytes, VoteDecisionCount)
+        );
+    }
+
+    function _verifyEnclaveSig(
+        bytes memory _enclavePubKey,
+        bytes memory _enclaveSig,
+        bytes memory _resultData
+    ) public view returns (bool) {
+        // Reconstruct the message to verify
+        bytes32 messageHash = keccak256(_resultData);
+
+        // Recover the address from the signature
+        address recoveredAddress = messageHash.recover(_enclaveSig);
+
+        // Convert the public key to address
+        address enclaveAddress = _pubKeyToAddress(_enclavePubKey);
+
+        // Compare the recovered address with the enclave address
+        return recoveredAddress == enclaveAddress;
+    }
+
+    function verifyKMSSig(
+        bytes32 _imageId,
+        bytes calldata _enclavePubKey,
+        bytes calldata _kmsSig
+    ) public view returns (bool) {
+        // Reconstruct URI (must match the format signed by the KMS)
+        // Check: https://github.com/marlinprotocol/oyster-monorepo/tree/master/kms/root-server#public-endpoints
+        string memory uri = string(
+            abi.encodePacked(
+                "/derive/secp256k1/public?image_id=",
+                _imageId,
+                "&path=",
+                kmsPath
+            )
+        );
+
+        // Combine URI and binary public key
+        bytes memory message = abi.encodePacked(bytes(uri), _enclavePubKey);
+
+        // Hash the message
+        bytes32 messageHash = keccak256(message);
+
+        // Recover signer address
+        address kmsRootAddress = _pubKeyToAddress(kmsRootServerPubKey);
+        address recovered = messageHash.recover(_kmsSig);
+
+        // Compare with known trusted signer
+        return recovered == kmsRootAddress;
+    }
+
+    //-------------------------------- Helpers end --------------------------------//
+
+    //-------------------------------- Getters start --------------------------------//
+
+    function getProposalId(
+        address[] calldata _targets,
+        uint256[] calldata _values,
+        bytes[] calldata _calldatas,
+        bytes32 _descriptionHash,
+        address _proposer,
+        uint256 _nonce
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
+    }
+
+    function getProposal(bytes32 _proposalId) public view returns (Proposal memory) {
+        return proposals[_proposalId];
+    }
+
+    function getProposalInfo(bytes32 _proposalId)
+        public
+        view
+        returns (
+            address proposer,
+            address[] memory targets,
+            uint256[] memory values,
+            bytes[] memory calldatas,
+            string memory title,
+            string memory description
+        )
+    {
+        ProposalInfo storage proposalInfo = proposals[_proposalId].proposalInfo;
+        return (
+            proposalInfo.proposer,
+            proposalInfo.targets,
+            proposalInfo.values,
+            proposalInfo.calldatas,
+            proposalInfo.title,
+            proposalInfo.description
+        );
+    }
+
+    function getDescriptionHash(string calldata _title, string calldata _description) public pure returns (bytes32) {
+        return keccak256(abi.encode(_title, _description));
+    }
+
+    function getNetworkHash() public view returns (bytes32) {
+        return networkHash;
+    }
+
+    /// @notice Returns the network hash for a given proposal ID
+    function getVoteHash(uint256 _proposalId) public view returns(bytes32) {
+        // reverts if proposal does not exist
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+
+        // reverts if voting is not done
+        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
+        require(block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp, VotingNotDone());
+
+        ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
+        return proposalVoteInfo.voteHash;
+    }
+
+    /// @notice Returns the hash of the contract data for a given proposal ID
+    /// @notice Contract data hash is 
+    function getContractDataHash(bytes32 _proposalId) public view returns(bytes32) {
+        return keccak256(
+            abi.encode(getNetworkHash(_proposalId), getVoteHash(_proposalId))
+        );
+    }
+
+    function getImageId(uint256 _proposalId) public view returns (bytes32) {
+        // TODO
+    }
+
+    // TODO: getVotecount
+    // TODO: getVote
+    // TODO: getNetworkList
+    // TODO: getNetworkHash
+    // TODO: Votesubmitted
+
+    //-------------------------------- Getters end --------------------------------//
+
+    uint256[500] private __gap2;
+}
