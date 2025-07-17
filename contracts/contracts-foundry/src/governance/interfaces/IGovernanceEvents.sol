@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity 0.8.29;
 
 import "./IGovernanceTypes.sol";
 
 interface IGovernanceEvents is IGovernanceTypes {
-    event DepositThresholdSet(address token, uint256 amount);
+    event TokenLockAmountSet(address token, uint256 amount);
     event VoteActivationDelaySet(uint256 delay);
     event VoteDurationSet(uint256 duration);
     event ProposalDurationSet(uint256 duration);
@@ -25,15 +25,22 @@ interface IGovernanceEvents is IGovernanceTypes {
         string description,
         ProposalTimeInfo proposalTimeInfo
     );
+
     event VoteSubmitted(
         bytes32 indexed proposalId,
         uint256 indexed voteIdx,
         address indexed voter,
         bytes voteEncryped
     );
+
     event ResultSubmitted(
         bytes32 indexed proposalId,
         VoteDecisionCount voteDecisionCount,
         VoteOutcome voteOutcome
+    );
+
+    event ProposalExecuted(
+        bytes32 indexed proposalId
+
     );
 }

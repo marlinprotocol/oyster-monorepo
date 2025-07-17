@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity 0.8.29;
 
 interface IGovernanceErrors {
     error InvalidChainId();
@@ -26,4 +26,7 @@ interface IGovernanceErrors {
     error TokenNotSupported();
     error VotingNotActive();
     error VotingNotDone();
+    error InvalidTargetAddress();
+    error ProposalNotInQueue();
+    error InvalidMsgValue();
 }
