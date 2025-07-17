@@ -34,65 +34,6 @@ contract Governance is
     using Strings for uint256;
     using ECDSA for bytes32;
 
-    /* Errors */
-    error OnlyAdmin();
-    error TokenNotSupported();
-    error ProposalAlreadyExists();
-    error ProposalAlreadySubmitted();
-    error InvalidInputLength();
-    error InvalidTitleLength();
-    error InvalidDescriptionLength();
-    error NotResultSubmissionPhase();
-    error ProposalAlreadyInQueue();
-    error ProposalAlreadyExecuted();
-    error InvalidProposalTimeConfig();
-    error InvalidTokenAddress();
-    error InvalidChainId();
-    error InvalidRpcUrl();
-    error ProposalDoesNotExist();
-    error VotingNotActive();
-    error ResultAlreadySubmitted();
-    error InvalidVoteResult();
-    error InvalidPubKeyLength();
-    error VotingNotDone();
-    error InvalidPCR16Sha256();
-    error InvalidEnclaveSignature();
-    error InvadidKMSSignature();
-
-    /* Events */
-    event DepositThresholdSet(address token, uint256 amount);
-    event VoteActivationDelaySet(uint256 delay);
-    event VoteDurationSet(uint256 duration);
-    event ProposalDurationSet(uint256 duration);
-    event NetworkConfigSet(uint256 chainId, address tokenAddress, string[] rpcUrls);
-    event RpcUrlAdded(uint256 indexed chainId, string rpcUrl);
-    event RpcUrlUpdated(uint256 indexed chainId, uint256 index, string rpcUrl);
-    event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
-    event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2);
-
-    event ProposalCreated(
-        bytes32 indexed proposalId,
-        address indexed proposer,
-        uint256 nonce,
-        address[] targets,
-        uint256[] values,
-        bytes[] calldatas,
-        string title,
-        string description,
-        ProposalTimeInfo proposalTimeInfo
-    );
-    event VoteSubmitted(
-        bytes32 indexed proposalId,
-        uint256 indexed voteIdx,
-        address indexed voter,
-        bytes voteEncryped
-    );
-    event ResultSubmitted(
-        bytes32 indexed proposalId,
-        VoteDecisionCount voteDecisionCount,
-        VoteOutcome voteOutcome
-    );
-
     uint256[500] private __gap0;
 
     IERC20 public usdc;
