@@ -54,6 +54,7 @@ contract Governance is
     mapping(address proposer => uint256 nonce) proposerNonce;
 
     /* Proposal Config */
+    uint256 proposalPassThreshold; // 1 * 10^18 = 100%
     ProposalTimingConfig public proposalTimingConfig;
     /// @notice Address where tokens are sent when proposal's vote outcome is Vetoed
     address treasury;
@@ -111,6 +112,7 @@ contract Governance is
         address _admin,
         address _configSetter,
         address _treasury,
+        uint256 _proposalPassThreshold,
         uint256 _voteActivationDelay,
         uint256 _voteDuration,
         uint256 _proposalDuration,
@@ -135,6 +137,9 @@ contract Governance is
 
         // Set Treasury Address
         _setTreasury(_treasury);
+
+        // Set Proposal Pass Threshold
+        _setProposalPassThreshold(_proposalPassThreshold);
 
         // Set Proposal Time Config
         require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
@@ -163,6 +168,16 @@ contract Governance is
     function setTokenLockAmount(address _token, uint256 _amount) external onlyConfigSetter {
         proposalDepositAmounts[_token] = _amount;
         emit TokenLockAmountSet(_token, _amount);
+    }
+
+    function setProposalPassThreshold(uint256 _proposalPassThreshold) external onlyConfigSetter {
+        _setProposalPassThreshold(_proposalPassThreshold);
+    }
+
+    function _setProposalPassThreshold(uint256 _proposalPassThreshold) internal {
+        require(_proposalPassThreshold > 0, ZeroProposalPassThreshold());
+        proposalPassThreshold = _proposalPassThreshold;
+        emit ProposalPassThresholdSet(_proposalPassThreshold);
     }
 
     function setTreasury(address _treasury) external onlyConfigSetter {
@@ -219,7 +234,7 @@ contract Governance is
         require(_tokenAddress != address(0), InvalidTokenAddress());
         require(_rpcUrls.length > 0, InvalidRpcUrl());
         require(_rpcUrls.length <= maxRPCUrlsPerChain, MaxRpcUrlsPerChainReached());
-        for( uint256 i = 0; i < _rpcUrls.length; ++i) {
+        for (uint256 i = 0; i < _rpcUrls.length; ++i) {
             require(bytes(_rpcUrls[i]).length > 0, InvalidRpcUrl());
         }
 
@@ -518,7 +533,7 @@ contract Governance is
         require(proposals[_proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
         // Decode `_resultData`
-        (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionCount memory voteDecisionCount) =
+        (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionResult memory voteDecisionResult) =
             _decodeResultData(_resultData);
 
         // Compare pcr16Sha256 with calculated value
@@ -531,7 +546,7 @@ contract Governance is
         require(verifyKMSSig(_generateImageId(pcr16Sha384), _enclavePubKey, _kmsSig), InvadidKMSSignature());
 
         // Handle the result
-        VoteOutcome voteCoutome = _calcResult(voteDecisionCount);
+        VoteOutcome voteCoutome = _calcResult(voteDecisionResult);
         proposals[_proposalId].voteOutcome = voteCoutome;
         if (voteCoutome == VoteOutcome.Passed) {
             _handleProposalPassed(_proposalId);
@@ -543,7 +558,7 @@ contract Governance is
         // Write the result to the proposal
         proposals[_proposalId].voteOutcome = voteCoutome;
 
-        emit ResultSubmitted(_proposalId, voteDecisionCount, voteCoutome);
+        emit ResultSubmitted(_proposalId, voteDecisionResult, voteCoutome);
     }
 
     function _handleProposalPassed(bytes32 _proposalId) internal {
@@ -684,15 +699,15 @@ contract Governance is
     }
 
     /// @notice Calculates the result of the proposal based on the vote result
-    function _calcResult(VoteDecisionCount memory _voteDecisionCount) internal pure returns (VoteOutcome) {
-        if (_voteDecisionCount.yesCount > (_voteDecisionCount.noCount + _voteDecisionCount.noWithVetoCount)) {
-            // Proposal passed
+    function _calcResult(VoteDecisionResult memory _voteDecisionCount) internal view returns (VoteOutcome) {
+        if (
+            _voteDecisionCount.yes > (_voteDecisionCount.no + _voteDecisionCount.noWithVeto)
+                && _voteDecisionCount.yes > proposalPassThreshold
+        ) {
             return VoteOutcome.Passed;
-        } else {
-            return _voteDecisionCount.noCount > _voteDecisionCount.noWithVetoCount
-                ? VoteOutcome.Failed
-                : VoteOutcome.Vetoed;
         }
+
+        return _voteDecisionCount.no > _voteDecisionCount.noWithVeto ? VoteOutcome.Failed : VoteOutcome.Vetoed;
     }
 
     function _generateImageId(bytes memory _pcr16Sha384) internal view returns (bytes32) {
@@ -704,10 +719,10 @@ contract Governance is
     function _decodeResultData(bytes memory _resultData)
         internal
         pure
-        returns (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionCount memory voteResult)
+        returns (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionResult memory voteResult)
     {
         // Decode the result data
-        (pcr16Sha256, pcr16Sha384, voteResult) = abi.decode(_resultData, (bytes32, bytes, VoteDecisionCount));
+        (pcr16Sha256, pcr16Sha384, voteResult) = abi.decode(_resultData, (bytes32, bytes, VoteDecisionResult));
     }
 
     function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory _resultData)

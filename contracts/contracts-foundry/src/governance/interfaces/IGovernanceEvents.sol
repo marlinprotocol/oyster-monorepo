@@ -16,6 +16,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2);
     event TreasurySet(address indexed treasury);
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
+    event ProposalPassThresholdSet(uint256 threshold);
     event DepositLocked(
         bytes32 indexed proposalId,
         address token,
@@ -58,7 +59,7 @@ interface IGovernanceEvents is IGovernanceTypes {
 
     event ResultSubmitted(
         bytes32 indexed proposalId,
-        VoteDecisionCount voteDecisionCount,
+        VoteDecisionResult voteDecisionResult,
         VoteOutcome voteOutcome
     );
 

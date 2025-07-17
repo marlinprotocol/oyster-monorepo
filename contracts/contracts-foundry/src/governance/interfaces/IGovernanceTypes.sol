@@ -41,11 +41,11 @@ interface IGovernanceTypes {
         bytes voteEncrypted;
     }
 
-    struct VoteDecisionCount {
-        uint256 yesCount;
-        uint256 noCount;
-        uint256 abstainCount;
-        uint256 noWithVetoCount;
+    struct VoteDecisionResult {
+        uint256 yes;
+        uint256 no;
+        uint256 abstain;
+        uint256 noWithVeto;
     }
 
     struct ProposalVoteInfo {

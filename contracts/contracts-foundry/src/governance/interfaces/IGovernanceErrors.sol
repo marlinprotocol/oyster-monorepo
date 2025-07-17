@@ -38,4 +38,5 @@ interface IGovernanceErrors {
     error ZeroTreasuryAddress();
     error MaxRpcUrlsPerChainReached();
     error InvalidMaxRpcUrlsPerChain();
+    error ZeroProposalPassThreshold();
 }
