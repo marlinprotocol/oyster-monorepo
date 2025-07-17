@@ -60,8 +60,9 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    // add entry for rate revision
-    // TODO: add tests
+    // target sql:
+    // INSERT INTO rate_revisions (job_id, value, block)
+    // VALUES ("<id>", "<rate>", "<block>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
@@ -257,6 +258,18 @@ mod tests {
             ])
         );
 
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(5),
+                42i64,
+            )])
+        );
+
         Ok(())
     }
 
@@ -381,6 +394,8 @@ mod tests {
                 false,
             )])
         );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
@@ -552,6 +567,8 @@ mod tests {
                 )
             ])
         );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }

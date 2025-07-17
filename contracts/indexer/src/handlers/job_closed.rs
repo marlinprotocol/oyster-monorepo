@@ -55,8 +55,9 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    // add entry for rate revision
-    // TODO: add tests
+    // target sql:
+    // INSERT INTO rate_revisions (job_id, value, block)
+    // VALUES ("<id>", "<rate>", "<block>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
@@ -254,6 +255,18 @@ mod tests {
             ])
         );
 
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(0),
+                42i64,
+            )])
+        );
+
         Ok(())
     }
 
@@ -379,6 +392,9 @@ mod tests {
                 false,
             )])
         );
+
+        // Verify no rate revision was created since the close operation failed
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
@@ -551,6 +567,9 @@ mod tests {
                 )
             ])
         );
+
+        // Verify no rate revision was created since the close operation failed
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
