@@ -10,6 +10,7 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 
 /* Interfaces */
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -27,18 +28,20 @@ contract Governance is
     ERC165Upgradeable, // supportsInterface
     AccessControlEnumerableUpgradeable, // RBAC enumeration
     PausableUpgradeable,
-    UUPSUpgradeable, // public upgrade
-    IGovernance // Governance
+    UUPSUpgradeable,
+    ReentrancyGuardUpgradeable,
+    IGovernance
 {
     using SafeERC20 for IERC20;
     using Strings for uint256;
     using ECDSA for bytes32;
 
+    bytes32 public constant CONFIG_SETTER_ROLE = keccak256("CONFIG_SETTER_ROLE"); // 0x17df964a140c45e2553048f59e406d5adf9a078929e0ad3964333b8139768702
+
     uint256[500] private __gap0;
 
     IERC20 public usdc;
 
-    /* Proposal */
     /// @notice Token amount required to submit a proposal which will be locked until result is submitted
     mapping(address token => uint256 amount) proposalDepositAmounts;
     /// @notice Mapping of proposal IDs to their respective Proposal structs
@@ -50,27 +53,32 @@ contract Governance is
     /// @dev Starts from 0
     mapping(address proposer => uint256 nonce) proposerNonce;
 
-    /* Admin Config */
+    /* Proposal Config */
     ProposalTimingConfig public proposalTimingConfig;
-    bytes32 public networkHash;
+    /// @notice Address where tokens are sent when proposal's vote outcome is Vetoed
+    address treasury;
+
     /* KMS */
     PCR public pcrConfig;
     bytes public kmsRootServerPubKey;
     string public kmsPath;
 
     /* Token Network Config */
+    bytes32 public networkHash;
     /// @notice An array of chain IDs where the token used to measure voting power in Governance has been deployed
     uint256[] public supportedChainIds;
+    /// @notice Maximum number of RPC URLs allowed to be added per chain
+    uint256 public maxRPCUrlsPerChain;
     /// @notice Mapping of chain IDs to their respective token network configurations
     mapping(uint256 chainId => TokenNetworkConfig config) tokenNetworkConfigs;
 
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()));
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), NotDefaultAdmin());
         _;
     }
 
-    modifier onlyGovernanceEnclave(bytes32 _proposalId) {
-        // TODO: Verify the signature
+    modifier onlyConfigSetter() {
+        require(hasRole(CONFIG_SETTER_ROLE, _msgSender()), NotConfigSetterRole());
         _;
     }
 
@@ -99,8 +107,18 @@ contract Governance is
 
     uint256[50] private __gap1;
 
-    // TODO
-    function initialize(address _admin) public initializer {
+    function initialize(
+        address _admin,
+        address _configSetter,
+        address _treasury,
+        uint256 _voteActivationDelay,
+        uint256 _voteDuration,
+        uint256 _proposalDuration,
+        uint256 _maxRPCUrlsPerChain,
+        PCR calldata _pcrConfig,
+        bytes calldata _kmsRootServerPubKey,
+        string calldata _kmsPath
+    ) public initializer {
         __Context_init_unchained();
         __ERC165_init_unchained();
         __AccessControl_init_unchained();
@@ -109,23 +127,60 @@ contract Governance is
         __UUPSUpgradeable_init_unchained();
         __Pausable_init_unchained();
 
-        // TODO: set default admin
+        // Set Roles
+        require(_admin != address(0), ZeroAdminAddress());
+        require(_configSetter != address(0), ZeroConfigSetterAddress());
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(CONFIG_SETTER_ROLE, _configSetter);
+
+        // Set Treasury Address
+        _setTreasury(_treasury);
+
+        // Set Proposal Time Config
+        require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
+        _setVoteActivationDelay(_voteActivationDelay);
+        _setVoteDuration(_voteDuration);
+        _setProposalDuration(_proposalDuration);
+        _checkProposalTimeConfig();
+
+        // Set Max RPC URLs per Chain
+        _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
+
+        // Set PCR0, PCR1, PCR2
+        _setPCRConfig(_pcrConfig.pcr0, _pcrConfig.pcr1, _pcrConfig.pcr2);
+
+        // Set KMS Config
+        _setKMSRootServerKey(_kmsRootServerPubKey);
+        _setKMSPath(_kmsPath);
+
+        // Note: setTokenLockAmount, setNetworkConfig should be seperately called after initialization
     }
 
     //-------------------------------- Initializer end --------------------------------//
 
     //-------------------------------- Admin start --------------------------------//
 
-    function setTokenLockAmount(address _token, uint256 _amount) external onlyAdmin {
+    function setTokenLockAmount(address _token, uint256 _amount) external onlyConfigSetter {
         proposalDepositAmounts[_token] = _amount;
         emit TokenLockAmountSet(_token, _amount);
     }
 
+    function setTreasury(address _treasury) external onlyConfigSetter {
+        _setTreasury(_treasury);
+    }
+
+    function _setTreasury(address _treasury) internal {
+        require(_treasury != address(0), ZeroTreasuryAddress());
+        treasury = _treasury;
+        emit TreasurySet(_treasury);
+    }
+
     function setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration)
         external
-        onlyAdmin
+        onlyConfigSetter
     {
+        require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
+
         if (_voteActivationDelay > 0) {
             _setVoteActivationDelay(_voteActivationDelay);
         }
@@ -139,6 +194,135 @@ contract Governance is
         }
 
         _checkProposalTimeConfig();
+    }
+
+    function setMaxRPCUrlsPerChain(uint256 _maxRPCUrlsPerChain) external onlyConfigSetter {
+        _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
+    }
+
+    function _setMaxRPCUrlsPerChain(uint256 _maxRPCUrlsPerChain) internal {
+        require(_maxRPCUrlsPerChain > 0, InvalidMaxRpcUrlsPerChain());
+        maxRPCUrlsPerChain = _maxRPCUrlsPerChain;
+        emit MaxRpcUrlsPerChainSet(_maxRPCUrlsPerChain);
+    }
+
+    /// @notice Add or update NetworkConfig for the specified chainId
+    /// @dev If the chainId is not in supportedChainIds, it will be added.
+    /// @param _chainId The chain ID for which the network config is being set
+    /// @param _tokenAddress The address of the token contract on the specified chain
+    /// @param _rpcUrls An array of RPC URLs for the specified chain
+    function setNetworkConfig(uint256 _chainId, address _tokenAddress, string[] calldata _rpcUrls)
+        public
+        onlyConfigSetter
+    {
+        require(_chainId > 0, InvalidChainId());
+        require(_tokenAddress != address(0), InvalidTokenAddress());
+        require(_rpcUrls.length > 0, InvalidRpcUrl());
+        require(_rpcUrls.length <= maxRPCUrlsPerChain, MaxRpcUrlsPerChainReached());
+        for( uint256 i = 0; i < _rpcUrls.length; ++i) {
+            require(bytes(_rpcUrls[i]).length > 0, InvalidRpcUrl());
+        }
+
+        // Check if the token address is already set for the chainId
+        bool chainIdExists = false;
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) {
+                chainIdExists = true;
+                break;
+            }
+        }
+
+        // If the chainId is not supported, add it to the supportedChainIds
+        if (!chainIdExists) {
+            supportedChainIds.push(_chainId);
+        }
+
+        // Update the token network config
+        bytes32 chainHash = keccak256(abi.encode(_chainId, _rpcUrls));
+        tokenNetworkConfigs[_chainId] =
+            TokenNetworkConfig({chainHash: chainHash, tokenAddress: _tokenAddress, rpcUrls: _rpcUrls});
+
+        emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls);
+    }
+
+    /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
+    function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyConfigSetter {
+        require(_chainId > 0, InvalidChainId());
+
+        if (tokenNetworkConfigs[_chainId].rpcUrls.length == maxRPCUrlsPerChain) {
+            revert MaxRpcUrlsPerChainReached();
+        }
+
+        // Check RPC url length
+        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+        }
+
+        // Check if the chainId is supported
+        bool chainIdExists = false;
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) {
+                chainIdExists = true;
+                break;
+            }
+        }
+        require(chainIdExists, InvalidChainId());
+
+        // Add the new RPC URL to the rpcUrls array for the specified chainId
+        TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
+        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+            config.rpcUrls.push(_rpcUrl[i]);
+        }
+
+        // Emit an event for the added RPC URL
+        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+            emit RpcUrlAdded(_chainId, _rpcUrl[i]);
+        }
+    }
+
+    /// @notice Updates an existing RPC URL for the specified chainId at the given index
+    function updateRpcUrl(uint256 _chainId, uint256 _index, string calldata _rpcUrl) external onlyConfigSetter {
+        require(_chainId > 0, InvalidChainId());
+        require(_index < tokenNetworkConfigs[_chainId].rpcUrls.length, InvalidRpcUrl());
+        require(bytes(_rpcUrl).length > 0, InvalidRpcUrl());
+
+        tokenNetworkConfigs[_chainId].rpcUrls[_index] = _rpcUrl;
+        emit RpcUrlUpdated(_chainId, _index, _rpcUrl);
+    }
+
+    /// @notice Sets KMS Root Server Key
+    function setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) external onlyConfigSetter {
+        _setKMSRootServerKey(_kmsRootServerPubKey);
+    }
+
+    function _setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) internal {
+        require(_kmsRootServerPubKey.length > 0, "KMS Root Server Public Key cannot be empty");
+        kmsRootServerPubKey = _kmsRootServerPubKey;
+        emit KMSRootServerPubKeySet(_kmsRootServerPubKey);
+    }
+
+    /// @notice Set KMS Path to be used for KMS signature verification
+    /// @dev The path should be in the format used by the KMS, e.g., "/derive/secp256k1/public?image_id={imageId}&path={path}"
+    /// @param _kmsPath The KMS path to be set
+    function setKMSPath(string calldata _kmsPath) external onlyConfigSetter {
+        _setKMSPath(_kmsPath);
+    }
+
+    function _setKMSPath(string calldata _kmsPath) internal {
+        require(bytes(_kmsPath).length > 0, "KMS Path cannot be empty");
+        kmsPath = _kmsPath;
+        emit KMSPathSet(_kmsPath);
+    }
+
+    function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyConfigSetter {
+        _setPCRConfig(_pcr0, _pcr1, _pcr2);
+    }
+
+    function _setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) internal {
+        require(_pcr0.length > 0 && _pcr1.length > 0 && _pcr2.length > 0, InvalidPCRLength());
+        pcrConfig = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2});
+        emit PCRConfigSet(_pcr0, _pcr1, _pcr2);
     }
 
     /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` is not checked here
@@ -179,100 +363,6 @@ contract Governance is
         return keccak256(chainHashEncoded);
     }
 
-    /// @notice Add or update NetworkConfig for the specified chainId
-    /// @dev If the chainId is not in supportedChainIds, it will be added.
-    /// @param _chainId The chain ID for which the network config is being set
-    /// @param _tokenAddress The address of the token contract on the specified chain
-    /// @param _rpcUrls An array of RPC URLs for the specified chain
-    function setNetworkConfig(uint256 _chainId, address _tokenAddress, string[] calldata _rpcUrls) external onlyAdmin {
-        require(_chainId > 0, InvalidChainId());
-        require(_tokenAddress != address(0), InvalidTokenAddress());
-        require(_rpcUrls.length > 0, InvalidRpcUrl());
-
-        // Check if the token address is already set for the chainId
-        bool chainIdExists = false;
-        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-            if (supportedChainIds[i] == _chainId) {
-                chainIdExists = true;
-                break;
-            }
-        }
-
-        // If the chainId is not supported, add it to the supportedChainIds
-        if (!chainIdExists) {
-            supportedChainIds.push(_chainId);
-        }
-
-        // Update the token network config
-        bytes32 chainHash = keccak256(abi.encode(_chainId, _rpcUrls));
-        tokenNetworkConfigs[_chainId] =
-            TokenNetworkConfig({chainHash: chainHash, tokenAddress: _tokenAddress, rpcUrls: _rpcUrls});
-
-        emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls);
-    }
-
-    /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
-    function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyAdmin {
-        require(_chainId > 0, InvalidChainId());
-
-        // Check RPC url length
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-        }
-
-        // Check if the chainId is supported
-        bool chainIdExists = false;
-        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-            if (supportedChainIds[i] == _chainId) {
-                chainIdExists = true;
-                break;
-            }
-        }
-        require(chainIdExists, InvalidChainId());
-
-        // Add the new RPC URL to the rpcUrls array for the specified chainId
-        TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-            config.rpcUrls.push(_rpcUrl[i]);
-        }
-
-        // Emit an event for the added RPC URL
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            emit RpcUrlAdded(_chainId, _rpcUrl[i]);
-        }
-    }
-
-    /// @notice Updates an existing RPC URL for the specified chainId at the given index
-    function updateRpcUrl(uint256 _chainId, uint256 _index, string calldata _rpcUrl) external onlyAdmin {
-        require(_chainId > 0, InvalidChainId());
-        require(_index < tokenNetworkConfigs[_chainId].rpcUrls.length, InvalidRpcUrl());
-        require(bytes(_rpcUrl).length > 0, InvalidRpcUrl());
-
-        tokenNetworkConfigs[_chainId].rpcUrls[_index] = _rpcUrl;
-        emit RpcUrlUpdated(_chainId, _index, _rpcUrl);
-    }
-
-    /// @notice Sets KMS Root Server Key
-    function setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) external onlyAdmin {
-        require(_kmsRootServerPubKey.length == 64, InvalidPubKeyLength());
-        kmsRootServerPubKey = _kmsRootServerPubKey;
-        emit KMSRootServerPubKeySet(_kmsRootServerPubKey);
-    }
-
-    /// @notice Set KMS Path to be used for KMS signature verification
-    /// @dev The path should be in the format used by the KMS, e.g., "/derive/secp256k1/public?image_id={imageId}&path={path}"
-    /// @param _kmsPath The KMS path to be set
-    function setKMSPath(string calldata _kmsPath) external onlyAdmin {
-        require(bytes(_kmsPath).length > 0, "KMS path cannot be empty");
-        kmsPath = _kmsPath;
-    }
-
-    function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyAdmin {
-        pcrConfig = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2});
-        emit PCRConfigSet(_pcr0, _pcr1, _pcr2);
-    }
-
     function pause() external whenNotPaused onlyAdmin {
         _pause();
     }
@@ -293,6 +383,7 @@ contract Governance is
         string calldata _title,
         string calldata _description
     ) external payable whenNotPaused returns (bytes32 proposalId) {
+        require(supportedChainIds.length > 0, NoSupportedChainConfigured());
         // Input Validation
         require(_targets.length == _values.length, InvalidInputLength());
         require(_targets.length == _calldatas.length, InvalidInputLength());
@@ -304,8 +395,8 @@ contract Governance is
         }
 
         uint256 valueSum;
-        for(uint256 i = 0; i < _values.length; ++i) {
-            if(_values[i] > 0) {
+        for (uint256 i = 0; i < _values.length; ++i) {
+            if (_values[i] > 0) {
                 valueSum += _values[i];
             }
         }
@@ -412,7 +503,7 @@ contract Governance is
         bytes calldata _enclavePubKey,
         bytes calldata _enclaveSig,
         bytes calldata _resultData
-    ) external {
+    ) external nonReentrant {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
 
         // Check if the proposal in Result Submission Phase
@@ -427,11 +518,8 @@ contract Governance is
         require(proposals[_proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
         // Decode `_resultData`
-        (
-            bytes32 pcr16Sha256,
-            bytes memory pcr16Sha384,
-            VoteDecisionCount memory voteDecisionCount
-        ) = _decodeResultData(_resultData);
+        (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionCount memory voteDecisionCount) =
+            _decodeResultData(_resultData);
 
         // Compare pcr16Sha256 with calculated value
         require(pcr16Sha256 == _getPCR16Sha256(_proposalId), InvalidPCR16Sha256());
@@ -452,31 +540,13 @@ contract Governance is
         } else if (voteCoutome == VoteOutcome.Vetoed) {
             _handleProposalVetoed(_proposalId);
         }
+        // Write the result to the proposal
+        proposals[_proposalId].voteOutcome = voteCoutome;
 
         emit ResultSubmitted(_proposalId, voteDecisionCount, voteCoutome);
     }
 
-    /// @notice Calculates the result of the proposal based on the vote result
-    function _calcResult(VoteDecisionCount memory _voteDecisionCount) internal pure returns (VoteOutcome) {
-        if (_voteDecisionCount.yesCount > (_voteDecisionCount.noCount + _voteDecisionCount.noWithVetoCount)) {
-            // Proposal passed
-            return VoteOutcome.Passed;
-        } else {
-            return _voteDecisionCount.noCount > _voteDecisionCount.noWithVetoCount
-                ? VoteOutcome.Failed
-                : VoteOutcome.Vetoed;
-        }
-    }
-
-    function _generateImageId(bytes memory _pcr16Sha384) internal view returns (bytes32) {
-        uint32 flags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16));
-        bytes memory data = abi.encode(bytes4(flags), pcrConfig.pcr0, pcrConfig.pcr1, pcrConfig.pcr2, _pcr16Sha384);
-        return keccak256(data);
-    }
-
     function _handleProposalPassed(bytes32 _proposalId) internal {
-        
-
         // Executed only if the proposal has on-chain execution targets
         if (proposals[_proposalId].proposalInfo.targets.length > 0) {
             _queueExecution(_proposalId);
@@ -489,32 +559,42 @@ contract Governance is
         // Refund the deposit to the proposer
         _unlockDepositAndRefund(_proposalId);
 
+        // Refund Value
+        _refundValue(_proposalId);
+    }
+
+    function _refundValue(bytes32 _proposalId) internal {
         // Refund eth sent
         uint256 valueSum;
         for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
             valueSum += proposals[_proposalId].proposalInfo.values[i];
         }
+
+        address proposer = proposals[_proposalId].proposalInfo.proposer;
         if (valueSum > 0) {
-            // TODO: result submission could fail because of this
-            (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
+            // Note: This will not revert if the transfer fails, and it will not refund to proposer
+            (bool ok,) = payable(proposer).call{value: valueSum}("");
+            ok;
         }
+
+        emit ValueRefunded(_proposalId, proposer, valueSum);
     }
 
     function _handleProposalVetoed(bytes32 _proposalId) internal {
+        _refundValue(_proposalId);
         _slashDeposit(_proposalId);
     }
 
     function _queueExecution(bytes32 _proposalId) internal {
         // This should never revert
         require(executionQueue[_proposalId] == false, ProposalAlreadyInQueue());
-
         require(proposals[_proposalId].executed == false, ProposalAlreadySubmitted());
 
         // Mark the proposal as queued for execution
         executionQueue[_proposalId] = true;
     }
 
-    function execute(bytes32 _proposalId) whenNotPaused external {
+    function execute(bytes32 _proposalId) external whenNotPaused {
         // Check if the proposal is queued for execution
         require(executionQueue[_proposalId] == true, ProposalNotInQueue());
 
@@ -563,14 +643,18 @@ contract Governance is
     }
 
     function _slashDeposit(bytes32 _proposalId) internal {
-        // TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
+        // Transfer the deposit to treasury
+        TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
+        IERC20(tokenLockInfo.token).safeTransfer(treasury, tokenLockInfo.amount);
         _deleteDepositLock(_proposalId);
-        // TODO: Transfer to?
+        emit DepositSlashed(
+            _proposalId, proposals[_proposalId].tokenLockInfo.token, proposals[_proposalId].tokenLockInfo.amount
+        );
     }
 
     function _lockDeposit(bytes32 _proposalId, address _token, uint256 _amount) internal {
         proposals[_proposalId].tokenLockInfo = TokenLockInfo({token: _token, amount: _amount});
-        // TODO: event?
+        emit DepositLocked(_proposalId, _token, _amount);
     }
 
     function _deleteDepositLock(bytes32 _proposalId) internal {
@@ -599,18 +683,31 @@ contract Governance is
         );
     }
 
+    /// @notice Calculates the result of the proposal based on the vote result
+    function _calcResult(VoteDecisionCount memory _voteDecisionCount) internal pure returns (VoteOutcome) {
+        if (_voteDecisionCount.yesCount > (_voteDecisionCount.noCount + _voteDecisionCount.noWithVetoCount)) {
+            // Proposal passed
+            return VoteOutcome.Passed;
+        } else {
+            return _voteDecisionCount.noCount > _voteDecisionCount.noWithVetoCount
+                ? VoteOutcome.Failed
+                : VoteOutcome.Vetoed;
+        }
+    }
+
+    function _generateImageId(bytes memory _pcr16Sha384) internal view returns (bytes32) {
+        uint32 flags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16));
+        bytes memory data = abi.encode(bytes4(flags), pcrConfig.pcr0, pcrConfig.pcr1, pcrConfig.pcr2, _pcr16Sha384);
+        return keccak256(data);
+    }
+
     function _decodeResultData(bytes memory _resultData)
         internal
         pure
-        returns (
-            bytes32 pcr16Sha256,
-            bytes memory pcr16Sha384,
-            VoteDecisionCount memory voteResult
-        )
+        returns (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionCount memory voteResult)
     {
         // Decode the result data
-        (pcr16Sha256, pcr16Sha384, voteResult) =
-            abi.decode(_resultData, (bytes32, bytes, VoteDecisionCount));
+        (pcr16Sha256, pcr16Sha384, voteResult) = abi.decode(_resultData, (bytes32, bytes, VoteDecisionCount));
     }
 
     function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory _resultData)
@@ -734,9 +831,11 @@ contract Governance is
         return proposals[_proposalI].proposalVoteInfo.voteCount;
     }
 
-    function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns(address, bytes memory) {
-        return (proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
-            proposals[_proposalId].proposalVoteInfo.votes[_idx].voteEncrypted);
+    function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns (address, bytes memory) {
+        return (
+            proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
+            proposals[_proposalId].proposalVoteInfo.votes[_idx].voteEncrypted
+        );
     }
 
     function getAllVoteInfo(bytes32 _proposalId)

@@ -16,7 +16,7 @@ interface IGovernanceErrors {
     error InvalidVoteResult();
     error InvadidKMSSignature();
     error NotResultSubmissionPhase();
-    error OnlyAdmin();
+    error NotDefaultAdmin();
     error ProposalAlreadyExecuted();
     error ProposalAlreadyExists();
     error ProposalAlreadyInQueue();
@@ -29,4 +29,13 @@ interface IGovernanceErrors {
     error InvalidTargetAddress();
     error ProposalNotInQueue();
     error InvalidMsgValue();
+    error NotConfigSetterRole();
+    error NoSupportedChainConfigured();
+    error ZeroAdminAddress();
+    error ZeroConfigSetterAddress();
+    error ZeroProposalTimeConfig();
+    error InvalidPCRLength();
+    error ZeroTreasuryAddress();
+    error MaxRpcUrlsPerChainReached();
+    error InvalidMaxRpcUrlsPerChain();
 }

@@ -12,7 +12,30 @@ interface IGovernanceEvents is IGovernanceTypes {
     event RpcUrlAdded(uint256 indexed chainId, string rpcUrl);
     event RpcUrlUpdated(uint256 indexed chainId, uint256 index, string rpcUrl);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
+    event KMSPathSet(string kmsPath);
     event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2);
+    event TreasurySet(address indexed treasury);
+    event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
+    event DepositLocked(
+        bytes32 indexed proposalId,
+        address token,
+        uint256 amount
+    );
+    event DepositRefunded(
+        bytes32 indexed proposalId,
+        address token,
+        uint256 amount
+    );
+    event DepositSlashed(
+        bytes32 indexed proposalId,
+        address token,
+        uint256 amount
+    );
+    event ValueRefunded(
+        bytes32 indexed proposalId,
+        address indexed proposer,
+        uint256 totalValue
+    );
 
     event ProposalCreated(
         bytes32 indexed proposalId,
