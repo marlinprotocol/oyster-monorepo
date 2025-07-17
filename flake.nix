@@ -65,6 +65,9 @@
       initialization.pcr-utils = import ./initialization/pcr-utils {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      initialization.governance = import ./initialization/governance {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       kernels.vanilla = import ./kernels/vanilla.nix {
         inherit nixpkgs systemConfig;
       };
@@ -207,6 +210,20 @@
         init-params-decoder = initialization.init-params-decoder.compressed;
         kernels = kernels.tuna;
         pcr-utils = initialization.pcr-utils.compressed;
+      };
+      enclaves.governance = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/governance {
+        inherit nixpkgs systemConfig nitro-util;
+        supervisord = external.supervisord.compressed;
+        dnsproxy = external.dnsproxy.compressed;
+        keygen = initialization.keygen.compressed;
+        raw-proxy = networking.raw-proxy.compressed;
+        attestation-server = attestation.server.compressed;
+        vet = initialization.vet.compressed;
+        derive-server = kms.derive-server.compressed;
+        init-params-decoder = initialization.init-params-decoder.compressed;
+        kernels = kernels.tuna;
+        pcr-utils = initialization.pcr-utils.compressed;
+        governance = initialization.governance.compressed;
       };
       cli.oyster-cvm = import ./cli/oyster-cvm {
         inherit nixpkgs systemConfig fenix naersk;

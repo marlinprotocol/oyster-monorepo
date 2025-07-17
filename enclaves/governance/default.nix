@@ -30,7 +30,7 @@
   vet' = "${vet}/bin/vet";
   pcrExtender = "${pcr-utils}/bin/pcr-extender";
   pcrLocker = "${pcr-utils}/bin/pcr-locker";
-  governance = "${governance}/bin/governance";
+  governance' = "${governance}/bin/governance";
   kernel = kernels.kernel;
   kernelConfig = kernels.kernelConfig;
   nsmKo = kernels.nsmKo;
@@ -56,7 +56,7 @@
     cp ${initParamsDecoder} $out/app/init-params-decoder
     cp ${pcrExtender} $out/app/pcr-extender
     cp ${pcrLocker} $out/app/pcr-locker
-    cp ${governance} $out/app/governance
+    cp ${governance'} $out/app/governance
     cp ${setup} $out/app/setup.sh
     chmod +x $out/app/*
     cp ${supervisorConf} $out/etc/supervisord.conf
