@@ -6,6 +6,9 @@ import {Governance} from "../../src/governance/Governance.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 
+/* 
+    18/07/2025 Arbitrum Sepolia: 0xF27C5d12e12E53a63A146709DBb78619dd0EEA00
+ */
 contract DeployGovernance is Script {
 
     function run() external returns (address) {
@@ -14,6 +17,9 @@ contract DeployGovernance is Script {
     }
 
     function deployGovernance() public returns (address) {
+        HelperConfig helperConfig = new HelperConfig();
+        HelperConfig.Config memory activeConfig = helperConfig.getActiveConfig();
+        
         vm.startBroadcast();
 
         // Deploy Implementation
@@ -21,15 +27,14 @@ contract DeployGovernance is Script {
 
         // Deploy Proxy
         ERC1967Proxy proxy = new ERC1967Proxy(address(governance), "");
-        HelperConfig helperConfig = new HelperConfig();
-        HelperConfig.Config memory activeConfig = helperConfig.getActiveConfig();
 
         // Initialize Proxy
         Governance(address(proxy)).initialize(
             activeConfig.initializeParams.admin,
             activeConfig.initializeParams.configSetter,
             activeConfig.initializeParams.treasury,
-            activeConfig.initializeParams.proposalPassThreshold,
+            activeConfig.initializeParams.proposalPassVetoThreshold,
+            activeConfig.initializeParams.minQuorumThreshold,
             activeConfig.initializeParams.voteActivationDelay,
             activeConfig.initializeParams.voteDuration,
             activeConfig.initializeParams.proposalDuration,
