@@ -2,11 +2,9 @@ use anyhow::{Context, Result};
 use ethers::{
     contract::abigen,
     providers::{Http, Middleware, Provider},
-    types::{Address, BlockId, BlockNumber, H160, H256, U256},
+    types::{Address, BlockId, BlockNumber, H160, U256},
 };
-use libsodium_sys::{
-    crypto_box_SEALBYTES, crypto_box_seal_open, sodium_init,
-};
+use libsodium_sys::{crypto_box_SEALBYTES, crypto_box_seal_open, sodium_init};
 use std::{collections::HashMap, sync::Arc};
 
 // ------------------------
@@ -44,14 +42,9 @@ abigen!(
     GovernanceContract,
     "src/abis/governance_contract_abi.json",
     event_derives(serde::Deserialize, serde::Serialize)
-    
 );
 
-
-abigen!(
-    ERC20,
-    "src/abis/erc20_abi.json",
-);
+abigen!(ERC20, "src/abis/erc20_abi.json",);
 
 // ------------------------
 // Vote Outcome Enum
@@ -87,12 +80,13 @@ pub async fn fetch_chain_contexts(
     config: GovernanceConfig,
     contract: &GovernanceContract<Provider<Http>>,
 ) -> Result<Vec<ChainContext>> {
-    let (chain_ids_list, raw_configs): (Vec<U256>, Vec<NetworkConfig>) =
-        contract
-            .get_network_list()
-            .call()
-            .await
-            .context("failed to fetch network list")?;
+
+    // TODO : Fetch these networkconfig and chain_ids for start timestamp (don't know how to do this yet)
+    let (chain_ids_list, raw_configs): (Vec<U256>, Vec<NetworkConfig>) = contract
+        .get_network_list()
+        .call()
+        .await
+        .context("failed to fetch network list")?;
 
     // Convert raw_configs (Vec<NetworkConfig>) to the expected Rust types
     let network_config_list: Vec<(String, H160, Vec<String>)> = raw_configs
@@ -127,7 +121,11 @@ pub async fn fetch_chain_contexts(
         let key = config.api_keys[i].clone();
 
         let raw_base_url = rpc_urls.get(rpc_index).ok_or_else(|| {
-            anyhow::anyhow!("Index {} out of bounds for chain_id {}", rpc_index, chain_id)
+            anyhow::anyhow!(
+                "Index {} out of bounds for chain_id {}",
+                rpc_index,
+                chain_id
+            )
         })?;
 
         let full_url = format!("{}/{}", raw_base_url.trim_end_matches('/'), key);
@@ -167,6 +165,7 @@ pub async fn fetch_votes(
 }
 
 pub fn decrypt_vote(encrypted: &[u8], pk: &[u8; 32], sk: &[u8; 32]) -> Result<VoteOutcome> {
+    // TODO: make sure no memory leaks if possible
     unsafe {
         sodium_init(); // required before using sodium APIs
     }
@@ -201,6 +200,7 @@ pub fn decrypt_vote(encrypted: &[u8], pk: &[u8; 32], sk: &[u8; 32]) -> Result<Vo
     Ok(VoteOutcome::try_from(outcome_byte)?)
 }
 
+// TODO: Look for a more efficient way to find the snapshot block
 async fn find_snapshot_block<M: Middleware + 'static>(
     provider: Arc<M>,
     target_ts: u64,
@@ -247,7 +247,10 @@ pub async fn tally_votes(
     let mut results: HashMap<VoteOutcome, U256> = HashMap::new();
     let votes = fetch_votes(contract, proposal_id).await?;
 
+    // TODO : optimization
+    // This is a sequential loop for simplicity
     for (voter, encrypted) in votes {
+        // TODO: better to do decryption while fetching votes to simplify this logic
         let outcome = decrypt_vote(&encrypted, pk, sk)?;
         let mut total_power = U256::zero();
 
@@ -266,8 +269,7 @@ pub async fn tally_votes(
                         Err(_) => continue,
                     };
 
-                let block_id =
-                    BlockId::Number(BlockNumber::Number(snapshot_block.as_u64().into()));
+                let block_id = BlockId::Number(BlockNumber::Number(snapshot_block.as_u64().into()));
                 match token
                     .method::<_, U256>("balanceOf", voter)?
                     .block(block_id)
@@ -276,6 +278,8 @@ pub async fn tally_votes(
                 {
                     Ok(balance) => {
                         total_power += balance;
+                        // TODO: check for multiple rpcs for each chain
+                        // If it is consistent, break
                         break;
                     }
                     Err(_) => continue,
@@ -287,4 +291,17 @@ pub async fn tally_votes(
     }
 
     Ok(results)
+}
+
+pub async fn fetch_total_supply(chain: &ChainContext) -> Option<U256> {
+    for url in &chain.rpc_urls {
+        if let Ok(provider) = Provider::<Http>::try_from(url) {
+            let client = Arc::new(provider);
+            let token = ERC20::new(chain.token_address, client);
+            if let Ok(supply) = token.method::<_, U256>("totalSupply", ()).unwrap().call().await {
+                return Some(supply);
+            }
+        }
+    }
+    None
 }

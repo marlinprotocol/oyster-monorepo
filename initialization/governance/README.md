@@ -1,7 +1,7 @@
 # Init_params input
 --init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
 --init-params secrets/default_api_key:0:1:utf8:abc123defaultkey \
---init-params config/gov_contract:0:0:utf8:0x1234567890abcdef \
+--init-params config/gov_contract:1:0:utf8:0x1234567890abcdef \
 --init-params params/proposal_id:1:0:utf8:1234 \
 --init-params params/start_ts:1:0:utf8:1723567200 \
 --init-params params/data_hash:1:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \

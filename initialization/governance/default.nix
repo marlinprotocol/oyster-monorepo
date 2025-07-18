@@ -21,12 +21,14 @@
     if systemConfig.static
     then pkgs.pkgsStatic.stdenv.cc
     else pkgs.stdenv.cc;
+    openssl = if systemConfig.static then pkgs.pkgsStatic.openssl else pkgs.openssl;
+    pkgconfig = pkgs.pkg-config;
 in rec {
   uncompressed = naersk'.buildPackage {
     src = ./.;
     CARGO_BUILD_TARGET = target;
     TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
-    nativeBuildInputs = [cc];
+    nativeBuildInputs = [cc openssl pkgconfig];
   };
 
   compressed =

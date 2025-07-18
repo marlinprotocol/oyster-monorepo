@@ -109,21 +109,4 @@ sleep 10
 
 /app/supervisord ctl -c /etc/supervisord.conf start governance
 
-# start derive server contract if contract address and root server config are present
-# if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.json ]; then
-#     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
-# fi
-
-# Start the Docker daemon
-# /app/supervisord ctl -c /etc/supervisord.conf start docker
-
-# # Wait for Docker daemon to be ready
-# until docker info >/dev/null 2>&1; do
-#     echo "[setup.sh] Waiting for Docker daemon..."
-#     sleep 1
-# done
-
-# # start docker compose
-# /app/supervisord ctl -c /etc/supervisord.conf start compose
-
 wait $SUPERVISOR_PID

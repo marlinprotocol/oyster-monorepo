@@ -40,7 +40,7 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 
 # Debug
 ./cli/oyster-cvm/target/release/oyster-cvm deploy \
---wallet-private-key 9758e3bb57f2909ad22bc30e5c148b4c18ac80b087e0bff263300c592d084f16 \
+--wallet-private-key priv_key \
 --image-url https://f4b201fa07e1.ngrok-free.app/image.eif \
 --instance-type c6g.xlarge \
 --duration-in-minutes 15 \
@@ -57,7 +57,7 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 
 # Normal
 ./cli/oyster-cvm/target/release/oyster-cvm deploy \
---wallet-private-key 9758e3bb57f2909ad22bc30e5c148b4c18ac80b087e0bff263300c592d084f16 \
+--wallet-private-key priv_key \
 --image-url https://8d496d360731.ngrok-free.app/image.eif \
 --instance-type c6g.xlarge \
 --duration-in-minutes 15 \
@@ -72,6 +72,6 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 --init-params config/rpc_index.json:0:0:file:./rpc_index.json \
 
 
-running python server for http
+# running python server for http
 python3 -m http.server 8000
 ngrok http 8000
