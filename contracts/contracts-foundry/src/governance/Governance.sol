@@ -770,16 +770,27 @@ contract Governance is
 
     //-------------------------------- Getters start --------------------------------//
 
-    function getProposalId(
+    function getUserProposalId(
         address[] calldata _targets,
         uint256[] calldata _values,
         bytes[] calldata _calldatas,
-        bytes32 _descriptionHash,
-        address _proposer,
-        uint256 _nonce
-    ) public pure returns (bytes32) {
-        return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
+        string calldata _title,
+        string calldata _description
+    ) public view returns (bytes32) {
+        bytes32 descriptionHash = getDescriptionHash(_title, _description);
+        return getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
     }
+
+    // function getProposalId(
+    //     address[] calldata _targets,
+    //     uint256[] calldata _values,
+    //     bytes[] calldata _calldatas,
+    //     bytes32 _descriptionHash,
+    //     address _proposer,
+    //     uint256 _nonce
+    // ) public pure returns (bytes32) {
+    //     return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
+    // }
 
     function getProposalTimeInfo(bytes32 _proposalId) public view returns (ProposalTimeInfo memory) {
         return proposals[_proposalId].proposalTimeInfo;
@@ -867,7 +878,7 @@ contract Governance is
         voteHash = proposalVoteInfo.voteHash;
     }
 
-    function getNetworkList() external view returns (uint256[] memory, TokenNetworkConfig[] memory) {
+    function getAllNetworkConfigs() external view returns (uint256[] memory, TokenNetworkConfig[] memory) {
         uint256 chainCount = supportedChainIds.length;
         TokenNetworkConfig[] memory tokenNetworkConfigList = new TokenNetworkConfig[](chainCount);
         for (uint256 i = 0; i < chainCount; ++i) {
