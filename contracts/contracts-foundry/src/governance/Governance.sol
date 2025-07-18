@@ -390,14 +390,13 @@ contract Governance is
 
     //-------------------------------- Propose start --------------------------------//
 
-    function propose(
-        address _depositToken,
+    function _validateProposalInput(
         address[] calldata _targets,
         uint256[] calldata _values,
         bytes[] calldata _calldatas,
         string calldata _title,
         string calldata _description
-    ) external payable whenNotPaused returns (bytes32 proposalId) {
+    ) internal view {
         require(supportedChainIds.length > 0, NoSupportedChainConfigured());
         // Input Validation
         require(_targets.length == _values.length, InvalidInputLength());
@@ -416,27 +415,18 @@ contract Governance is
             }
         }
         require(valueSum == msg.value, InvalidMsgValue());
+    }
 
-        // Calculate proposalId
-        bytes32 descriptionHash = getDescriptionHash(_title, _description);
-        proposalId =
-            getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
-        proposerNonce[msg.sender] += 1;
-
-        // Ensure that the proposal does not already exist
-        require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
-
-        // Deposit token and lock
-        uint256 depositAmount = proposalDepositAmounts[_depositToken];
-        // Only Accept tokens with non-zero threshold
-        require(depositAmount > 0, TokenNotSupported());
-        if (proposalDepositAmounts[_depositToken] == 0) {
-            revert TokenNotSupported();
-        }
-        _depositTokenAndLock(proposalId, _depositToken, depositAmount);
-
+    function _storeProposal(
+        bytes32 _proposalId,
+        address[] calldata _targets,
+        uint256[] calldata _values,
+        bytes[] calldata _calldatas,
+        string calldata _title,
+        string calldata _description
+    ) internal {
         // Store the proposal information
-        proposals[proposalId].proposalInfo = ProposalInfo({
+        proposals[_proposalId].proposalInfo = ProposalInfo({
             proposer: msg.sender,
             targets: _targets,
             values: _values,
@@ -446,7 +436,7 @@ contract Governance is
         });
 
         // Set the proposal time information
-        proposals[proposalId].proposalTimeInfo = ProposalTimeInfo({
+        proposals[_proposalId].proposalTimeInfo = ProposalTimeInfo({
             proposedTimestamp: block.timestamp,
             voteActivationTimestamp: block.timestamp + proposalTimingConfig.voteActivationDelay,
             voteDeadlineTimestamp: block.timestamp + proposalTimingConfig.voteActivationDelay
@@ -454,17 +444,57 @@ contract Governance is
             proposalDeadlineTimestamp: block.timestamp + proposalTimingConfig.proposalDuration
         });
 
-        proposals[proposalId].networkHash = getNetworkHash();
+        proposals[_proposalId].networkHash = getNetworkHash();
+    }
+
+    function propose(
+        ProposeInputParams calldata _params
+    ) external payable whenNotPaused returns (bytes32 proposalId) {
+        _validateProposalInput(
+            _params.targets,
+            _params.values,
+            _params.calldatas,
+            _params.title,
+            _params.description
+        );
+
+        // Calculate proposalId
+        bytes32 descriptionHash = getDescriptionHash(_params.title, _params.description);
+        proposalId =
+            getProposalId(_params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
+        proposerNonce[msg.sender] += 1;
+
+        // Ensure that the proposal does not already exist
+        require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
+
+        // Deposit token and lock
+        uint256 depositAmount = proposalDepositAmounts[_params.depositToken];
+        // Only Accept tokens with non-zero threshold
+        require(depositAmount > 0, TokenNotSupported());
+        if (proposalDepositAmounts[_params.depositToken] == 0) {
+            revert TokenNotSupported();
+        }
+        _depositTokenAndLock(proposalId, _params.depositToken, depositAmount);
+
+        // Store the proposal information
+        _storeProposal(
+            proposalId,
+            _params.targets,
+            _params.values,
+            _params.calldatas,
+            _params.title,
+            _params.description
+        );
 
         emit ProposalCreated(
             proposalId,
             msg.sender,
             proposerNonce[msg.sender],
-            _targets,
-            _values,
-            _calldatas,
-            _title,
-            _description,
+            _params.targets,
+            _params.values,
+            _params.calldatas,
+            _params.title,
+            _params.description,
             proposals[proposalId].proposalTimeInfo
         );
     }
@@ -511,18 +541,14 @@ contract Governance is
 
     //-------------------------------- Result start --------------------------------//
 
-    /// @param _resultData ABI-encoded bytes data of four values: contractDataHash, pcr16Sha256, pcr16Sha384, and voteResult
+    // /// @param _resultData ABI-encoded bytes data of four values: contractDataHash, pcr16Sha256, pcr16Sha384, and voteResult
     function submitResult(
-        bytes32 _proposalId,
-        bytes calldata _kmsSig,
-        bytes calldata _enclavePubKey,
-        bytes calldata _enclaveSig,
-        bytes calldata _resultData
+        SubmitResultInputParams calldata _params
     ) external nonReentrant {
-        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+        require(proposals[_params.proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
 
         // Check if the proposal in Result Submission Phase
-        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
+        ProposalTimeInfo storage proposalTimeInfo = proposals[_params.proposalId].proposalTimeInfo;
         require(
             block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp
                 && block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp,
@@ -530,35 +556,39 @@ contract Governance is
         );
 
         // Check if the result of the proposal is not already submitted
-        require(proposals[_proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
+        require(proposals[_params.proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
         // Decode `_resultData`
         (bytes32 pcr16Sha256, bytes memory pcr16Sha384, VoteDecisionResult memory voteDecisionResult) =
-            _decodeResultData(_resultData);
+            _decodeResultData(_params.resultData);
 
         // Compare pcr16Sha256 with calculated value
-        require(pcr16Sha256 == _getPCR16Sha256(_proposalId), InvalidPCR16Sha256());
+        require(pcr16Sha256 == _getPCR16Sha256(_params.proposalId), InvalidPCR16Sha256());
 
         // Verify Enclave Sig
-        require(_verifyEnclaveSig(_enclavePubKey, _enclaveSig, _resultData), InvalidEnclaveSignature());
+        require(_verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, _params.resultData), InvalidEnclaveSignature());
 
         // Generate Image ID from pcr16Sha384 and verify KMS signature
-        require(verifyKMSSig(_generateImageId(pcr16Sha384), _enclavePubKey, _kmsSig), InvadidKMSSignature());
+        require(verifyKMSSig(_generateImageId(pcr16Sha384), _params.enclavePubKey, _params.kmsSig), InvadidKMSSignature());
 
         // Handle the result
-        VoteOutcome voteCoutome = _calcResult(voteDecisionResult);
-        proposals[_proposalId].voteOutcome = voteCoutome;
-        if (voteCoutome == VoteOutcome.Passed) {
+        VoteOutcome voteOutcome = _calcResult(voteDecisionResult);
+        _handleVoteOutcome(_params.proposalId, voteOutcome);
+
+        emit ResultSubmitted(_params.proposalId, voteDecisionResult, voteOutcome);
+    }
+
+    function _handleVoteOutcome(bytes32 _proposalId, VoteOutcome _voteOutcome) internal {
+        proposals[_proposalId].voteOutcome = _voteOutcome;
+        if (_voteOutcome == VoteOutcome.Passed) {
             _handleProposalPassed(_proposalId);
-        } else if (voteCoutome == VoteOutcome.Failed) {
+        } else if (_voteOutcome == VoteOutcome.Failed) {
             _handleProposalFailed(_proposalId);
-        } else if (voteCoutome == VoteOutcome.Vetoed) {
+        } else if (_voteOutcome == VoteOutcome.Vetoed) {
             _handleProposalVetoed(_proposalId);
         }
         // Write the result to the proposal
-        proposals[_proposalId].voteOutcome = voteCoutome;
-
-        emit ResultSubmitted(_proposalId, voteDecisionResult, voteCoutome);
+        proposals[_proposalId].voteOutcome = _voteOutcome;
     }
 
     function _handleProposalPassed(bytes32 _proposalId) internal {
@@ -781,16 +811,16 @@ contract Governance is
         return getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
     }
 
-    // function getProposalId(
-    //     address[] calldata _targets,
-    //     uint256[] calldata _values,
-    //     bytes[] calldata _calldatas,
-    //     bytes32 _descriptionHash,
-    //     address _proposer,
-    //     uint256 _nonce
-    // ) public pure returns (bytes32) {
-    //     return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
-    // }
+    function getProposalId(
+        address[] calldata _targets,
+        uint256[] calldata _values,
+        bytes[] calldata _calldatas,
+        bytes32 _descriptionHash,
+        address _proposer,
+        uint256 _nonce
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
+    }
 
     function getProposalTimeInfo(bytes32 _proposalId) public view returns (ProposalTimeInfo memory) {
         return proposals[_proposalId].proposalTimeInfo;
