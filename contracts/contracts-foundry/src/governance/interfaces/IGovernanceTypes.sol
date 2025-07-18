@@ -13,7 +13,6 @@ interface IGovernanceTypes {
         Failed, // Proposal is not executed and deposit is refunded
         Vetoed // Proposal is not executed and deposit is slashed
     }
-
     struct ProposalInfo {
         address proposer;
         address[] targets;
@@ -78,10 +77,28 @@ interface IGovernanceTypes {
         uint256 voteDuration;
         uint256 proposalDuration;
     }
-
     struct PCR {
         bytes pcr0;
         bytes pcr1;
         bytes pcr2;
+    }
+
+    /* Params */
+
+    struct SubmitResultInputParams {
+        bytes32 proposalId;
+        bytes kmsSig;
+        bytes enclavePubKey;
+        bytes enclaveSig;
+        bytes resultData;
+    }
+
+    struct ProposeInputParams {
+        address depositToken;
+        address[] targets;
+        uint256[] values;
+        bytes[] calldatas;
+        string title;
+        string description;
     }
 }
