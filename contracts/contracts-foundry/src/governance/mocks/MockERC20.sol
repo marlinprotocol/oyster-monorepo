@@ -9,6 +9,16 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
+/* 
+    18/07/2025
+    
+    [Marlin Governance Token]
+    Arbitrum Sepolia: 0x9E72284B0E205b592731C30EBb8064E853FEe3E8
+    Ethereum Sepolia: 0xFF25f1caeFDdaacf7067940b04012aAcdeAE2d68
+
+    [Deposit Token]
+    Arbitrum Sepolia: 0x5C891c16bdC9bBA00707f2aDbeBe3AF52D180Fa9
+ */
 contract MockERC20 is
     Initializable,
     ContextUpgradeable,
