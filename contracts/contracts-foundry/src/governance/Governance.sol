@@ -6,8 +6,8 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {ContextUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 import {ERC165Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AccessControlEnumerableUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
+// import {AccessControlEnumerableUpgradeable} from
+//     "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
@@ -19,21 +19,19 @@ import {IGovernance} from "./interfaces/IGovernance.sol";
 /* Libraries */
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract Governance is
     Initializable, // initializer
     ContextUpgradeable,
     ERC165Upgradeable, // supportsInterface
-    AccessControlEnumerableUpgradeable, // RBAC enumeration
+    AccessControlUpgradeable, // RBAC enumeration
     PausableUpgradeable,
     UUPSUpgradeable,
     ReentrancyGuardUpgradeable,
     IGovernance
 {
     using SafeERC20 for IERC20;
-    using Strings for uint256;
     using ECDSA for bytes32;
 
     bytes32 public constant CONFIG_SETTER_ROLE = keccak256("CONFIG_SETTER_ROLE"); // 0x17df964a140c45e2553048f59e406d5adf9a078929e0ad3964333b8139768702
@@ -94,7 +92,7 @@ contract Governance is
         public
         view
         virtual
-        override(ERC165Upgradeable, AccessControlEnumerableUpgradeable)
+        override(ERC165Upgradeable, AccessControlUpgradeable)
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
@@ -111,20 +109,19 @@ contract Governance is
     function initialize(
         address _admin,
         address _configSetter,
-        address _treasury,
-        uint256 _proposalPassThreshold,
-        uint256 _voteActivationDelay,
-        uint256 _voteDuration,
-        uint256 _proposalDuration,
-        uint256 _maxRPCUrlsPerChain,
-        PCR calldata _pcrConfig,
-        bytes calldata _kmsRootServerPubKey,
-        string calldata _kmsPath
+        address _treasury
+        // uint256 _proposalPassThreshold,
+        // uint256 _voteActivationDelay,
+        // uint256 _voteDuration,
+        // uint256 _proposalDuration,
+        // uint256 _maxRPCUrlsPerChain,
+        // PCR calldata _pcrConfig,
+        // bytes calldata _kmsRootServerPubKey,
+        // string calldata _kmsPath
     ) public initializer {
         __Context_init_unchained();
         __ERC165_init_unchained();
         __AccessControl_init_unchained();
-        __AccessControlEnumerable_init_unchained();
         __ERC1967Upgrade_init_unchained();
         __UUPSUpgradeable_init_unchained();
         __Pausable_init_unchained();
@@ -139,26 +136,36 @@ contract Governance is
         _setTreasury(_treasury);
 
         // Set Proposal Pass Threshold
-        _setProposalPassThreshold(_proposalPassThreshold);
+        // _setProposalPassThreshold(_proposalPassThreshold);
+
+        _pause();
 
         // Set Proposal Time Config
-        require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
-        _setVoteActivationDelay(_voteActivationDelay);
-        _setVoteDuration(_voteDuration);
-        _setProposalDuration(_proposalDuration);
-        _checkProposalTimeConfig();
+        // require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
+        // _setVoteActivationDelay(_voteActivationDelay);
+        // _setVoteDuration(_voteDuration);
+        // _setProposalDuration(_proposalDuration);
+        // _checkProposalTimeConfig();
 
         // Set Max RPC URLs per Chain
-        _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
+        // _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
 
         // Set PCR0, PCR1, PCR2
-        _setPCRConfig(_pcrConfig.pcr0, _pcrConfig.pcr1, _pcrConfig.pcr2);
+        // _setPCRConfig(_pcrConfig.pcr0, _pcrConfig.pcr1, _pcrConfig.pcr2);
 
         // Set KMS Config
-        _setKMSRootServerKey(_kmsRootServerPubKey);
-        _setKMSPath(_kmsPath);
+        // _setKMSRootServerKey(_kmsRootServerPubKey);
+        // _setKMSPath(_kmsPath);
 
-        // Note: setTokenLockAmount, setNetworkConfig should be seperately called after initialization
+        // Note: After initialization, `DEFAULT_ADMIN_ROLE` should call unpause() after `CONFIG_SETTER_ROLE` sets values calling functions below:
+        // - setProposalPassThreshold
+        // - setProposalTimingConfig
+        // - setMaxRPCUrlsPerChain
+        // - setPCRConfig
+        // - setKMSRootServerKey
+        // - setKMSPath
+        
+        // Note: unpause() should be called after setting all values 
     }
 
     //-------------------------------- Initializer end --------------------------------//
@@ -444,7 +451,7 @@ contract Governance is
             proposalDeadlineTimestamp: block.timestamp + proposalTimingConfig.proposalDuration
         });
 
-        proposals[_proposalId].networkHash = getNetworkHash();
+        proposals[_proposalId].networkHash = networkHash;
     }
 
     function propose(
@@ -677,7 +684,7 @@ contract Governance is
     //-------------------------------- Helpers start --------------------------------//
 
     function _depositTokenAndLock(bytes32 _proposalId, address _token, uint256 _amount) internal {
-        IERC20(_token).transferFrom(msg.sender, address(this), _amount);
+        IERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
         _lockDeposit(_proposalId, _token, _amount);
     }
 
@@ -800,16 +807,16 @@ contract Governance is
 
     //-------------------------------- Getters start --------------------------------//
 
-    function getUserProposalId(
-        address[] calldata _targets,
-        uint256[] calldata _values,
-        bytes[] calldata _calldatas,
-        string calldata _title,
-        string calldata _description
-    ) public view returns (bytes32) {
-        bytes32 descriptionHash = getDescriptionHash(_title, _description);
-        return getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
-    }
+    // function getUserProposalId(
+    //     address[] calldata _targets,
+    //     uint256[] calldata _values,
+    //     bytes[] calldata _calldatas,
+    //     string calldata _title,
+    //     string calldata _description
+    // ) public view returns (bytes32) {
+    //     bytes32 descriptionHash = getDescriptionHash(_title, _description);
+    //     return getProposalId(_targets, _values, _calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
+    // }
 
     function getProposalId(
         address[] calldata _targets,
@@ -822,45 +829,45 @@ contract Governance is
         return keccak256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
     }
 
-    function getProposalTimeInfo(bytes32 _proposalId) public view returns (ProposalTimeInfo memory) {
-        return proposals[_proposalId].proposalTimeInfo;
-    }
+    // function getProposalTimeInfo(bytes32 _proposalId) public view returns (ProposalTimeInfo memory) {
+    //     return proposals[_proposalId].proposalTimeInfo;
+    // }
 
-    function getProposalInfo(bytes32 _proposalId)
-        public
-        view
-        returns (
-            address proposer,
-            address[] memory targets,
-            uint256[] memory values,
-            bytes[] memory calldatas,
-            string memory title,
-            string memory description
-        )
-    {
-        ProposalInfo storage proposalInfo = proposals[_proposalId].proposalInfo;
-        return (
-            proposalInfo.proposer,
-            proposalInfo.targets,
-            proposalInfo.values,
-            proposalInfo.calldatas,
-            proposalInfo.title,
-            proposalInfo.description
-        );
-    }
+    // function getProposalInfo(bytes32 _proposalId)
+    //     public
+    //     view
+    //     returns (
+    //         address proposer,
+    //         address[] memory targets,
+    //         uint256[] memory values,
+    //         bytes[] memory calldatas,
+    //         string memory title,
+    //         string memory description
+    //     )
+    // {
+    //     ProposalInfo storage proposalInfo = proposals[_proposalId].proposalInfo;
+    //     return (
+    //         proposalInfo.proposer,
+    //         proposalInfo.targets,
+    //         proposalInfo.values,
+    //         proposalInfo.calldatas,
+    //         proposalInfo.title,
+    //         proposalInfo.description
+    //     );
+    // }
 
     function getDescriptionHash(string calldata _title, string calldata _description) public pure returns (bytes32) {
         return keccak256(abi.encode(_title, _description));
     }
 
-    function getNetworkHash() public view returns (bytes32) {
-        return networkHash;
-    }
+    // function getNetworkHash() public view returns (bytes32) {
+    //     return networkHash;
+    // }
 
-    /// @notice Returns the hash of the contract data for a given proposal ID
-    /// @notice Contract data hash is
+    // /// @notice Returns the hash of the contract data for a given proposal ID
+    // /// @notice Contract data hash is
     function getContractDataHash(bytes32 _proposalId) public view returns (bytes32) {
-        return keccak256(abi.encode(getNetworkHash(), getVoteHash(_proposalId)));
+        return keccak256(abi.encode(proposals[_proposalId].networkHash, getVoteHash(_proposalId)));
     }
 
     /// @notice Returns the network hash for a given proposal ID
@@ -876,47 +883,47 @@ contract Governance is
         return proposalVoteInfo.voteHash;
     }
 
-    function getVoteCount(bytes32 _proposalI) external view returns (uint256) {
-        // reverts if proposal does not exist
-        require(proposals[_proposalI].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+    // function getVoteCount(bytes32 _proposalI) external view returns (uint256) {
+    //     // reverts if proposal does not exist
+    //     require(proposals[_proposalI].proposalInfo.proposer != address(0), ProposalDoesNotExist());
 
-        // reverts if voting is not done
-        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalI].proposalTimeInfo;
-        require(block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp, VotingNotDone());
+    //     // reverts if voting is not done
+    //     ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalI].proposalTimeInfo;
+    //     require(block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp, VotingNotDone());
 
-        return proposals[_proposalI].proposalVoteInfo.voteCount;
-    }
+    //     return proposals[_proposalI].proposalVoteInfo.voteCount;
+    // }
 
-    function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns (address, bytes memory) {
-        return (
-            proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
-            proposals[_proposalId].proposalVoteInfo.votes[_idx].voteEncrypted
-        );
-    }
+    // function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns (address, bytes memory) {
+    //     return (
+    //         proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
+    //         proposals[_proposalId].proposalVoteInfo.votes[_idx].voteEncrypted
+    //     );
+    // }
 
-    function getAllVoteInfo(bytes32 _proposalId)
-        external
-        view
-        returns (Vote[] memory votes, uint256 voteCount, bytes32 voteHash)
-    {
-        ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
-        voteCount = proposalVoteInfo.voteCount;
-        votes = new Vote[](voteCount);
-        for (uint256 i = 0; i < voteCount; ++i) {
-            votes[i] = proposalVoteInfo.votes[i];
-        }
-        voteHash = proposalVoteInfo.voteHash;
-    }
+    // function getAllVoteInfo(bytes32 _proposalId)
+    //     external
+    //     view
+    //     returns (Vote[] memory votes, uint256 voteCount, bytes32 voteHash)
+    // {
+    //     ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
+    //     voteCount = proposalVoteInfo.voteCount;
+    //     votes = new Vote[](voteCount);
+    //     for (uint256 i = 0; i < voteCount; ++i) {
+    //         votes[i] = proposalVoteInfo.votes[i];
+    //     }
+    //     voteHash = proposalVoteInfo.voteHash;
+    // }
 
-    function getAllNetworkConfigs() external view returns (uint256[] memory, TokenNetworkConfig[] memory) {
-        uint256 chainCount = supportedChainIds.length;
-        TokenNetworkConfig[] memory tokenNetworkConfigList = new TokenNetworkConfig[](chainCount);
-        for (uint256 i = 0; i < chainCount; ++i) {
-            uint256 chainId = supportedChainIds[i];
-            tokenNetworkConfigList[i] = tokenNetworkConfigs[chainId];
-        }
-        return (supportedChainIds, tokenNetworkConfigList);
-    }
+    // function getAllNetworkConfigs() external view returns (uint256[] memory, TokenNetworkConfig[] memory) {
+    //     uint256 chainCount = supportedChainIds.length;
+    //     TokenNetworkConfig[] memory tokenNetworkConfigList = new TokenNetworkConfig[](chainCount);
+    //     for (uint256 i = 0; i < chainCount; ++i) {
+    //         uint256 chainId = supportedChainIds[i];
+    //         tokenNetworkConfigList[i] = tokenNetworkConfigs[chainId];
+    //     }
+    //     return (supportedChainIds, tokenNetworkConfigList);
+    // }
 
     //-------------------------------- Getters end --------------------------------//
 
