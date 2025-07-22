@@ -13,7 +13,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event RpcUrlUpdated(uint256 indexed chainId, uint256 index, string rpcUrl);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
     event KMSPathSet(string kmsPath);
-    event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2);
+    event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2, bytes32 indexed imageId);
     event TreasurySet(address indexed treasury);
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
     event ProposalPassVetoThresholdSet(uint256 threshold);

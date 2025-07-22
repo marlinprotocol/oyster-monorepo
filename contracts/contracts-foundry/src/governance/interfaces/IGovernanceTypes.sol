@@ -78,38 +78,22 @@ interface IGovernanceTypes {
         uint256 voteDuration;
         uint256 proposalDuration;
     }
+
+    struct PCRConfig {
+        PCR pcr;
+        bytes32 imageId;
+    }
+
     struct PCR {
         bytes pcr0;
         bytes pcr1;
         bytes pcr2;
     }
 
+
     /*//////////////////////////////////////////////////////////////
                                  PARAMS
     //////////////////////////////////////////////////////////////*/
-
-    // struct TokenLockAmount {
-    //     address tokenAddress; // Address of the token to lock
-    //     uint256 lockAmount; // Amount of tokens to lock for voting
-    // }
-
-    // struct NetworkConfig {
-    //     uint256 chainId; // Chain ID of the network
-    //     address tokenAddress; // Address of the governance token on the network
-    //     string[] rpcUrls; // RPC URLs for the network
-    // }
-
-    // struct InitializeParams {
-    //     address admin;
-    //     address configSetter;
-    //     address treasury;
-    //     uint256 proposalPassThreshold; // in basis points (1% = 100, 10% = 1000)
-    //     ProposalTimingConfig proposalTimingConfig;
-    //     uint256 maxRPCUrlsPerChain;
-    //     PCR pcrConfig;
-    //     bytes kmsRootServerPubKey; // Public key of the KMS root server
-    //     string kmsPath; // Path to the KMS server
-    // }
 
     struct ProposeInputParams {
         address depositToken;
@@ -121,7 +105,6 @@ interface IGovernanceTypes {
     }
     
     struct SubmitResultInputParams {
-        bytes32 proposalId;
         bytes kmsSig;
         bytes enclavePubKey;
         bytes enclaveSig;

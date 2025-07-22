@@ -40,4 +40,6 @@ interface IGovernanceErrors {
     error InvalidMaxRpcUrlsPerChain();
     error ZeroProposalPassThreshold();
     error NotRefundableProposal();
+    error SameImageId();
+    error ResultHashMismatch();
 }
