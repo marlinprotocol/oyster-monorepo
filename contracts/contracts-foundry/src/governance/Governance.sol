@@ -868,8 +868,8 @@ contract Governance is
         address[] calldata _targets,
         uint256[] calldata _values,
         bytes[] calldata _calldatas,
-        bytes calldata _title,
-        bytes calldata _description,
+        string calldata _title,
+        string calldata _description,
         address _proposer,
         uint256 _nonce
     ) external pure returns (bytes32) {

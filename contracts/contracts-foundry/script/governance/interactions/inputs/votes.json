@@ -1,0 +1,15 @@
+{
+  "0573C572DB4F4A205FF5D66E087AD4A1EFD6FC7B18E24D58A0E0544C9D287D1F": [
+    {
+      "voteEncrypted": "0x1234abcd"
+    },
+    {
+      "voteEncrypted": "0x5678ef90"
+    }
+  ],
+  "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": [
+    {
+      "voteEncrypted": "0xdeadbeef"
+    }
+  ]
+}

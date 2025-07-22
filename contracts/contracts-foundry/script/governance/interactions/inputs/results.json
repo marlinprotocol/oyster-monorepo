@@ -1,0 +1,16 @@
+[
+  {
+    "proposalId": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kmsSig": "0x1234abcd",
+    "enclavePubKey": "0x1111222233334444",
+    "enclaveSig": "0x5555666677778888",
+    "resultData": "0xdeadbeef"
+  },
+  {
+    "proposalId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kmsSig": "0xabcdef12",
+    "enclavePubKey": "0x99990000aaaa1111",
+    "enclaveSig": "0xbbbbccccdddd1111",
+    "resultData": "0xbeefdead"
+  }
+]

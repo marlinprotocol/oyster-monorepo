@@ -5,6 +5,7 @@ import {Script} from "forge-std/Script.sol";
 import {Governance} from "../../src/governance/Governance.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
+import {console} from "forge-std/console.sol";
 
 /* 
     18/07/2025 Arbitrum Sepolia: 0xF27C5d12e12E53a63A146709DBb78619dd0EEA00
@@ -39,7 +40,7 @@ contract DeployGovernance is Script {
             activeConfig.initializeParams.voteDuration,
             activeConfig.initializeParams.proposalDuration,
             activeConfig.initializeParams.maxRPCUrlsPerChain,
-            activeConfig.initializeParams.pcrConfig,
+            activeConfig.initializeParams.pcr,
             activeConfig.initializeParams.kmsRootServerPubKey,
             activeConfig.initializeParams.kmsPath
         );
@@ -62,6 +63,10 @@ contract DeployGovernance is Script {
         }
         
         vm.stopBroadcast();
+
+        console.log("Governance Implementation deployed at:", address(governance));
+        console.log("Governance Proxy deployed at:", address(proxy));
+
         return address(governance);
     }
 }
