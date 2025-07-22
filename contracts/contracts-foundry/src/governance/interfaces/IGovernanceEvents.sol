@@ -18,6 +18,9 @@ interface IGovernanceEvents is IGovernanceTypes {
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
     event ProposalPassVetoThresholdSet(uint256 threshold);
     event MinQuorumThresholdSet(uint256 minQuorum);
+    event ExpiredProposalRefunded(
+        bytes32 indexed proposalId
+    );
 
     event DepositLocked(
         bytes32 indexed proposalId,

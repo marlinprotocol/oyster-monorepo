@@ -41,24 +41,24 @@ contract Governance is
     IERC20 public usdc;
 
     /// @notice Token amount required to submit a proposal which will be locked until result is submitted
-    mapping(address token => uint256 amount) proposalDepositAmounts;
+    mapping(address token => uint256 amount) public proposalDepositAmounts;
     /// @notice Mapping of proposal IDs to their respective Proposal structs
     mapping(bytes32 id => Proposal) proposals;
     /// @notice Mapping of proposal IDs that are queued for execution when the result for the proposal is passed
-    mapping(bytes32 id => bool) executionQueue;
+    mapping(bytes32 id => bool) public executionQueue;
     /// @notice Used to calculate proposalId
     /// @notice Each time proposal is submitted, the nonce is incremented to ensure uniqueness of proposalId
     /// @dev Starts from 0
-    mapping(address proposer => uint256 nonce) proposerNonce;
+    mapping(address proposer => uint256 nonce) public proposerNonce;
 
     /* Proposal Config */
     ProposalTimingConfig public proposalTimingConfig;
     /// @notice Minimum number of voting power required to be casted for a proposal to be considered valid
-    uint256 minQuorumThreshold;
+    uint256 public minQuorumThreshold;
     /// @notice Threshold to pass or veto a proposal, expressed as a percentage (1 * 10^18 = 100%)
-    uint256 proposalPassVetoThreshold;
+    uint256 public proposalPassVetoThreshold;
     /// @notice Address where tokens are sent when proposal's vote outcome is Vetoed
-    address treasury;
+    address public treasury;
 
     /* KMS */
     PCR public pcrConfig;
@@ -72,7 +72,7 @@ contract Governance is
     /// @notice Maximum number of RPC URLs allowed to be added per chain
     uint256 public maxRPCUrlsPerChain;
     /// @notice Mapping of chain IDs to their respective token network configurations
-    mapping(uint256 chainId => TokenNetworkConfig config) tokenNetworkConfigs;
+    mapping(uint256 chainId => TokenNetworkConfig config) public tokenNetworkConfigs;
 
     modifier onlyAdmin() {
         require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), NotDefaultAdmin());
@@ -219,7 +219,8 @@ contract Governance is
         external
         onlyConfigSetter
     {
-        require(_voteActivationDelay * _voteDuration * _proposalDuration > 0, ZeroProposalTimeConfig());
+        // TODO: Delete
+        require(_voteActivationDelay + _voteDuration + _proposalDuration > 0, ZeroProposalTimeConfig());
 
         if (_voteActivationDelay > 0) {
             _setVoteActivationDelay(_voteActivationDelay);
@@ -601,6 +602,23 @@ contract Governance is
         _handleVoteOutcome(_params.proposalId, voteOutcome);
 
         emit ResultSubmitted(_params.proposalId, voteDecisionResult, voteOutcome);
+    }
+
+    /// @notice Refund the deposit and value sent for the proposal when result is not submitted and deadline has passed
+    function refund(bytes32 _proposalId) external nonReentrant {
+        // If voteOutcome is still Pending, and the proposal deadline has passed, refund the deposit
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
+        VoteOutcome proposalVoteOutcome = proposals[_proposalId].voteOutcome;
+
+        if(block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp || proposalVoteOutcome != VoteOutcome.Pending) {
+            revert NotRefundableProposal();
+        }
+
+        _unlockDepositAndRefund(_proposalId);
+        _refundValue(_proposalId);
+
+        emit ExpiredProposalRefunded(_proposalId);
     }
 
     function _handleVoteOutcome(bytes32 _proposalId, VoteOutcome _voteOutcome) internal {

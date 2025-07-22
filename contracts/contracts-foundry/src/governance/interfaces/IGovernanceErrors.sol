@@ -39,4 +39,5 @@ interface IGovernanceErrors {
     error MaxRpcUrlsPerChainReached();
     error InvalidMaxRpcUrlsPerChain();
     error ZeroProposalPassThreshold();
+    error NotRefundableProposal();
 }
