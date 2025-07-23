@@ -550,14 +550,14 @@ contract Governance is
             block.timestamp >= voteActivationTimestamp && block.timestamp < voteDeadlineTimestamp, VotingNotActive()
         );
 
-        // Increment the vote count
-        _incrementVoteCount(_proposalId);
-
         // Store the vote
         Proposal storage proposal = proposals[_proposalId];
         ProposalVoteInfo storage proposalVoteInfo = proposal.proposalVoteInfo;
         uint256 voteIdx = proposalVoteInfo.voteCount;
         proposalVoteInfo.votes[voteIdx] = Vote({voter: msg.sender, voteEncrypted: _voteEncrypted});
+
+        // Increment the vote count
+        _incrementVoteCount(_proposalId);
 
         // Update Vote Hash of the proposal
         bytes32 voteEncryptedHash = sha256(_voteEncrypted);
@@ -935,14 +935,12 @@ contract Governance is
         ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
         return proposalVoteInfo.voteHash;
     }
-
+    
+    /// @notice Total vote count for a given proposal
+    /// @notice This function does not check if the vote is done, so the count could not be the final count
     function getVoteCount(bytes32 _proposalI) external view returns (uint256) {
         // reverts if proposal does not exist
         require(proposals[_proposalI].proposalInfo.proposer != address(0), ProposalDoesNotExist());
-
-        // reverts if voting is not done
-        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalI].proposalTimeInfo;
-        require(block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp, VotingNotDone());
 
         return proposals[_proposalI].proposalVoteInfo.voteCount;
     }
