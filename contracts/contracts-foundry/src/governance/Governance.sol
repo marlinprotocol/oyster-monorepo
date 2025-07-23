@@ -299,7 +299,9 @@ contract Governance is
         tokenNetworkConfigs[_chainId] =
             TokenNetworkConfig({chainHash: chainHash, tokenAddress: _tokenAddress, rpcUrls: _rpcUrls});
 
-        emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls);
+        networkHash = _calcNetworkHash();
+
+        emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls, networkHash);
     }
 
     function _calcNetworkHash() internal view returns (bytes32) {
@@ -307,12 +309,13 @@ contract Governance is
         for (uint256 i = 0; i < supportedChainIds.length; ++i) {
             uint256 chainId = supportedChainIds[i];
             bytes32 chainHash = tokenNetworkConfigs[chainId].chainHash;
-            abi.encode(networkHash, chainHash);
+            chainHashEncoded = abi.encode(chainHashEncoded, chainHash);
         }
 
         return sha256(chainHashEncoded);
     }
 
+    // TODO: remove
     /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
     function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyConfigSetter {
         require(_chainId > 0, InvalidChainId());
@@ -347,14 +350,18 @@ contract Governance is
         for (uint256 i = 0; i < _rpcUrl.length; ++i) {
             emit RpcUrlAdded(_chainId, _rpcUrl[i]);
         }
+
+        // TODO: update rpc url
     }
 
+    // TODO: remove
     /// @notice Updates an existing RPC URL for the specified chainId at the given index
     function updateRpcUrl(uint256 _chainId, uint256 _index, string calldata _rpcUrl) external onlyConfigSetter {
         require(_chainId > 0, InvalidChainId());
         require(_index < tokenNetworkConfigs[_chainId].rpcUrls.length, InvalidRpcUrl());
         require(bytes(_rpcUrl).length > 0, InvalidRpcUrl());
 
+        // TODO: update network hash
         tokenNetworkConfigs[_chainId].rpcUrls[_index] = _rpcUrl;
         emit RpcUrlUpdated(_chainId, _index, _rpcUrl);
     }
