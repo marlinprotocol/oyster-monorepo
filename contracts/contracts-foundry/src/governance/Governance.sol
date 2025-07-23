@@ -574,7 +574,7 @@ contract Governance is
         SubmitResultInputParams calldata _params
     ) external nonReentrant {
         // Decode `_resultData`
-        (bytes32 proposalId, bytes32 resultHash, VoteDecisionResult memory voteDecisionResult) =
+        (bytes32 proposalId, VoteDecisionResult memory voteDecisionResult) =
             _decodeResultData(_params.resultData);
 
         require(proposals[proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
@@ -586,15 +586,16 @@ contract Governance is
                 && block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp,
             NotResultSubmissionPhase()
         );
-
+        
         // Check if the result of the proposal is not already submitted
         require(proposals[proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
-        // Verify Enclave Sig
-        require(_verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, _params.resultData), InvalidEnclaveSignature());
+        // Verify KMS sig
+        require(verifyKMSSig(pcrConfig.imageId, _params.enclavePubKey, _params.kmsSig), InvadidKMSSignature());
 
-        // Verify Result Hash
-        bytes32 resultHashGenerated = sha256(
+
+        // Verify Enclave Sig
+        bytes32 contractDataHash = sha256(
             abi.encode(
                 address(this),
                 proposalTimeInfo.proposedTimestamp,
@@ -602,9 +603,12 @@ contract Governance is
                 proposals[proposalId].proposalVoteInfo.voteHash
             )
         );
-        require(resultHashGenerated == resultHash, ResultHashMismatch());
-
-        require(verifyKMSSig(pcrConfig.imageId, _params.enclavePubKey, _params.kmsSig), InvadidKMSSignature());
+        bytes memory message = abi.encode(
+            contractDataHash,
+            proposalId,
+            voteDecisionResult
+        );
+        require(_verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, message), InvalidEnclaveSignature());
 
         // Handle the result
         VoteOutcome voteOutcome = _calcVoteResult(voteDecisionResult);
@@ -807,28 +811,30 @@ contract Governance is
         pure
         returns (bytes32)
     {
-        return sha256(abi.encode(_pcr0, _pcr1, _pcr2));
+        uint32 bitflags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16)); 
+        bytes memory pcr16 = new bytes(48);
+        return sha256(abi.encode(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
     }
 
     function _decodeResultData(bytes memory _resultData)
         internal
         pure
-        returns (bytes32 proposalId, bytes32 resultHash, VoteDecisionResult memory voteDecisionResults)
+        returns (bytes32 proposalId, VoteDecisionResult memory voteDecisionResults)
     {
         // Decode the result data
-        (proposalId, resultHash, voteDecisionResults) = abi.decode(_resultData, (bytes32, bytes32, VoteDecisionResult));
+        (proposalId, voteDecisionResults) = abi.decode(_resultData, (bytes32, VoteDecisionResult));
     }
 
-    function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory _resultData)
+    function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory message)
         internal
         pure
         returns (bool)
     {
         // Reconstruct the message to verify
-        bytes32 messageHash = sha256(_resultData);
+        bytes32 digest = sha256(message);
 
         // Recover the address from the signature
-        address recoveredAddress = messageHash.recover(_enclaveSig);
+        address recoveredAddress = digest.recover(_enclaveSig);
 
         // Convert the public key to address
         address enclaveAddress = _pubKeyToAddress(_enclavePubKey);
@@ -924,13 +930,10 @@ contract Governance is
     }
 
     /// @notice Returns the network hash for a given proposal ID
+    /// @notice This does not check if the vote is done, so the hash could not be the final hash
     function getVoteHash(bytes32 _proposalId) public view returns (bytes32) {
         // reverts if proposal does not exist
         require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
-
-        // reverts if voting is not done
-        ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
-        require(block.timestamp >= proposalTimeInfo.voteDeadlineTimestamp, VotingNotDone());
 
         ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
         return proposalVoteInfo.voteHash;
