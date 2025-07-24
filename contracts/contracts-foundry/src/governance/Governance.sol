@@ -272,13 +272,12 @@ contract Governance is
         public
         onlyConfigSetter
     {
+        // TODO: remove _chainId from supportedChains when `_tokenAddress` == address(0);
+
         require(_chainId > 0, InvalidChainId());
         require(_tokenAddress != address(0), InvalidTokenAddress());
         require(_rpcUrls.length > 0, InvalidRpcUrl());
         require(_rpcUrls.length <= maxRPCUrlsPerChain, MaxRpcUrlsPerChainReached());
-        for (uint256 i = 0; i < _rpcUrls.length; ++i) {
-            require(bytes(_rpcUrls[i]).length > 0, InvalidRpcUrl());
-        }
 
         // Check if the token address is already set for the chainId
         bool chainIdExists = false;
@@ -315,55 +314,59 @@ contract Governance is
         return sha256(chainHashEncoded);
     }
 
-    // TODO: remove
-    /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
-    function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyConfigSetter {
-        require(_chainId > 0, InvalidChainId());
+    // // TODO: remove
+    // /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
+    // function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyConfigSetter {
+    //     require(_chainId > 0, InvalidChainId());
 
-        if (tokenNetworkConfigs[_chainId].rpcUrls.length == maxRPCUrlsPerChain) {
-            revert MaxRpcUrlsPerChainReached();
-        }
+    //     if (tokenNetworkConfigs[_chainId].rpcUrls.length == maxRPCUrlsPerChain) {
+    //         revert MaxRpcUrlsPerChainReached();
+    //     }
 
-        // Check RPC url length
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-        }
+    //     // Check RPC url length
+    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+    //         require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+    //     }
 
-        // Check if the chainId is supported
-        bool chainIdExists = false;
-        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-            if (supportedChainIds[i] == _chainId) {
-                chainIdExists = true;
-                break;
-            }
-        }
-        require(chainIdExists, InvalidChainId());
+    //     // Check if the chainId is supported
+    //     bool chainIdExists = false;
+    //     for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+    //         if (supportedChainIds[i] == _chainId) {
+    //             chainIdExists = true;
+    //             break;
+    //         }
+    //     }
+    //     require(chainIdExists, InvalidChainId());
 
-        // Add the new RPC URL to the rpcUrls array for the specified chainId
-        TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-            config.rpcUrls.push(_rpcUrl[i]);
-        }
+    //     // Add the new RPC URL to the rpcUrls array for the specified chainId
+    //     TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
+    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+    //         require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
+    //         config.rpcUrls.push(_rpcUrl[i]);
+    //     }
 
-        // Emit an event for the added RPC URL
-        for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-            emit RpcUrlAdded(_chainId, _rpcUrl[i]);
-        }
+    //     // Emit an event for the added RPC URL
+    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
+    //         emit RpcUrlAdded(_chainId, _rpcUrl[i]);
+    //     }
 
-        // TODO: update rpc url
-    }
+    //     // TODO: update rpc url
+    // }
 
-    // TODO: remove
     /// @notice Updates an existing RPC URL for the specified chainId at the given index
-    function updateRpcUrl(uint256 _chainId, uint256 _index, string calldata _rpcUrl) external onlyConfigSetter {
+    /// @notice This will overwrite the existing rpc urls for the chainId
+    function setRpcUrls(uint256 _chainId, string[] calldata _rpcUrls) external onlyConfigSetter {
         require(_chainId > 0, InvalidChainId());
-        require(_index < tokenNetworkConfigs[_chainId].rpcUrls.length, InvalidRpcUrl());
-        require(bytes(_rpcUrl).length > 0, InvalidRpcUrl());
 
-        // TODO: update network hash
-        tokenNetworkConfigs[_chainId].rpcUrls[_index] = _rpcUrl;
-        emit RpcUrlUpdated(_chainId, _index, _rpcUrl);
+        // string[] storage rpcUrls = tokenNetworkConfigs[_chainId].rpcUrls;
+        // for (uint256 i = 0; i < rpcUrls.length; ++i) {
+        //     rpcUrls[i] = _rpcUrls;
+        // }
+        tokenNetworkConfigs[_chainId].rpcUrls = _rpcUrls;
+
+        networkHash = _calcNetworkHash();
+
+        emit RpcUrlUpdated(_chainId, _rpcUrls);
     }
 
     /// @notice Sets KMS Root Server Key
@@ -446,9 +449,6 @@ contract Governance is
         uint256 depositAmount = proposalDepositAmounts[_params.depositToken];
         // Only Accept tokens with non-zero threshold
         require(depositAmount > 0, TokenNotSupported());
-        if (proposalDepositAmounts[_params.depositToken] == 0) {
-            revert TokenNotSupported();
-        }
         _depositTokenAndLock(proposalId, _params.depositToken, depositAmount);
 
         // Store the proposal information
@@ -551,10 +551,10 @@ contract Governance is
 
         // Chech if the proposal is active
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
-        uint256 voteActivationTimestamp = proposalTimeInfo.voteActivationTimestamp;
-        uint256 voteDeadlineTimestamp = proposalTimeInfo.voteDeadlineTimestamp;
         require(
-            block.timestamp >= voteActivationTimestamp && block.timestamp < voteDeadlineTimestamp, VotingNotActive()
+            block.timestamp >= proposalTimeInfo.voteActivationTimestamp && 
+            block.timestamp < proposalTimeInfo.voteDeadlineTimestamp, 
+            VotingNotActive()
         );
 
         // Store the vote
@@ -564,7 +564,7 @@ contract Governance is
         proposalVoteInfo.votes[voteIdx] = Vote({voter: msg.sender, voteEncrypted: _voteEncrypted});
 
         // Increment the vote count
-        _incrementVoteCount(_proposalId);
+        proposals[_proposalId].proposalVoteInfo.voteCount++;
 
         // Update Vote Hash of the proposal
         bytes32 voteEncryptedHash = sha256(_voteEncrypted);
@@ -598,6 +598,7 @@ contract Governance is
         require(proposals[proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
         // Verify KMS sig
+        // TODO: imageId should be stored per-proposal in case of update
         require(verifyKMSSig(pcrConfig.imageId, _params.enclavePubKey, _params.kmsSig), InvadidKMSSignature());
 
 
@@ -729,9 +730,6 @@ contract Governance is
             Address.verifyCallResult(success, returndata);
         }
 
-        // Mark the proposal as executed
-        proposals[_proposalId].executed = true;
-
         emit ProposalExecuted(_proposalId);
 
         // Remove the proposal from the execution queue
@@ -779,6 +777,18 @@ contract Governance is
         return address(uint160(uint256(pubKeyHash)));
     }
 
+    // function _remove0xPrefix(string memory hexString) internal pure returns (string memory) {
+    //     bytes memory b = bytes(hexString);
+    //     if (b.length >= 2 && b[0] == "0" && b[1] == "x") {
+    //         bytes memory result = new bytes(b.length - 2);
+    //         for (uint i = 2; i < b.length; i++) {
+    //             result[i-2] = b[i];
+    //         }
+    //         return string(result);
+    //     }
+    //     return hexString;
+    // }
+
     /// @notice Calculates the result of the proposal based on the vote result
     function _calcVoteResult(VoteDecisionResult memory _voteDecisionCount) internal view returns (VoteOutcome) {
         uint256 yes = _voteDecisionCount.yes;
@@ -820,7 +830,7 @@ contract Governance is
     {
         uint32 bitflags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16)); 
         bytes memory pcr16 = new bytes(48);
-        return sha256(abi.encode(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
+        return sha256(abi.encodePacked(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
     }
 
     function _decodeResultData(bytes memory _resultData)
@@ -850,6 +860,22 @@ contract Governance is
         return recoveredAddress == enclaveAddress;
     }
 
+    function _toHex16(bytes16 data) internal pure returns (bytes memory) {
+        bytes memory alphabet = "0123456789abcdef";
+        bytes memory str = new bytes(32);
+        for (uint i = 0; i < 16; i++) {
+            str[i*2]     = alphabet[uint8(data[i] >> 4)];
+            str[i*2 + 1] = alphabet[uint8(data[i] & 0x0f)];
+        }
+        return str;
+    }
+
+    function _toHexStringWithNoPrefix(bytes32 data) internal pure returns (string memory) {
+        bytes memory part1 = _toHex16(bytes16(data));
+        bytes memory part2 = _toHex16(bytes16(uint128(uint256(data))));
+        return string(abi.encodePacked(part1, part2)); // no "0x" prefix
+    }
+
     function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig)
         public
         view
@@ -857,7 +883,7 @@ contract Governance is
     {
         // Reconstruct URI (must match the format signed by the KMS)
         // Check: https://github.com/marlinprotocol/oyster-monorepo/tree/master/kms/root-server#public-endpoints
-        string memory uri = string(abi.encodePacked("/derive/secp256k1/public?image_id=", _imageId, "&path=", kmsPath));
+        string memory uri = string(abi.encodePacked("/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", kmsPath));
 
         // Combine URI and binary public key
         bytes memory message = abi.encodePacked(bytes(uri), _enclavePubKey);
@@ -866,11 +892,7 @@ contract Governance is
         bytes32 messageHash = sha256(message);
 
         // Recover signer address
-        address kmsRootAddress = _pubKeyToAddress(kmsRootServerPubKey);
-        address recovered = messageHash.recover(_kmsSig);
-
-        // Compare with known trusted signer
-        return recovered == kmsRootAddress;
+        return messageHash.recover(_kmsSig) == _pubKeyToAddress(kmsRootServerPubKey);
     }
 
     //-------------------------------- Helpers end --------------------------------//
