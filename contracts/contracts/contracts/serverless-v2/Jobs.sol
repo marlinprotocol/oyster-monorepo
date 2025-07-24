@@ -249,6 +249,9 @@ contract Jobs is
     bytes32 private constant SUBMIT_OUTPUT_TYPEHASH =
         keccak256("SubmitOutput(uint256 jobId,bytes output,uint256 totalTime,uint8 errorCode,uint256 signTimestamp)");
 
+    // NEW STORAGE VARS
+    IRewardDelegators public rewardDelegators;
+
     /**
      * @dev Emitted when a new job is created.
      * @param jobId The ID of the job created.
@@ -661,6 +664,4 @@ contract Jobs is
         return jobs[_jobId].selectedExecutors;
     }
 
-    // new vars
-    IRewardDelegators public rewardDelegators;
 }
