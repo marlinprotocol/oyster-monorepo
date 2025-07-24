@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./Executors.sol";
+import "../staking/interfaces/IRewardDelegators.sol";
 
 /**
  * @title Jobs Contract
@@ -326,9 +327,21 @@ contract Jobs is
         }
 
         // deposit escrow amount(USDC)
-        USDC_TOKEN.safeTransferFrom(_jobOwner, address(this), _deadline * getJobExecutionFeePerMs(_env));
+        uint256 tokenAmount = _deadline * getJobExecutionFeePerMs(_env);
+        USDC_TOKEN.safeTransferFrom(_jobOwner, address(this), tokenAmount);
 
         jobId = _create(_codehash, _codeInputs, _deadline, _jobOwner, _env, selectedNodes);
+
+        for (uint256 index = 0; index < selectedNodes.length; index++) {
+            address executor = selectedNodes[index];
+            // lock tokens for each selected executor
+            // TODO: how much tokens to lock?
+            rewardDelegators.lockTokens(
+                executor,
+                keccak256(abi.encodePacked(jobId, executor)),
+                tokenAmount
+            );
+        }
     }
 
     function _create(
@@ -381,6 +394,11 @@ contract Jobs is
         // reward ratio - 4:3:2
         _transferRewardPayout(_jobId, outputCount, enclaveAddress);
 
+        // unlock tokens
+        rewardDelegators.unlockTokens(enclaveAddress, keccak256(abi.encodePacked(_jobId, enclaveAddress)));
+
+        // release executor's commision and send the remaining reward to delegators
+
         // TODO: add callback gas
         if (outputCount == 1) {
             address jobOwner = jobs[_jobId].jobOwner;
@@ -426,10 +444,11 @@ contract Jobs is
         uint256 executionFeePerMs = executionEnv[jobs[_jobId].env].executionFeePerMs;
         uint256 stakingRewardPerMs = executionEnv[jobs[_jobId].env].stakingRewardPerMs;
         uint256 executorsFee = executionTime * executionFeePerMs;
+        uint256 reward;
         // for first output
         if (_outputCount == 1) {
             // transfer payout to executor
-            USDC_TOKEN.safeTransfer(owner, (executorsFee * 4) / 9);
+            reward = (executorsFee * 4) / 9;
             // transfer payout to payment pool
             USDC_TOKEN.safeTransfer(USDC_PAYMENT_POOL, executionTime * stakingRewardPerMs);
             // transfer to job owner
@@ -438,15 +457,23 @@ contract Jobs is
         // for second output
         else if (_outputCount == 2) {
             // transfer payout to executor
-            USDC_TOKEN.safeTransfer(owner, executorsFee / 3);
+            reward = executorsFee / 3;
         }
         // for 3rd output
         else {
             // transfer payout to executor
-            USDC_TOKEN.safeTransfer(owner, executorsFee - ((executorsFee * 4) / 9) - (executorsFee / 3));
+            reward = executorsFee - ((executorsFee * 4) / 9) - (executorsFee / 3);
             // cleanup job data after 3rd output submitted
             _cleanJobData(_jobId);
         }
+
+        // transfer payout to the executor contract
+        USDC_TOKEN.safeTransfer(address(EXECUTORS), reward);
+        // issue reward for the selected executor
+        EXECUTORS.issueReward(
+            _enclaveAddress,
+            reward
+        );
     }
 
     function _cleanJobData(uint256 _jobId) internal {
@@ -553,7 +580,10 @@ contract Jobs is
             address enclaveAddress = jobs[_jobId].selectedExecutors[index];
 
             if (!jobs[_jobId].hasExecutedJob[enclaveAddress]) {
-                slashAmount += EXECUTORS.slashExecutor(enclaveAddress);
+                // slashAmount += EXECUTORS.slashExecutor(enclaveAddress);
+                EXECUTORS.releaseExecutor(enclaveAddress);
+                // TODO: shall it transfer all the slashed token here to distribute
+                rewardDelegators.slash(enclaveAddress, keccak256(abi.encodePacked(_jobId, enclaveAddress)));
                 emit SlashedOnExecutionTimeout(_jobId, enclaveAddress);
             }
             delete jobs[_jobId].hasExecutedJob[enclaveAddress];
@@ -562,18 +592,19 @@ contract Jobs is
         delete jobs[_jobId].selectedExecutors;
         delete jobs[_jobId];
 
-        if (isNoOutputSubmitted) {
-            // transfer the slashed amount to job owner
-            STAKING_TOKEN.safeTransfer(jobOwner, slashAmount);
-            // TODO: add gas limit
-            (bool success, ) = jobOwner.call(
-                abi.encodeWithSignature("oysterFailureCall(uint256,uint256)", _jobId, slashAmount)
-            );
-            emit JobFailureCallbackCalled(_jobId, success);
-        } else {
-            // transfer the slashed amount to payment pool
-            STAKING_TOKEN.safeTransfer(STAKING_PAYMENT_POOL, slashAmount);
-        }
+        // TODO: how to handle these transfers in new staking model
+        // if (isNoOutputSubmitted) {
+        //     // transfer the slashed amount to job owner
+        //     STAKING_TOKEN.safeTransfer(jobOwner, slashAmount);
+        //     // TODO: add gas limit
+        //     (bool success, ) = jobOwner.call(
+        //         abi.encodeWithSignature("oysterFailureCall(uint256,uint256)", _jobId, slashAmount)
+        //     );
+        //     emit JobFailureCallbackCalled(_jobId, success);
+        // } else {
+        //     // transfer the slashed amount to payment pool
+        //     STAKING_TOKEN.safeTransfer(STAKING_PAYMENT_POOL, slashAmount);
+        // }
     }
 
     function _releaseEscrowAmount(
@@ -629,4 +660,7 @@ contract Jobs is
     function getSelectedExecutors(uint256 _jobId) external view returns (address[] memory) {
         return jobs[_jobId].selectedExecutors;
     }
+
+    // new vars
+    IRewardDelegators public rewardDelegators;
 }
