@@ -24,6 +24,12 @@ in {
     "${nixpkgs}/nixos/modules/profiles/perlless.nix"
   ];
 
+  # NOTE: perlless.nix also sets initrd to be systemd based
+  # ensure the setup is according to that
+  #
+  # TODO: review if this is desirable
+  # a lot of things will need to change if not
+
   # image version
   system.image.version = "v0.1.0";
 
