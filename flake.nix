@@ -256,7 +256,7 @@
       };
       serverless.workerd = ./. + "/serverless/executor/runtime/workerd";
       tdx.nixos.green = import ./tdx/nixos/green.nix {
-        inherit nixpkgs systemConfig fenix naersk;
+        inherit nixpkgs systemConfig;
       };
     };
   in {
