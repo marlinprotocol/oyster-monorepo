@@ -1,3 +1,22 @@
+# goal: build as minimal an image as possible
+#
+# broadly, we aim to build
+# - a bzImage for the kernel
+# - an initrd for the initial ramdisk
+# - a .raw file for the real disk
+# the initrd is more or less a necessary step for bootstrapping
+# since we want the real disk to be verified and/or encrypted in some fashion
+#
+# Green images are supposed to have
+# - a known constant starting point
+# - temporary writable state
+# - no persistent state across reboots
+#
+# The broad architecture chosen for this is
+# - a read only boot disk
+# - dm-verity to verify the disk
+# - a writable overlay on top in memory
+
 {
   nixpkgs,
   systemConfig,
@@ -5,15 +24,6 @@
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
 in {
-  # goal: build as minimal a config as possible
-  #
-  # broadly, we aim to build
-  # - a bzImage for the kernel
-  # - an initrd for the initial ramdisk
-  # - a .raw file for the real disk
-  # the initrd is more or less a necessary step for bootstrapping
-  # since we want the real disk to be verified and/or encrypted in some fashion
-
   # nixos has good presets to get started
   imports = [
     # use the minimal profile as the starting point
