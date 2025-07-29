@@ -59,9 +59,6 @@
       "python"
     ];
 
-    # nix itself is not needed once the image is built
-    nix.enable = false;
-
     # FIXME: added for now just so the build works
     fileSystems = {
       "/" = {
