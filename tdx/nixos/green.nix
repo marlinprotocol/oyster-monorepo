@@ -68,6 +68,12 @@
     system = systemConfig.system;
     modules = [config];
   };
+  erofs =
+    pkgs.runCommand "erofs" {
+      nativeBuildInputs = [pkgs.erofs-utils];
+    } ''
+      mkfs.erofs $out ${nixos.config.system.build.toplevel}
+    '';
 in {
-  default = nixos.config.system.build.toplevel;
+  default = erofs;
 }
