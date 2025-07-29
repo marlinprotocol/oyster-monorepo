@@ -102,6 +102,8 @@
     programs.bash.completion.enable = false;
     # disable nano
     programs.nano.enable = false;
+    # disable sudo
+    security.sudo.enable = false;
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
