@@ -76,6 +76,8 @@
         Verity = "hash";
         VerityMatchKey = "store";
         Label = "store-verity";
+        # Not able to auto deduce for some reason
+        SizeMinBytes = "50M";
       };
       # data partition
       "20-store" = {
@@ -86,6 +88,8 @@
           Verity = "data";
           VerityMatchKey = "store";
           Label = "store";
+          # Not able to auto deduce for some reason
+          SizeMinBytes = "1G";
         };
       };
     };
