@@ -28,6 +28,7 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     info!(id, ?block, "closing job");
 
+    // TODO: we need to update the end epoch
     // target sql:
     // UPDATE jobs
     // SET is_closed = true
@@ -55,6 +56,7 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
         return Err(anyhow::anyhow!("could not find job"));
     }
 
+    // TODO: add timestamp
     // target sql:
     // INSERT INTO rate_revisions (job_id, value, block)
     // VALUES ("<id>", "<rate>", "<block>");
@@ -120,6 +122,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -140,6 +143,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (20 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -171,6 +175,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
+                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -182,6 +187,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -224,6 +230,7 @@ mod tests {
         );
 
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        // FIXME: this is not correct it should be the epoch when the job was closed
         assert_eq!(
             jobs::table
                 .select(jobs::all_columns)
@@ -240,6 +247,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
+                    BigDecimal::from(creation_timestamp),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -251,6 +259,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -264,6 +273,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(0),
                 42i64,
+                BigDecimal::from(creation_timestamp),
             )])
         );
 
@@ -303,6 +313,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -333,6 +344,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
             )])
         );
 
@@ -390,6 +402,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
             )])
         );
 
@@ -432,6 +445,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -452,6 +466,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
+                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -483,6 +498,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
+                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -494,6 +510,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -553,6 +570,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
+                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -564,6 +582,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );

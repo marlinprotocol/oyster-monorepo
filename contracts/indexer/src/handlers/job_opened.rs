@@ -28,12 +28,15 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     let (metadata, rate, balance, timestamp) =
         // parse rate and balance as B256 since the integer representation is not used
         <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
-    let (rate, balance, timestamp) = (
+    let (rate, balance, timestamp, timestamp_epoch) = (
         BigDecimal::from_str(&rate.to_string())?,
         BigDecimal::from_str(&balance.to_string())?,
         std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
+        BigDecimal::from_str(&timestamp.to_string())?,
     );
+    let run_duration = ((&balance * 10u64.pow(12)) / &rate).round(0);
+    let end_epoch = &timestamp_epoch + &run_duration;
 
     let block = log
         .block_number
@@ -55,13 +58,16 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?timestamp_epoch,
         ?block,
+        run_duration = run_duration.to_string(),
+        end_epoch = end_epoch.to_string(),
         "creating job"
     );
 
     // target sql:
-    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed)
-    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false);
+    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed, end_epoch)
+    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false, "<end_epoch>");
     diesel::insert_into(jobs::table)
         .values((
             jobs::id.eq(&id),
@@ -73,6 +79,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::last_settled.eq(&timestamp),
             jobs::created.eq(&timestamp),
             jobs::is_closed.eq(false),
+            jobs::end_epoch.eq(&end_epoch),
         ))
         .execute(conn)
         .context("failed to create job")?;
@@ -93,13 +100,14 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .context("failed to create deposit")?;
 
     // target sql:
-    // INSERT INTO rate_revisions (job_id, value, block)
-    // VALUES ("<id>", "<rate>", "<block>");
+    // INSERT INTO rate_revisions (job_id, value, block, timestamp)
+    // VALUES ("<id>", "<rate>", "<block>", "<timestamp>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
             rate_revisions::value.eq(&rate),
             rate_revisions::block.eq(block as i64),
+            rate_revisions::timestamp.eq(&timestamp_epoch),
         ))
         .execute(conn)
         .context("failed to insert rate revision")?;
@@ -113,6 +121,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?balance,
         ?timestamp,
         ?block,
+        run_duration = run_duration.to_string(),
+        end_epoch = end_epoch.to_string(),
         "created job"
     );
 
@@ -195,6 +205,7 @@ mod tests {
                 now,
                 now,
                 false,
+                BigDecimal::from(timestamp + (2 * 10u64.pow(12))),
             ))
         );
 
@@ -222,6 +233,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             ))
         );
 
@@ -253,6 +265,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -284,6 +297,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
             ))
         );
 
@@ -360,6 +374,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -371,6 +386,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -411,6 +427,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             )])
         );
 
@@ -442,6 +459,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -461,6 +479,7 @@ mod tests {
                 jobs::last_settled.eq(&now),
                 jobs::created.eq(&now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(timestamp + (2 * 10u64.pow(12)))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -485,6 +504,7 @@ mod tests {
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 rate_revisions::value.eq(BigDecimal::from(1)),
                 rate_revisions::block.eq(42i64),
+                rate_revisions::timestamp.eq(BigDecimal::from(timestamp)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -506,6 +526,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -517,6 +538,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -545,6 +567,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             )])
         );
 
@@ -605,6 +628,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -616,6 +640,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
                 )
             ])
         );
@@ -644,6 +669,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp),
             )])
         );
 
