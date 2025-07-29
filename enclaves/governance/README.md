@@ -41,15 +41,15 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 # Debug
 ./cli/oyster-cvm/target/release/oyster-cvm deploy \
 --wallet-private-key priv_key \
---image-url https://f4b201fa07e1.ngrok-free.app/image.eif \
+--image-url https://1fbadff6d8c1.ngrok-free.app/image.eif \
 --instance-type c6g.xlarge \
 --duration-in-minutes 15 \
 --init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
---init-params secrets/default_api_key:0:0:utf8:abc123defaultkey \
---init-params config/gov_contract:1:0:utf8:0x1234567890abcdef \
---init-params params/proposal_id:1:0:utf8:1234 \
---init-params params/start_ts:1:0:utf8:1723567200 \
---init-params params/data_hash:1:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+--init-params secrets/default_api_key:0:0:utf8:l86jFYjBFWZTQMRof96TpIGigjbZMUcr \
+--init-params config/gov_contract:0:0:utf8:0x5A4cDc889698a42D7DFE0C15da3adCF41E3db138 \
+--init-params params/proposal_id:0:0:utf8:0x541c9ed73525aee08e5767948513456f938b7f044e9059d6ad85568d0ba1d81b \
+--init-params params/start_ts:0:0:utf8:1753429929 \
+--init-params params/data_hash:0:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
 --init-params secrets/api_keys.json:0:0:file:./api_keys.json \
 --init-params config/chain_ids.json:0:0:file:./chain_ids.json \
 --init-params config/rpc_index.json:0:0:file:./rpc_index.json \
@@ -64,7 +64,7 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 --init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
 --init-params secrets/default_api_key:0:1:utf8:abc123defaultkey \
 --init-params config/gov_contract:1:0:utf8:0x1234567890abcdef \
---init-params params/proposal_id:1:0:utf8:1234 \
+--init-params params/proposal_id:1:0:utf8:0x0573C572DB4F4A205FF5D66E087AD4A1EFD6FC7B18E24D58A0E0544C9D287D1F \
 --init-params params/start_ts:1:0:utf8:1723567200 \
 --init-params params/data_hash:1:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
 --init-params secrets/api_keys.json:0:1:file:./api_keys.json \
@@ -72,6 +72,9 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 --init-params config/rpc_index.json:0:0:file:./rpc_index.json \
 
 
-# running python server for http
+running python server for http
 python3 -m http.server 8000
 ngrok http 8000
+
+601be54359df7a7947880232f7a3a98e64a071f93339f2b95f4a05b3457772693fe585f87f9cad9c1248313295156528f6
+601be54359df7a7947880232f7a3a98e64a071f93339f2b95f4a05b3457772693fe585f87f9cad9c1248313295156528f6

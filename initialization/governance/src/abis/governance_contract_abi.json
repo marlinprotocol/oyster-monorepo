@@ -1,7 +1,7 @@
 [
   {
     "inputs": [],
-    "name": "getNetworkList",
+    "name": "getAllNetworkConfigs",
     "outputs": [
       {
         "internalType": "uint256[]",

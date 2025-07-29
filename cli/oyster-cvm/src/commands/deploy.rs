@@ -240,7 +240,6 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .context("Failed to load init params")?
             .unwrap_or("".into()),
     );
-
     // Approve USDC and create job
     approve_usdc(total_cost, provider.clone()).await?;
 

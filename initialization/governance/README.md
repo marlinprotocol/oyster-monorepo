@@ -1,13 +1,13 @@
 # Init_params input
---init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
---init-params secrets/default_api_key:0:1:utf8:abc123defaultkey \
---init-params config/gov_contract:1:0:utf8:0x1234567890abcdef \
---init-params params/proposal_id:1:0:utf8:1234 \
---init-params params/start_ts:1:0:utf8:1723567200 \
---init-params params/data_hash:1:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
---init-params secrets/api_keys.json:0:1:file:./api_keys.json \
---init-params config/chain_ids.json:0:0:file:./chain_ids.json \
---init-params config/rpc_index.json:0:0:file:./rpc_index.json
+--init-params rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
+--init-params default_api_key:0:1:utf8:l86jFYjBFWZTQMRof96TpIGigjbZMUcr \
+--init-params gov_contract:1:0:utf8:0xF27C5d12e12E53a63A146709DBb78619dd0EEA00 \
+--init-params proposal_id:1:0:utf8:0xeaad6933228febe9dd393f9b2c4006eac7ff1f5f49e8332f279bdd3412f32717 \
+--init-params start_ts:1:0:utf8:1753152991 \
+--init-params data_hash:1:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+--init-params api_keys.json:0:1:file:./api_keys.json \
+--init-params chain_ids.json:0:0:file:./chain_ids.json \
+--init-params rpc_index.json:0:0:file:./rpc_index.json
 
 ## Json files
 So we have this from init_params

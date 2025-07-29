@@ -4,29 +4,30 @@ use std::collections::HashMap;
 use std::fs::{read, read_to_string};
 use std::sync::Arc;
 
-
-use anyhow::{anyhow, Context, Result};
-use base64::{prelude::BASE64_STANDARD, Engine};
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Parser;
+use ethers::abi::{Address, Token, encode};
 use ethers::providers::{Http, Provider};
 use ethers::types::{Bytes, H256, U256};
-use ethers::utils::keccak256;
-use governance_contract::{fetch_chain_contexts, tally_votes, GovernanceConfig, GovernanceContract, VoteOutcome};
-use libsodium_sys::crypto_scalarmult_base;
+
+use governance_contract::{
+    GovernanceConfig, GovernanceContract, VoteOutcome, fetch_chain_contexts, tally_votes,
+};
+use k256::sha2::{Digest, Sha256};
+use libsodium_sys::{crypto_scalarmult_base, sodium_init};
 use secp256k1::{Message, Secp256k1, SecretKey};
+
 use serde::{Deserialize, Serialize};
 use ureq;
 use warp::Filter;
-use k256::sha2::{Digest, Sha384};
 
 use crate::governance_contract::fetch_total_supply;
 
 #[derive(Debug, Serialize)]
 pub struct VoteResult {
-    pub enclave_sig: H256,
-    pub pcr16_sha256: H256,
-    pub pcr16_sha384: Bytes,
-    pub vote_result: Bytes,
+    pub enclave_sig: Bytes,
+    pub result_data: Bytes,
 }
 
 #[derive(Parser)]
@@ -53,16 +54,13 @@ pub struct AppConfig {
     pub start_ts: u64,
 }
 
-
-
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("[main] Starting enclave service initialization...");
 
     let args = Args::parse();
 
-    // TODO : Whenever the application fails at any step, still run the api server to allow knowing where it failed 
+    // TODO : Whenever the application fails at any step, still run the api server to allow knowing where it failed
     // Step 1: Load config from init-params
     let app_config = match load_app_config() {
         Ok(cfg) => {
@@ -91,36 +89,6 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let pcr16_sha256_bytes = match BASE64_STANDARD.decode(init_params.digest) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("[main] Failed to decode digest: {:?}", e);
-            return Ok(());
-        }
-    };
-
-    let pcr16_sha256 = H256::from_slice(&pcr16_sha256_bytes);
-    println!("[main] Loaded PCR16 SHA256: {}", hex::encode(pcr16_sha256.as_bytes()));
-
-    // let pcr16_sha384 = match read("/app/init-params-digest") {
-    //     Ok(contents) => {
-    //         let bytes = Bytes::from(contents);
-    //         println!("[main] Loaded PCR16 SHA384: {}", hex::encode(bytes.as_ref()));
-    //         bytes
-    //     }
-    //     Err(e) => {
-    //         eprintln!("[main] Failed to read /app/init-params-digest: {:?}", e);
-    //         Bytes::new() // empty fallback
-    //     }
-    // };
-
-    let mut pcr_hasher = Sha384::new();
-    pcr_hasher.update([0u8; 48]);
-    pcr_hasher.update(pcr16_sha256_bytes);
-    let pcr16_sha384: [u8; 48] = pcr_hasher.finalize().into();
-
-    println!("[main] Loaded PCR16 SHA384: {}", hex::encode(pcr16_sha384));
-
     // Step 2: Construct GovernanceConfig
     let gov_config = GovernanceConfig {
         rpc_url: app_config.rpc_url.clone(),
@@ -145,9 +113,9 @@ async fn main() -> anyhow::Result<()> {
     .context("Invalid RPC URL or failed to connect")?;
     let provider = Arc::new(provider);
     let contract = GovernanceContract::new(gov_config.gov_contract, provider.clone());
-    
+
     // Step 3: Fetch chain contexts from governance contract
-    let chain_contexts = fetch_chain_contexts(gov_config, &contract).await?;
+    let (chain_contexts, network_hash) = fetch_chain_contexts(gov_config, &contract).await?;
     println!("[main] Loaded chain contexts from contract:");
 
     for ctx in &chain_contexts {
@@ -162,6 +130,12 @@ async fn main() -> anyhow::Result<()> {
     let sk =
         fetch_encryption_key(&args.derive_endpoint).context("failed to fetch encryption key")?;
     let mut pk = [0u8; 32];
+
+    // SAFETY: no params, return value is checked properly
+    if unsafe { sodium_init() } < 0 {
+        bail!("failed to init libsodium");
+    }
+
     unsafe { crypto_scalarmult_base(pk.as_mut_ptr(), sk.as_ptr()) };
 
     // SAFETY: pk and sk are the right size
@@ -172,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         .try_into()
         .map_err(|_| anyhow!("proposal_id is not 32 bytes"))?;
 
-    let tally = tally_votes(
+    let (tally, vote_hash) = tally_votes(
         proposal_id_bytes,
         &contract,
         &chain_contexts,
@@ -186,35 +160,61 @@ async fn main() -> anyhow::Result<()> {
         println!("{:?}: {}", outcome, total_power);
     }
 
-    let supply = fetch_total_supply(&chain_contexts[0]).await
-        .ok_or_else(|| anyhow::anyhow!("Failed to fetch total supply for chain {}", chain_contexts[0].chain_id))?;
+    let supply = fetch_total_supply(&chain_contexts[0])
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to fetch total supply for chain {}",
+                chain_contexts[0].chain_id
+            )
+        })?;
 
-    println!("Total supply for chain {}: {}", chain_contexts[0].chain_id, supply);
+    println!(
+        "Total supply for chain {}: {}",
+        chain_contexts[0].chain_id, supply
+    );
 
     let privkey =
         fetch_signing_key(&args.derive_endpoint).context("failed to fetch signing key")?;
 
-    let vote_result_bytes = serialize_vote_result(&tally, supply);
+    println!(
+        "[main] network_hash :{}, vote_hash :{}",
+        hex::encode(network_hash),
+        hex::encode(vote_hash)
+    );
 
-    // let data_hash_h256 = H256::from_slice(
-    //     &hex::decode(app_config.data_hash.trim_start_matches("0x"))
-    //         .context("failed to decode data_hash hex")?,
-    // );
+    let gov_contract_addr: ethers::types::Address = app_config
+        .gov_contract
+        .parse()
+        .context("Invalid contract address")?;
 
-    // TODO: Implement logic to calculate `data_hash_h256` based on votes and network data.
-    // Then match it with the `data_hash` from init params.
-    // This requires aggregating vote results and network-specific parameters to derive the hash.
+    let data_hash = compute_result_hash(
+        gov_contract_addr,
+        U256::from(app_config.start_ts),
+        network_hash.into(),
+        vote_hash.into(),
+    );
+    println!("Result hash (sha256): 0x{}", hex::encode(data_hash));
+    
+    let vote_result_tokens = serialize_vote_result(&tally, supply);
 
-    let pcr16_sha384_bytes = Bytes::from(pcr16_sha384.to_vec());
-    let hash = compute_vote_result_hash(pcr16_sha256, &pcr16_sha384_bytes, &vote_result_bytes);
+    // Hash uses the *flattened* tokens
+    let hash = compute_vote_result_hash(
+        data_hash.into(),
+        proposal_id_bytes,
+        vote_result_tokens.clone(),
+    );
 
     let enclave_sig = sign_vote_result(hash, privkey)?;
 
+    let mut tokens = vec![Token::FixedBytes(proposal_id_bytes.to_vec())];
+    tokens.extend(vote_result_tokens);
+
+    let result_data = encode(&tokens);
+
     let result = VoteResult {
-        enclave_sig,
-        pcr16_sha256,
-        pcr16_sha384: pcr16_sha384_bytes,
-        vote_result: vote_result_bytes,
+        enclave_sig: enclave_sig.into(),
+        result_data : result_data.into(),
     };
 
     serve_result_api(result).await;
@@ -249,43 +249,61 @@ fn fetch_signing_key(endpoint: &str) -> Result<[u8; 32]> {
         .context("failed to parse reponse")?)
 }
 
-fn serialize_vote_result(results: &HashMap<VoteOutcome, U256>, supply: U256) -> Bytes {
-    let mut encoded = vec![];
-
-    for variant in [
-        VoteOutcome::Passed,
-        VoteOutcome::Failed,
-        VoteOutcome::Pending,
-        VoteOutcome::Vetoed,
-    ] {
-        let vote_count = results.get(&variant).cloned().unwrap_or_default();
-        let mut buf = [0u8; 32];
-        vote_count.to_big_endian(&mut buf);
-        encoded.extend_from_slice(&buf);
-    }
-
-    // Add supply as the final 32 bytes
-    let mut supply_buf = [0u8; 32];
-    supply.to_big_endian(&mut supply_buf);
-    encoded.extend_from_slice(&supply_buf);
-
-    Bytes::from(encoded)
-}
-
-fn compute_vote_result_hash(
-    pcr16_sha256: H256,
-    pcr16_sha384: &Bytes,
-    vote_result_bytes: &Bytes,
+fn compute_result_hash(
+    gov_contract_addr: ethers::types::Address,
+    start_ts: U256,
+    network_hash: H256,
+    vote_hash: H256,
 ) -> H256 {
-    let mut combined = vec![];
-    combined.extend_from_slice(pcr16_sha256.as_bytes());
-    combined.extend_from_slice(pcr16_sha384.as_ref());
-    combined.extend_from_slice(vote_result_bytes.as_ref());
+    // ABI-encode the parameters
+    let encoded = ethers::abi::encode(&[
+        Token::Address(gov_contract_addr),
+        Token::Uint(start_ts),
+        Token::FixedBytes(network_hash.as_bytes().to_vec()),
+        Token::FixedBytes(vote_hash.as_bytes().to_vec()),
+    ]);
 
-    H256::from(keccak256(combined))
+    // Compute SHA-256 over the ABI-encoded buffer
+    let result = Sha256::digest(&encoded);
+    H256::from_slice(&result)
 }
 
-fn sign_vote_result(hash: H256, privkey_array: [u8; 32]) -> Result<H256> {
+// Serializes the `VoteDecisionResult` (struct of 5 uint256s)
+fn serialize_vote_result(results: &HashMap<VoteOutcome, U256>, supply: U256) -> Vec<Token> {
+    let yes = results.get(&VoteOutcome::Passed).cloned().unwrap_or_default();
+    let no = results.get(&VoteOutcome::Failed).cloned().unwrap_or_default();
+    let abstain = results.get(&VoteOutcome::Pending).cloned().unwrap_or_default();
+    let no_with_veto = results.get(&VoteOutcome::Vetoed).cloned().unwrap_or_default();
+
+    vec![
+        Token::Uint(yes),
+        Token::Uint(no),
+        Token::Uint(abstain),
+        Token::Uint(no_with_veto),
+        Token::Uint(supply),
+    ]
+}
+
+// Fully equivalent to Solidity's abi.encode(contractDataHash, proposalId, voteDecisionResult)
+fn compute_vote_result_hash(
+    contract_data_hash: [u8; 32], // bytes32
+    proposal_id: [u8; 32],        // bytes32
+    vote_result: Vec<Token>,      // 5 x uint256 tokens
+) -> H256 {
+    let mut all_tokens = vec![
+        Token::FixedBytes(contract_data_hash.to_vec()), // bytes32
+        Token::FixedBytes(proposal_id.to_vec()),        // bytes32
+    ];
+
+    all_tokens.extend(vote_result); // Append 5 uint256s
+
+    let encoded = encode(&all_tokens);
+
+    let digest = Sha256::digest(&encoded);
+    H256::from_slice(&digest)
+}
+
+fn sign_vote_result(hash: H256, privkey_array: [u8; 32]) -> Result<Vec<u8>> {
     let secp = Secp256k1::signing_only();
 
     let secret_key = SecretKey::from_byte_array(privkey_array)
@@ -293,10 +311,14 @@ fn sign_vote_result(hash: H256, privkey_array: [u8; 32]) -> Result<H256> {
 
     let msg = Message::from_digest(hash.into());
 
-    let sig = secp.sign_ecdsa(msg, &secret_key);
-    let sig_bytes = sig.serialize_compact();
+    let sig = secp.sign_ecdsa_recoverable(msg, &secret_key);
+    let (recovery_id, compact_sig) = sig.serialize_compact();
 
-    Ok(H256::from_slice(&sig_bytes[..32])) // Truncate for compatibility
+    let mut sig_bytes = [0u8; 65];
+    sig_bytes[..64].copy_from_slice(&compact_sig[..]);
+    sig_bytes[64] = (Into::<i32>::into(recovery_id) as u8) + 27;
+
+    Ok(sig_bytes.to_vec())
 }
 
 pub async fn serve_result_api(result: VoteResult) {
@@ -314,14 +336,28 @@ pub fn load_app_config() -> Result<AppConfig> {
     use std::fs;
     // TODO : move this to init_params args only, hard coded for now
     Ok(AppConfig {
-        rpc_url: fs::read_to_string("/init-params/config/rpc_url")?.trim().to_string(),
-        default_api_key: fs::read_to_string("/init-params/secrets/default_api_key")?.trim().to_string(),
+        rpc_url: fs::read_to_string("/init-params/config/rpc_url")?
+            .trim()
+            .to_string(),
+        default_api_key: fs::read_to_string("/init-params/secrets/default_api_key")?
+            .trim()
+            .to_string(),
         api_keys: serde_json::from_str(&fs::read_to_string("/init-params/secrets/api_keys.json")?)?,
-        chain_ids: serde_json::from_str(&fs::read_to_string("/init-params/config/chain_ids.json")?)?,
-        rpc_index: serde_json::from_str(&fs::read_to_string("/init-params/config/rpc_index.json")?)?,
-        gov_contract: fs::read_to_string("/init-params/config/gov_contract")?.trim().to_string(),
-        proposal_id: fs::read_to_string("/init-params/params/proposal_id")?.trim().to_string(),
-        data_hash: fs::read_to_string("/init-params/params/data_hash")?.trim().to_string(),
+        chain_ids: serde_json::from_str(&fs::read_to_string(
+            "/init-params/config/chain_ids.json",
+        )?)?,
+        rpc_index: serde_json::from_str(&fs::read_to_string(
+            "/init-params/config/rpc_index.json",
+        )?)?,
+        gov_contract: fs::read_to_string("/init-params/config/gov_contract")?
+            .trim()
+            .to_string(),
+        proposal_id: fs::read_to_string("/init-params/params/proposal_id")?
+            .trim()
+            .to_string(),
+        data_hash: fs::read_to_string("/init-params/params/data_hash")?
+            .trim()
+            .to_string(),
         start_ts: fs::read_to_string("/init-params/params/start_ts")?
             .trim()
             .parse()

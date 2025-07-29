@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use ethers::{
+    abi::{Token, encode},
     contract::abigen,
     providers::{Http, Middleware, Provider},
     types::{Address, BlockId, BlockNumber, H160, U256},
 };
-use libsodium_sys::{crypto_box_SEALBYTES, crypto_box_seal_open, sodium_init};
+use k256::sha2::{Digest, Sha256};
+use libsodium_sys::{crypto_box_SEALBYTES, crypto_box_seal_open};
 use std::{collections::HashMap, sync::Arc};
 
 // ------------------------
@@ -79,11 +81,10 @@ impl TryFrom<u8> for VoteOutcome {
 pub async fn fetch_chain_contexts(
     config: GovernanceConfig,
     contract: &GovernanceContract<Provider<Http>>,
-) -> Result<Vec<ChainContext>> {
-
+) -> Result<(Vec<ChainContext>, [u8; 32])> {
     // TODO : Fetch these networkconfig and chain_ids for start timestamp (don't know how to do this yet)
     let (chain_ids_list, raw_configs): (Vec<U256>, Vec<NetworkConfig>) = contract
-        .get_network_list()
+        .get_all_network_configs()
         .call()
         .await
         .context("failed to fetch network list")?;
@@ -107,6 +108,7 @@ pub async fn fetch_chain_contexts(
     }
 
     let mut contexts = vec![];
+    let mut chain_hashes = vec![];
 
     for (i, &chain_id) in config.chain_ids.iter().enumerate() {
         let index = chain_ids_list
@@ -130,6 +132,18 @@ pub async fn fetch_chain_contexts(
 
         let full_url = format!("{}/{}", raw_base_url.trim_end_matches('/'), key);
 
+        // === chainHash = sha256(abi.encode(chain_id, rpc_urls)) ===
+        let chain_hash = compute_chain_hash(chain_id, &rpc_urls);
+        
+        println!(
+            "chain_id: {} | rpc_url: {:?}\n  chainHash = 0x{}\n",
+            chain_id,
+            rpc_urls,
+            hex::encode(chain_hash)
+        );
+        // === append encoded(chain_hash) for network hash ===
+        chain_hashes.push(chain_hash);
+
         contexts.push(ChainContext {
             chain_id,
             rpc_urls: vec![full_url],
@@ -137,20 +151,24 @@ pub async fn fetch_chain_contexts(
         });
     }
 
-    Ok(contexts)
+    // Final network hash: sha256 of all encoded chain hashes
+    let network_hash = compute_network_hash(chain_hashes);
+    println!("✅ Final NetworkHash = 0x{}", hex::encode(network_hash));
+
+    Ok((contexts, network_hash.into()))
 }
 
 pub async fn fetch_votes(
     contract: &GovernanceContract<Provider<Http>>,
     proposal_id: [u8; 32],
-) -> Result<Vec<(Address, Vec<u8>)>> {
+) -> Result<HashMap<Address, Vec<u8>>> {
     let vote_count = contract
         .get_vote_count(proposal_id)
         .call()
         .await
         .context("Failed to fetch vote count")?;
 
-    let mut votes = vec![];
+    let mut votes = HashMap::new();
 
     for i in 0..vote_count.as_u64() {
         let (voter, decision) = contract
@@ -158,18 +176,21 @@ pub async fn fetch_votes(
             .call()
             .await
             .with_context(|| format!("Failed to fetch vote #{}", i))?;
-        votes.push((voter, decision.to_vec()));
+
+        // This will overwrite older entries with the latest vote by this voter
+        votes.insert(voter, decision.to_vec());
+        println!(
+            "Fetched vote {}: voter = {}, decision = {}",
+            i,
+            hex::encode(voter),
+            hex::encode(&decision)
+        );
     }
 
     Ok(votes)
 }
 
 pub fn decrypt_vote(encrypted: &[u8], pk: &[u8; 32], sk: &[u8; 32]) -> Result<VoteOutcome> {
-    // TODO: make sure no memory leaks if possible
-    unsafe {
-        sodium_init(); // required before using sodium APIs
-    }
-
     if encrypted.len() < crypto_box_SEALBYTES as usize {
         anyhow::bail!(
             "Encrypted vote too short: got {}, expected at least {}",
@@ -235,7 +256,6 @@ async fn find_snapshot_block<M: Middleware + 'static>(
     }
     Ok(low)
 }
-
 pub async fn tally_votes(
     proposal_id: [u8; 32],
     contract: &GovernanceContract<Provider<Http>>,
@@ -243,18 +263,34 @@ pub async fn tally_votes(
     pk: &[u8; 32],
     sk: &[u8; 32],
     start_timestamp: u64,
-) -> Result<HashMap<VoteOutcome, U256>> {
+) -> Result<(HashMap<VoteOutcome, U256>, [u8; 32])> {
     let mut results: HashMap<VoteOutcome, U256> = HashMap::new();
     let votes = fetch_votes(contract, proposal_id).await?;
 
-    // TODO : optimization
-    // This is a sequential loop for simplicity
+    println!(
+        "Fetched {} votes for proposal {}",
+        votes.len(),
+        hex::encode(proposal_id)
+    );
+
+    // Initial vote hash is zero
+    let mut vote_hash = [0u8; 32];
+
     for (voter, encrypted) in votes {
-        // TODO: better to do decryption while fetching votes to simplify this logic
+        // Update vote_hash: vote_hash = keccak256(abi.encode(vote_hash, encrypted))
+        let vote_encrypted_hash = Sha256::digest(&encrypted);
+        let mut hasher = Sha256::new();
+        hasher.update(&vote_hash);
+        hasher.update(&vote_encrypted_hash);
+
+        vote_hash = hasher.finalize().into();
+
+        // Decrypt the vote
         let outcome = decrypt_vote(&encrypted, pk, sk)?;
         let mut total_power = U256::zero();
 
         for chain in chains {
+            // TODO: Match token from two different rpc_urls
             for url in &chain.rpc_urls {
                 let provider = match Provider::<Http>::try_from(url) {
                     Ok(p) => p,
@@ -278,8 +314,6 @@ pub async fn tally_votes(
                 {
                     Ok(balance) => {
                         total_power += balance;
-                        // TODO: check for multiple rpcs for each chain
-                        // If it is consistent, break
                         break;
                     }
                     Err(_) => continue,
@@ -290,7 +324,7 @@ pub async fn tally_votes(
         *results.entry(outcome).or_insert(U256::zero()) += total_power;
     }
 
-    Ok(results)
+    Ok((results, vote_hash))
 }
 
 pub async fn fetch_total_supply(chain: &ChainContext) -> Option<U256> {
@@ -298,10 +332,43 @@ pub async fn fetch_total_supply(chain: &ChainContext) -> Option<U256> {
         if let Ok(provider) = Provider::<Http>::try_from(url) {
             let client = Arc::new(provider);
             let token = ERC20::new(chain.token_address, client);
-            if let Ok(supply) = token.method::<_, U256>("totalSupply", ()).unwrap().call().await {
+            if let Ok(supply) = token
+                .method::<_, U256>("totalSupply", ())
+                .unwrap()
+                .call()
+                .await
+            {
                 return Some(supply);
             }
         }
     }
     None
+}
+
+/// Compute chainHash = sha256(abi.encode(chainId, rpcUrl))
+fn compute_chain_hash(chain_id: u64, rpc_urls: &[String]) -> [u8; 32] {
+    let encoded = encode(&[
+        Token::Uint(chain_id.into()),
+        Token::Array(
+            rpc_urls
+                .iter()
+                .map(|url| Token::String(url.clone()))
+                .collect(),
+        ),
+    ]);
+
+    Sha256::digest(&encoded).into()
+}
+
+fn compute_network_hash(chain_hashes: Vec<[u8; 32]>) -> [u8; 32] {
+    let mut encoded: Vec<u8> = vec![];                
+    
+    for chain_hash in chain_hashes {                  
+        encoded = encode(&[                       
+            Token::Bytes(encoded.clone()),            
+            Token::FixedBytes(chain_hash.to_vec()),   
+        ]);                                           
+    }
+    
+    Sha256::digest(&encoded).into()                   
 }
