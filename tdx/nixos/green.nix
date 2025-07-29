@@ -73,6 +73,8 @@
     # use image.repart to create the nixos data partition and the dm-verity hash partition
     # ref: https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/image/repart-verity-store.nix#L92
     image.repart.name = "store";
+    image.repart.version = "v0.1.0";
+    image.repart.sectorSize = 4096;
     image.repart.partitions = {
       # hash partition
       "10-store-verity".repartConfig = {
