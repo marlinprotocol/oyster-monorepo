@@ -31,6 +31,8 @@
       "${nixpkgs}/nixos/modules/profiles/headless.nix"
       # trim perl and anything which needs perl
       "${nixpkgs}/nixos/modules/profiles/perlless.nix"
+      # build as a one-shot appliance since it will never get updated
+      "${nixpkgs}/nixos/modules/profiles/image-based-appliance.nix"
 
       # image.repart support
       "${nixpkgs}/nixos/modules/image/repart.nix"
