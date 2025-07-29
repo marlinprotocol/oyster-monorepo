@@ -22,7 +22,7 @@
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
-  config = {
+  nixosConfig = {config, ...}: {
     # nixos has good presets to get started
     imports = [
       # use the minimal profile as the starting point
@@ -31,6 +31,9 @@
       "${nixpkgs}/nixos/modules/profiles/headless.nix"
       # trim perl and anything which needs perl
       "${nixpkgs}/nixos/modules/profiles/perlless.nix"
+
+      # image.repart support
+      "${nixpkgs}/nixos/modules/image/repart.nix"
     ];
 
     # NOTE: perlless.nix also sets initrd to be systemd based
@@ -63,17 +66,35 @@
         fsType = "tmpfs";
       };
     };
+
+    # use image.repart to create the nixos data partition and the dm-verity hash partition
+    # ref: https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/image/repart-verity-store.nix#L92
+    image.repart.name = "store";
+    image.repart.partitions = {
+      # hash partition
+      "10-store-verity".repartConfig = {
+        Type = "usr-x86-64-verity";
+        Verity = "hash";
+        VerityMatchKey = "store";
+        Label = "store-verity";
+      };
+      # data partition
+      "20-store" = {
+        storePaths = [config.system.build.toplevel];
+        repartConfig = {
+          Type = "usr-x86-64";
+          Format = "erofs";
+          Verity = "data";
+          VerityMatchKey = "store";
+          Label = "store";
+        };
+      };
+    };
   };
-  nixos = nixpkgs.lib.nixosSystem {
+  nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
-    modules = [config];
+    modules = [nixosConfig];
   };
-  erofs =
-    pkgs.runCommand "erofs" {
-      nativeBuildInputs = [pkgs.erofs-utils];
-    } ''
-      mkfs.erofs $out ${nixos.config.system.build.toplevel}
-    '';
 in {
-  default = erofs;
+  default = nixosSystem.config.system.build.image;
 }
