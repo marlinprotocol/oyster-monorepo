@@ -59,6 +59,10 @@
       "python"
     ];
 
+    # the appliance profile causes us to be locked out and nix does not like it
+    # set this to tell nix we know what we are doing
+    users.allowNoPasswordLogin = true;
+
     # FIXME: added for now just so the build works
     fileSystems = {
       "/" = {
