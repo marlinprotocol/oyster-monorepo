@@ -104,6 +104,8 @@
     programs.nano.enable = false;
     # disable sudo
     security.sudo.enable = false;
+    # disable pam_p11 module
+    security.pam.p11.enable = false;
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
