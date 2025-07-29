@@ -97,6 +97,9 @@
         };
       };
     };
+
+    # disable bash completions
+    programs.bash.completion.enable = false;
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
