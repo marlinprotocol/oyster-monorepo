@@ -13,6 +13,7 @@ use anyhow::Result;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
+use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
@@ -36,13 +37,33 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
-
     info!(id, ?amount, "depositing into job");
 
-    // TODO: we need to update the end epoch
+    // get the current rate of the job to calculate how much more time the job will run for
+    // we can also error out here if the job does not exist or is closed but for now we just move on.
+
+    // target sql:
+    // SELECT rate FROM jobs
+    // WHERE id = "<id>" AND is_closed = false;
+    let rate = jobs::table
+        .filter(jobs::id.eq(&id))
+        .filter(jobs::is_closed.eq(false))
+        .select(jobs::rate)
+        .first::<BigDecimal>(conn)
+        .context("failed to get job rate")?;
+
+    let additional_duration = ((&amount * 10u64.pow(12)) / &rate).round(0);
+
+    info!(
+        id,
+        ?rate,
+        ?additional_duration,
+        "got job rate and additional duration"
+    );
+
     // target sql:
     // UPDATE jobs
-    // SET balance = balance + <amount>
+    // SET balance = balance + <amount>, end_epoch = end_epoch + <additional_duration>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -51,7 +72,10 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::balance.eq(jobs::balance.add(&amount)))
+        .set((
+            jobs::balance.eq(jobs::balance.add(&amount)),
+            jobs::end_epoch.eq(jobs::end_epoch.add(&additional_duration)),
+        ))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -94,6 +118,7 @@ mod tests {
 
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
     use crate::schema::providers;
 
     use super::*;
@@ -255,8 +280,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(creation_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -455,8 +481,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -665,8 +692,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));

@@ -244,7 +244,6 @@ mod tests {
         );
 
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
-        // FIXME: this is not correct it should be the epoch when the job was closed
         assert_eq!(
             jobs::table
                 .select(jobs::all_columns)
