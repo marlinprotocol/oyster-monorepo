@@ -73,7 +73,7 @@ impl LogsProvider for AlloyProvider {
 #[instrument(level = "info", skip_all, parent = None)]
 pub fn event_loop(
     conn: &mut PgConnection,
-    mut provider: impl LogsProvider,
+    provider: &mut impl LogsProvider,
     range_size: u64,
 ) -> Result<()> {
     // fetch last updated block from the db
@@ -126,9 +126,9 @@ pub fn event_loop(
         // NOTE: diesel transactions are synchronous, async is not allowed inside
         // might be limiting for certain things like making rpc queries while processing logs
         // using a temporary tokio runtime is a possibility
-        conn.transaction(move |conn| {
+        conn.transaction(|conn| {
             for log in logs {
-                handle_log(conn, log).context("failed to handle log")?;
+                handle_log(conn, log, provider).context("failed to handle log")?;
             }
             diesel::update(schema::sync::table)
                 .set(schema::sync::block.eq(end_block as i64))

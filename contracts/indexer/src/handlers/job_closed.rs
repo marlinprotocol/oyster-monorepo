@@ -1,5 +1,6 @@
 use crate::schema::jobs;
 use crate::schema::rate_revisions;
+use crate::LogsProvider;
 use alloy::hex::ToHexExt;
 use alloy::rpc::types::Log;
 use anyhow::anyhow;
@@ -13,25 +14,32 @@ use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_closed(
+    conn: &mut PgConnection,
+    log: Log,
+    provider: &impl LogsProvider,
+) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
     let block = log
         .block_number
         .ok_or(anyhow!("did not get block from log"))?;
+
+    // Fetch the block timestamp from the RPC can remove once alloy supports block_timestamp
+    let block_timestamp = provider.block_timestamp(block)?;
+
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
     //
     // do we not have to delete outstanding revise rate requests?
     // no, it is handled by LockDeleted
 
-    info!(id, ?block, "closing job");
+    info!(id, ?block, ?block_timestamp, "closing job");
 
-    // TODO: we need to update the end epoch
     // target sql:
     // UPDATE jobs
-    // SET is_closed = true
+    // SET is_closed = true, end_epoch = block_timestamp
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -44,6 +52,7 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::is_closed.eq(true),
             jobs::rate.eq(BigDecimal::from(0)),
             jobs::balance.eq(BigDecimal::from(0)),
+            jobs::end_epoch.eq(BigDecimal::from(block_timestamp)),
         ))
         .execute(conn)
         .context("failed to update job")?;
@@ -56,15 +65,15 @@ pub fn handle_job_closed(conn: &mut PgConnection, log: Log) -> Result<()> {
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    // TODO: add timestamp
     // target sql:
-    // INSERT INTO rate_revisions (job_id, value, block)
-    // VALUES ("<id>", "<rate>", "<block>");
+    // INSERT INTO rate_revisions (job_id, value, block, timestamp)
+    // VALUES ("<id>", "<rate>", "<block>", "<block_timestamp>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
             rate_revisions::value.eq(&BigDecimal::from(0)),
             rate_revisions::block.eq(block as i64),
+            rate_revisions::timestamp.eq(BigDecimal::from(block_timestamp)),
         ))
         .execute(conn)
         .context("failed to insert rate revision")?;
