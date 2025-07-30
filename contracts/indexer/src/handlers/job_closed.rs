@@ -94,6 +94,7 @@ mod tests {
 
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
     use crate::schema::providers;
 
     use super::*;
@@ -224,8 +225,12 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(creation_timestamp);
+        // block number is not being used as we are mocking the block timestamp
+        let block_timestamp = provider.block_timestamp(42)?;
+
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -256,7 +261,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
-                    BigDecimal::from(creation_timestamp),
+                    BigDecimal::from(block_timestamp),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -282,7 +287,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(0),
                 42i64,
-                BigDecimal::from(creation_timestamp),
+                BigDecimal::from(block_timestamp),
             )])
         );
 
@@ -380,8 +385,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -547,8 +553,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
