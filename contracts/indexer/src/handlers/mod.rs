@@ -142,3 +142,4 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
 
 #[cfg(test)]
 mod test_db;
+mod test_utils;
