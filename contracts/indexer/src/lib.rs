@@ -17,6 +17,7 @@ use tracing::{info, instrument};
 pub trait LogsProvider {
     fn latest_block(&mut self) -> Result<u64>;
     fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>>;
+    fn block_timestamp(&self, block_number: u64) -> Result<u64>;
 }
 
 #[derive(Clone)]
@@ -51,6 +52,21 @@ impl LogsProvider for AlloyProvider {
                         .address(self.contract),
                 ),
         )?)
+    }
+
+    fn block_timestamp(&self, block_number: u64) -> Result<u64> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(rt
+            .block_on(
+                alloy::providers::ProviderBuilder::new()
+                    .on_http(self.url.clone())
+                    .get_block_by_number(block_number.into(), false),
+            )?
+            .map(|b| b.header.timestamp)
+            .unwrap_or(0)
+            .into())
     }
 }
 
