@@ -109,6 +109,8 @@ contract Governance is
 
     uint256[50] private __gap1;
 
+    /// @dev setTokenLockAmount, setNetworkConfig should be seperately called after initialization
+    ///      Otherwise, propose() will revert
     function initialize(
         address _admin,
         address _configSetter,
@@ -186,11 +188,11 @@ contract Governance is
     }
 
     function setMinQuorumThreshold(uint256 _minQuorumThreshold) external onlyConfigSetter {
-        _setMinQuorumThreshold(_minQuorumThreshold); 
+        _setMinQuorumThreshold(_minQuorumThreshold);
     }
 
     function _setMinQuorumThreshold(uint256 _minQuorumThreshold) internal {
-        require(_minQuorumThreshold > 0, "Minimum quorum must be greater than zero");
+        require(_minQuorumThreshold > 0, InvalidMinQuorumThreshold());
         minQuorumThreshold = _minQuorumThreshold;
         emit MinQuorumThresholdSet(_minQuorumThreshold);
     }
@@ -267,19 +269,27 @@ contract Governance is
     /// @dev If the chainId is not in supportedChainIds, it will be added.
     /// @param _chainId The chain ID for which the network config is being set
     /// @param _tokenAddress The address of the token contract on the specified chain
+    ///          If the token address is set to address(0), the chainId will be removed from supportedChainIds
     /// @param _rpcUrls An array of RPC URLs for the specified chain
     function setNetworkConfig(uint256 _chainId, address _tokenAddress, string[] calldata _rpcUrls)
         public
         onlyConfigSetter
     {
-        // TODO: remove _chainId from supportedChains when `_tokenAddress` == address(0);
-
         require(_chainId > 0, InvalidChainId());
-        require(_tokenAddress != address(0), InvalidTokenAddress());
         require(_rpcUrls.length > 0, InvalidRpcUrl());
         require(_rpcUrls.length <= maxRPCUrlsPerChain, MaxRpcUrlsPerChainReached());
 
-        // Check if the token address is already set for the chainId
+        // If _tokenAddress is address(0), remove the chainId from supportedChainIds
+        if (_tokenAddress == address(0)) {
+            _removeChainIdFromSupported(_chainId);
+            // Clear the token network config for this chainId
+            delete tokenNetworkConfigs[_chainId];
+            networkHash = _calcNetworkHash();
+            emit NetworkConfigSet(_chainId, _tokenAddress, _rpcUrls, networkHash);
+            return;
+        }
+
+        // Check if the chainId is already set for the chainId
         bool chainIdExists = false;
         for (uint256 i = 0; i < supportedChainIds.length; ++i) {
             if (supportedChainIds[i] == _chainId) {
@@ -314,44 +324,20 @@ contract Governance is
         return sha256(chainHashEncoded);
     }
 
-    // // TODO: remove
-    // /// @notice Adds a new RPC URL for the specified chainId into rpcUrls array
-    // function addRpcUrl(uint256 _chainId, string[] calldata _rpcUrl) external onlyConfigSetter {
-    //     require(_chainId > 0, InvalidChainId());
-
-    //     if (tokenNetworkConfigs[_chainId].rpcUrls.length == maxRPCUrlsPerChain) {
-    //         revert MaxRpcUrlsPerChainReached();
-    //     }
-
-    //     // Check RPC url length
-    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-    //         require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-    //     }
-
-    //     // Check if the chainId is supported
-    //     bool chainIdExists = false;
-    //     for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-    //         if (supportedChainIds[i] == _chainId) {
-    //             chainIdExists = true;
-    //             break;
-    //         }
-    //     }
-    //     require(chainIdExists, InvalidChainId());
-
-    //     // Add the new RPC URL to the rpcUrls array for the specified chainId
-    //     TokenNetworkConfig storage config = tokenNetworkConfigs[_chainId];
-    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-    //         require(bytes(_rpcUrl[i]).length > 0, InvalidRpcUrl());
-    //         config.rpcUrls.push(_rpcUrl[i]);
-    //     }
-
-    //     // Emit an event for the added RPC URL
-    //     for (uint256 i = 0; i < _rpcUrl.length; ++i) {
-    //         emit RpcUrlAdded(_chainId, _rpcUrl[i]);
-    //     }
-
-    //     // TODO: update rpc url
-    // }
+    /// @notice Remove a chainId from the supportedChainIds array
+    /// @dev This function removes the specified chainId from the supportedChainIds array
+    /// @param _chainId The chain ID to remove from supported chain IDs
+    function _removeChainIdFromSupported(uint256 _chainId) internal {
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) {
+                // Move the last element to the position of the element to delete
+                supportedChainIds[i] = supportedChainIds[supportedChainIds.length - 1];
+                // Remove the last element
+                supportedChainIds.pop();
+                break;
+            }
+        }
+    }
 
     /// @notice Updates an existing RPC URL for the specified chainId at the given index
     /// @notice This will overwrite the existing rpc urls for the chainId
@@ -375,7 +361,7 @@ contract Governance is
     }
 
     function _setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) internal {
-        require(_kmsRootServerPubKey.length > 0, "KMS Root Server Public Key cannot be empty");
+        require(_kmsRootServerPubKey.length > 0, InvalidKMSRootServerPubKey());
         kmsRootServerPubKey = _kmsRootServerPubKey;
         emit KMSRootServerPubKeySet(_kmsRootServerPubKey);
     }
@@ -388,11 +374,11 @@ contract Governance is
     }
 
     function _setKMSPath(string calldata _kmsPath) internal {
-        require(bytes(_kmsPath).length > 0, "KMS Path cannot be empty");
+        require(bytes(_kmsPath).length > 0, InvalidKMSPath());
         kmsPath = _kmsPath;
         emit KMSPathSet(_kmsPath);
     }
-    
+
     /// @notice Set PCR0, PCR1, PCR2 value, and update imageId with the generated imageId from the PCR0,PCR1,PCR2 values
     function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyConfigSetter {
         _setPCRConfig(_pcr0, _pcr1, _pcr2);
@@ -404,11 +390,7 @@ contract Governance is
         // revert if the generated imageId is the same as the current one
         require(imageIdGenerated != pcrConfig.imageId, SameImageId());
 
-        pcrConfig.pcr = PCR({
-            pcr0: _pcr0,
-            pcr1: _pcr1,
-            pcr2: _pcr2
-        });
+        pcrConfig.pcr = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2});
         pcrConfig.imageId = imageIdGenerated;
         emit PCRConfigSet(_pcr0, _pcr1, _pcr2, imageIdGenerated);
     }
@@ -425,22 +407,15 @@ contract Governance is
 
     //-------------------------------- Propose start --------------------------------//
 
-    function propose(
-        ProposeInputParams calldata _params
-    ) external payable whenNotPaused returns (bytes32 proposalId) {
-        _validateProposalInput(
-            _params.targets,
-            _params.values,
-            _params.calldatas,
-            _params.title,
-            _params.description
-        );
+    function propose(ProposeInputParams calldata _params) external payable whenNotPaused returns (bytes32) {
+        _validateProposalInput(_params);
+        require(supportedChainIds.length > 0, NoSupportedChainConfigured());
 
         // Calculate proposalId
         bytes32 descriptionHash = getDescriptionHash(_params.title, _params.description);
-        proposalId =
-            _generateProposalId(_params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]);
-        proposerNonce[msg.sender] += 1;
+        bytes32 proposalId = _generateProposalId(
+            _params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]
+        );
 
         // Ensure that the proposal does not already exist
         require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
@@ -453,17 +428,11 @@ contract Governance is
 
         // Store the proposal information
         _storeProposal(
-            proposalId,
-            _params.targets,
-            _params.values,
-            _params.calldatas,
-            _params.title,
-            _params.description
+            proposalId, _params.targets, _params.values, _params.calldatas, _params.title, _params.description
         );
 
         emit ProposalCreated(
             proposalId,
-            msg.sender,
             proposerNonce[msg.sender],
             _params.targets,
             _params.values,
@@ -472,33 +441,38 @@ contract Governance is
             _params.description,
             proposals[proposalId].proposalTimeInfo
         );
+
+        proposerNonce[msg.sender] += 1;
+
+        return proposalId;
     }
 
     function _validateProposalInput(
-        address[] calldata _targets,
-        uint256[] calldata _values,
-        bytes[] calldata _calldatas,
-        string calldata _title,
-        string calldata _description
+        ProposeInputParams calldata _params
     ) internal view {
-        require(supportedChainIds.length > 0, NoSupportedChainConfigured());
-        // Input Validation
-        require(_targets.length == _values.length, InvalidInputLength());
-        require(_targets.length == _calldatas.length, InvalidInputLength());
-        require(bytes(_title).length > 0, InvalidTitleLength());
-        require(bytes(_description).length > 0, InvalidDescriptionLength());
+        // Check input length
+        require(_params.targets.length == _params.values.length, InvalidInputLength());
+        require(_params.targets.length == _params.calldatas.length, InvalidInputLength());
+        require(bytes(_params.title).length > 0, InvalidTitleLength());
+        require(bytes(_params.description).length > 0, InvalidDescriptionLength());
 
-        for (uint256 i = 0; i < _targets.length; ++i) {
-            require(_targets[i] != address(this), InvalidTargetAddress());
+        // Check if the targets are not the contract itself
+        for (uint256 i = 0; i < _params.targets.length; ++i) {
+            require(_params.targets[i] != address(this), InvalidTargetAddress());
         }
 
+        // Check if the msg.value is equal to the sum of the values
         uint256 valueSum;
-        for (uint256 i = 0; i < _values.length; ++i) {
-            if (_values[i] > 0) {
-                valueSum += _values[i];
+        for (uint256 i = 0; i < _params.values.length; ++i) {
+            if (_params.values[i] > 0) {
+                valueSum += _params.values[i];
             }
         }
         require(valueSum == msg.value, InvalidMsgValue());
+
+        // Check if deposit token is supported
+        uint256 depositAmount = proposalDepositAmounts[_params.depositToken];
+        require(depositAmount > 0, TokenNotSupported());
     }
 
     function _storeProposal(
@@ -552,8 +526,8 @@ contract Governance is
         // Chech if the proposal is active
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
         require(
-            block.timestamp >= proposalTimeInfo.voteActivationTimestamp && 
-            block.timestamp < proposalTimeInfo.voteDeadlineTimestamp, 
+            block.timestamp >= proposalTimeInfo.voteActivationTimestamp
+                && block.timestamp < proposalTimeInfo.voteDeadlineTimestamp,
             VotingNotActive()
         );
 
@@ -577,12 +551,9 @@ contract Governance is
 
     //-------------------------------- Result start --------------------------------//
 
-    function submitResult(
-        SubmitResultInputParams calldata _params
-    ) external nonReentrant {
+    function submitResult(SubmitResultInputParams calldata _params) external nonReentrant {
         // Decode `_resultData`
-        (bytes32 proposalId, VoteDecisionResult memory voteDecisionResult) =
-            _decodeResultData(_params.resultData);
+        (bytes32 proposalId, VoteDecisionResult memory voteDecisionResult) = _decodeResultData(_params.resultData);
 
         require(proposals[proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
 
@@ -593,14 +564,13 @@ contract Governance is
                 && block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp,
             NotResultSubmissionPhase()
         );
-        
+
         // Check if the result of the proposal is not already submitted
         require(proposals[proposalId].voteOutcome == VoteOutcome.Pending, ResultAlreadySubmitted());
 
         // Verify KMS sig
         // TODO: imageId should be stored per-proposal in case of update
         require(verifyKMSSig(pcrConfig.imageId, _params.enclavePubKey, _params.kmsSig), InvadidKMSSignature());
-
 
         // Verify Enclave Sig
         bytes32 contractDataHash = sha256(
@@ -611,11 +581,7 @@ contract Governance is
                 proposals[proposalId].proposalVoteInfo.voteHash
             )
         );
-        bytes memory message = abi.encode(
-            contractDataHash,
-            proposalId,
-            voteDecisionResult
-        );
+        bytes memory message = abi.encode(contractDataHash, proposalId, voteDecisionResult);
         require(_verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, message), InvalidEnclaveSignature());
 
         // Handle the result
@@ -625,6 +591,7 @@ contract Governance is
         emit ResultSubmitted(proposalId, voteDecisionResult, voteOutcome);
     }
 
+    // TODO: Refund only when result is submitted.
     /// @notice Refund the deposit and value sent for the proposal when result is not submitted and deadline has passed
     function refund(bytes32 _proposalId) external nonReentrant {
         // If voteOutcome is still Pending, and the proposal deadline has passed, refund the deposit
@@ -632,7 +599,8 @@ contract Governance is
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
         VoteOutcome proposalVoteOutcome = proposals[_proposalId].voteOutcome;
 
-        if(block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp || proposalVoteOutcome != VoteOutcome.Pending) {
+        if (block.timestamp < proposalTimeInfo.proposalDeadlineTimestamp || proposalVoteOutcome != VoteOutcome.Pending)
+        {
             revert NotRefundableProposal();
         }
 
@@ -704,7 +672,7 @@ contract Governance is
     }
 
     //-------------------------------- Result end --------------------------------//
-    
+
     //-------------------------------- Execution start --------------------------------//
 
     function execute(bytes32 _proposalId) external whenNotPaused {
@@ -777,18 +745,6 @@ contract Governance is
         return address(uint160(uint256(pubKeyHash)));
     }
 
-    // function _remove0xPrefix(string memory hexString) internal pure returns (string memory) {
-    //     bytes memory b = bytes(hexString);
-    //     if (b.length >= 2 && b[0] == "0" && b[1] == "x") {
-    //         bytes memory result = new bytes(b.length - 2);
-    //         for (uint i = 2; i < b.length; i++) {
-    //             result[i-2] = b[i];
-    //         }
-    //         return string(result);
-    //     }
-    //     return hexString;
-    // }
-
     /// @notice Calculates the result of the proposal based on the vote result
     function _calcVoteResult(VoteDecisionResult memory _voteDecisionCount) internal view returns (VoteOutcome) {
         uint256 yes = _voteDecisionCount.yes;
@@ -802,19 +758,15 @@ contract Governance is
             return VoteOutcome.Failed;
         }
 
-        // Check Pass 
-        if (
-            yes > (no + noWithVeto) &&
-            yes > (proposalPassVetoThreshold * totalVotingPower) / 1e18
-        ) {
+        // Check Pass
+        if (yes > (no + noWithVeto) && yes > (proposalPassVetoThreshold * totalVotingPower) / 1e18) {
             return VoteOutcome.Passed;
         }
 
         // Check Veto
         if (
-            yes < (no + noWithVeto) &&
-            no < noWithVeto &&
-            noWithVeto > (proposalPassVetoThreshold * totalVotingPower) / 1e18
+            yes < (no + noWithVeto) && no < noWithVeto
+                && noWithVeto > (proposalPassVetoThreshold * totalVotingPower) / 1e18
         ) {
             return VoteOutcome.Vetoed;
         }
@@ -828,7 +780,7 @@ contract Governance is
         pure
         returns (bytes32)
     {
-        uint32 bitflags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16)); 
+        uint32 bitflags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16));
         bytes memory pcr16 = new bytes(48);
         return sha256(abi.encodePacked(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
     }
@@ -863,9 +815,9 @@ contract Governance is
     function _toHex16(bytes16 data) internal pure returns (bytes memory) {
         bytes memory alphabet = "0123456789abcdef";
         bytes memory str = new bytes(32);
-        for (uint i = 0; i < 16; i++) {
-            str[i*2]     = alphabet[uint8(data[i] >> 4)];
-            str[i*2 + 1] = alphabet[uint8(data[i] & 0x0f)];
+        for (uint256 i = 0; i < 16; i++) {
+            str[i * 2] = alphabet[uint8(data[i] >> 4)];
+            str[i * 2 + 1] = alphabet[uint8(data[i] & 0x0f)];
         }
         return str;
     }
@@ -883,7 +835,11 @@ contract Governance is
     {
         // Reconstruct URI (must match the format signed by the KMS)
         // Check: https://github.com/marlinprotocol/oyster-monorepo/tree/master/kms/root-server#public-endpoints
-        string memory uri = string(abi.encodePacked("/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", kmsPath));
+        string memory uri = string(
+            abi.encodePacked(
+                "/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", kmsPath
+            )
+        );
 
         // Combine URI and binary public key
         bytes memory message = abi.encodePacked(bytes(uri), _enclavePubKey);
@@ -967,7 +923,7 @@ contract Governance is
         ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
         return proposalVoteInfo.voteHash;
     }
-    
+
     /// @notice Total vote count for a given proposal
     /// @notice This function does not check if the vote is done, so the count could not be the final count
     function getVoteCount(bytes32 _proposalI) external view returns (uint256) {
