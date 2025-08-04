@@ -275,15 +275,20 @@ contract Executors is
     //-------------------------------- internal functions start ----------------------------------//
 
     function _registerExecutor(
-        bytes memory _attestationSignature,
-        IAttestationVerifier.Attestation memory _attestation,
-        uint256 _jobCapacity,
-        uint256 _signTimestamp,
-        bytes memory _signature,
-        uint256 _commission,
-        uint8 _env,
-        address _owner
+        address _owner,
+        bytes calldata _data
     ) internal {
+        // decode the data to get the details
+        (
+            bytes memory _attestationSignature,
+            IAttestationVerifier.Attestation memory _attestation,
+            uint256 _jobCapacity,
+            uint256 _signTimestamp,
+            bytes memory _signature,
+            uint256 _commission,
+            uint8 _env
+        ) = abi.decode(_data, (bytes, IAttestationVerifier.Attestation, uint256, uint256, bytes, uint256, uint8));
+
         address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
         if (executors[enclaveAddress].owner != address(0)) revert ExecutorsExecutorAlreadyExists();
 
@@ -366,7 +371,7 @@ contract Executors is
         if (executors[_enclaveAddress].activeJobs != 0) revert ExecutorsHasPendingJobs();
 
         // _removeStake(_enclaveAddress, executors[_enclaveAddress].stakeAmount);
-        REWARD_DELEGATORS.removeOperatorDelegation(_enclaveAddress, bytes(""));
+        // REWARD_DELEGATORS.removeOperatorDelegation(_enclaveAddress, bytes(""));
 
         // TODO: do we need to delete or mark as deregistered?
         _revokeEnclaveKey(_enclaveAddress);
@@ -474,28 +479,7 @@ contract Executors is
         address _operator,
         bytes calldata _data
     ) external onlyRole(OPERATOR_REGISTRY_ROLE) {
-        // decode the data to get the details
-        (
-            bytes memory attestationSignature,
-            IAttestationVerifier.Attestation memory attestation,
-            uint256 jobCapacity,
-            uint256 signTimestamp,
-            bytes memory signature,
-            uint256 stakeAmount,
-            uint8 env
-        ) = abi.decode(_data, (bytes, IAttestationVerifier.Attestation, uint256, uint256, bytes, uint256, uint8));
-
-        _registerExecutor(
-            attestationSignature,
-            attestation,
-            jobCapacity,
-            signTimestamp,
-            signature,
-            stakeAmount,
-            env,
-            _operator
-        );
-
+        _registerExecutor(_operator, _data);
     }
 
     // /**
@@ -515,16 +499,16 @@ contract Executors is
         _deregisterExecutor(enclaveAddress);
     }
 
-    /**
-     * @notice Drains an executor node, making it inactive for new jobs.
-     * @param _enclaveAddress The address of the executor enclave to drain.
-     * @dev Caller must be the owner of the executor node.
-     */
-    function drainExecutor(address _enclaveAddress) external isValidExecutorOwner(_enclaveAddress, _msgSender()) {
-        _drainExecutor(_enclaveAddress);
-    }
+    // /**
+    //  * @notice Drains an executor node, making it inactive for new jobs.
+    //  * @param _enclaveAddress The address of the executor enclave to drain.
+    //  * @dev Caller must be the owner of the executor node.
+    //  */
+    // function drainExecutor(address _enclaveAddress) external isValidExecutorOwner(_enclaveAddress, _msgSender()) {
+    //     _drainExecutor(_enclaveAddress);
+    // }
 
-    function drainOperator(address _operator, bytes memory _data) external onlyRole(OPERATOR_REGISTRY_ROLE) {
+    function requestDeregister(address _operator, bytes memory _data) external onlyRole(OPERATOR_REGISTRY_ROLE) {
         // decode the data to get the enclave address
         address enclaveAddress = abi.decode(_data, (address));
         _isValidExecutorOwner(enclaveAddress, _operator);

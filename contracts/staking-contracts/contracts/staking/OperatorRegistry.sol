@@ -213,11 +213,11 @@ contract OperatorRegistry is
         bool success;
         if(_data.length == 0) {
             (success, ) = operatorManagers[id].operatorManager.call(
-                abi.encodeWithSignature("requestDeregister(address)", operator)
+                abi.encodeWithSignature("unregister(address)", operator)
             );
         } else {
             (success, ) = operatorManagers[id].operatorManager.call(
-                abi.encodeWithSignature("requestDeregister(address,bytes)", operator, _data)
+                abi.encodeWithSignature("deregisterOperator(address,bytes)", operator, _data)
             );
         }
 
