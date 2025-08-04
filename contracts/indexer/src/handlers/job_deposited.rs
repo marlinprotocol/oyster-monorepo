@@ -49,8 +49,16 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
         .filter(jobs::id.eq(&id))
         .filter(jobs::is_closed.eq(false))
         .select(jobs::rate)
-        .first::<BigDecimal>(conn)
-        .context("failed to get job rate")?;
+        .get_result::<BigDecimal>(conn);
+
+    if rate.is_err() {
+        // !!! should never happen
+        // the only reason this would happen is if the job does not exist or is closed
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("failed to find rate for job"));
+    }
+
+    let rate = rate.unwrap();
 
     let additional_duration = ((&amount * 10u64.pow(12)) / &rate).round(0);
 
@@ -296,7 +304,6 @@ mod tests {
         );
 
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
-        // FIXME: this is not correct we need to calculate the new end epoch
         assert_eq!(
             jobs::table
                 .select(jobs::all_columns)
@@ -313,7 +320,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + (25 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -496,7 +503,10 @@ mod tests {
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find rate for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -707,7 +717,10 @@ mod tests {
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find rate for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
             jobs::table
