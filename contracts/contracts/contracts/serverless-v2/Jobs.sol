@@ -323,7 +323,7 @@ contract Jobs is
         uint256 _deadline, // in milliseconds
         address _jobOwner
     ) internal returns (uint256 jobId) {
-        address[] memory selectedNodes = EXECUTORS.selectExecutors(_env, NO_OF_NODES_TO_SELECT);
+        address[] memory selectedNodes = EXECUTORS.selectExecutors(_env, NO_OF_NODES_TO_SELECT, jobs.length);
         // if no executors are selected, then return with error code 1
         if (selectedNodes.length < NO_OF_NODES_TO_SELECT) {
             revert JobsUnavailableResources();
@@ -335,16 +335,16 @@ contract Jobs is
 
         jobId = _create(_codehash, _codeInputs, _deadline, _jobOwner, _env, selectedNodes);
 
-        for (uint256 index = 0; index < selectedNodes.length; index++) {
-            address executor = selectedNodes[index];
-            // lock tokens for each selected executor
-            // TODO: how much tokens to lock?
-            rewardDelegators.lockTokens(
-                executor,
-                keccak256(abi.encodePacked(jobId, executor)),
-                tokenAmount
-            );
-        }
+        // for (uint256 index = 0; index < selectedNodes.length; index++) {
+        //     address executor = selectedNodes[index];
+        //     // lock tokens for each selected executor
+        //     // TODO: how much tokens to lock?
+        //     rewardDelegators.lockTokens(
+        //         executor,
+        //         keccak256(abi.encodePacked(jobId, executor)),
+        //         tokenAmount
+        //     );
+        // }
     }
 
     function _create(
@@ -386,7 +386,7 @@ contract Jobs is
         if (!_isJobExecutor(_jobId, enclaveAddress)) revert JobsNotSelectedExecutor();
         if (jobs[_jobId].hasExecutedJob[enclaveAddress]) revert JobsExecutorAlreadySubmittedOutput();
 
-        EXECUTORS.releaseExecutor(enclaveAddress);
+        EXECUTORS.unlockStakeAndReleaseExecutor(enclaveAddress, _jobId);
         jobs[_jobId].hasExecutedJob[enclaveAddress] = true;
 
         uint8 outputCount = ++jobs[_jobId].outputCount;
@@ -398,7 +398,7 @@ contract Jobs is
         _transferRewardPayout(_jobId, outputCount, enclaveAddress);
 
         // unlock tokens
-        rewardDelegators.unlockTokens(enclaveAddress, keccak256(abi.encodePacked(_jobId, enclaveAddress)));
+        // rewardDelegators.unlockTokens(enclaveAddress, keccak256(abi.encodePacked(_jobId, enclaveAddress)));
 
         // release executor's commision and send the remaining reward to delegators
 
@@ -440,7 +440,7 @@ contract Jobs is
     }
 
     function _transferRewardPayout(uint256 _jobId, uint256 _outputCount, address _enclaveAddress) internal {
-        address owner = EXECUTORS.getOwner(_enclaveAddress);
+        // address owner = EXECUTORS.getOwner(_enclaveAddress);
         uint256 executionTime = jobs[_jobId].executionTime;
         address jobOwner = jobs[_jobId].jobOwner;
         uint256 deadline = jobs[_jobId].deadline;
@@ -578,15 +578,22 @@ contract Jobs is
 
         // slash Execution node
         uint256 len = jobs[_jobId].selectedExecutors.length;
-        uint256 slashAmount = 0;
+        // uint256 slashAmount = 0;
+        address[] memory tokenList = new address[](2);
+        uint256[] memory tokenAmounts = new uint256[](2);
         for (uint256 index = 0; index < len; index++) {
             address enclaveAddress = jobs[_jobId].selectedExecutors[index];
 
             if (!jobs[_jobId].hasExecutedJob[enclaveAddress]) {
                 // slashAmount += EXECUTORS.slashExecutor(enclaveAddress);
-                EXECUTORS.releaseExecutor(enclaveAddress);
                 // TODO: shall it transfer all the slashed token here to distribute
-                rewardDelegators.slash(enclaveAddress, keccak256(abi.encodePacked(_jobId, enclaveAddress)));
+                (address[] memory tokens, uint256[] memory amounts) = EXECUTORS.slashExecutor(enclaveAddress, _jobId);
+                for(uint256 i = 0; i < 2; i++) {
+                    if(index == 0) {
+                        tokenList[i] = tokens[i];
+                    }
+                    tokenAmounts[i] += amounts[i];
+                }
                 emit SlashedOnExecutionTimeout(_jobId, enclaveAddress);
             }
             delete jobs[_jobId].hasExecutedJob[enclaveAddress];
@@ -596,18 +603,27 @@ contract Jobs is
         delete jobs[_jobId];
 
         // TODO: how to handle these transfers in new staking model
-        // if (isNoOutputSubmitted) {
-        //     // transfer the slashed amount to job owner
-        //     STAKING_TOKEN.safeTransfer(jobOwner, slashAmount);
-        //     // TODO: add gas limit
-        //     (bool success, ) = jobOwner.call(
-        //         abi.encodeWithSignature("oysterFailureCall(uint256,uint256)", _jobId, slashAmount)
-        //     );
-        //     emit JobFailureCallbackCalled(_jobId, success);
-        // } else {
-        //     // transfer the slashed amount to payment pool
-        //     STAKING_TOKEN.safeTransfer(STAKING_PAYMENT_POOL, slashAmount);
-        // }
+        if (isNoOutputSubmitted) {
+            // transfer the slashed amount to job owner
+            // STAKING_TOKEN.safeTransfer(jobOwner, slashAmount);
+            for(uint256 i = 0; i < 2; i++) {
+                IERC20(tokenList[i]).safeTransfer(jobOwner, tokenAmounts[i]);
+            }
+            // TODO: add gas limit
+            (bool success, ) = jobOwner.call(
+                abi.encodeWithSignature(
+                    "oysterFailureCall(uint256,address[],uint256[])",
+                     _jobId, tokenList, tokenAmounts
+                )
+            );
+            emit JobFailureCallbackCalled(_jobId, success);
+        } else {
+            // transfer the slashed amount to payment pool
+            // STAKING_TOKEN.safeTransfer(STAKING_PAYMENT_POOL, slashAmount);
+            for(uint256 i = 0; i < 2; i++) {
+                IERC20(tokenList[i]).safeTransfer(STAKING_PAYMENT_POOL, tokenAmounts[i]);
+            }
+        }
     }
 
     function _releaseEscrowAmount(

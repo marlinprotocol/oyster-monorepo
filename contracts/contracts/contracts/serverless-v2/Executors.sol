@@ -348,7 +348,7 @@ contract Executors is
 
         executors[_enclaveAddress].draining = false;
 
-        ( , uint256 totalDelegation) = REWARD_DELEGATORS.getTotalDelegation(_enclaveAddress);
+        uint256 totalDelegation = REWARD_DELEGATORS.getEffectiveDelegation(_enclaveAddress, keccak256("SERVERLESS_EXECUTOR"));
         // insert node in the tree
         if (totalDelegation >= MIN_STAKE_AMOUNT && executorNode.activeJobs < executorNode.jobCapacity) {
             _insert_unchecked(
@@ -370,7 +370,7 @@ contract Executors is
 
         // TODO: do we need to delete or mark as deregistered?
         _revokeEnclaveKey(_enclaveAddress);
-        delete executors[_enclaveAddress];
+        // delete executors[_enclaveAddress];
 
         emit ExecutorDeregistered(_enclaveAddress);
     }
@@ -594,15 +594,27 @@ contract Executors is
 
     function _selectExecutors(
         uint8 _env,
-        uint256 _noOfNodesToSelect
+        uint256 _noOfNodesToSelect,
+        uint256 _jobId
     ) internal returns (address[] memory selectedNodes) {
         selectedNodes = _selectNodes(_env, _noOfNodesToSelect);
         for (uint256 index = 0; index < selectedNodes.length; index++) {
             address enclaveAddress = selectedNodes[index];
             executors[enclaveAddress].activeJobs += 1;
 
-            // if jobCapacity reached then delete from the tree so as to not consider this node in new jobs allocation
-            if (executors[enclaveAddress].activeJobs == executors[enclaveAddress].jobCapacity)
+            // lock tokens
+            bytes32 lockId = keccak256(abi.encodePacked(_jobId, enclaveAddress));
+            REWARD_DELEGATORS.lockTokens(
+                enclaveAddress,
+                lockId,
+                MIN_STAKE_AMOUNT
+            );
+
+            // if jobCapacity reached or no more effective stake to lock for upcoming jobs, then delete from the tree 
+            // so as to not consider this node in new jobs allocation
+            if (executors[enclaveAddress].activeJobs == executors[enclaveAddress].jobCapacity ||
+                REWARD_DELEGATORS.getEffectiveDelegation(enclaveAddress, keccak256("SERVERLESS_EXECUTOR")) < MIN_STAKE_AMOUNT
+            )
                 _deleteIfPresent(_env, enclaveAddress);
         }
     }
@@ -615,10 +627,17 @@ contract Executors is
         selectedNodes = _selectN(_env, randomizer, _noOfNodesToSelect);
     }
 
+    function _unlockStakeAndReleaseExecutor(address _enclaveAddress, uint256 _jobId) internal {
+        bytes32 lockId = keccak256(abi.encodePacked(_jobId, _enclaveAddress));
+        REWARD_DELEGATORS.unlockTokens(_enclaveAddress, lockId);
+
+        _releaseExecutor(_enclaveAddress);
+    }
+
     function _releaseExecutor(address _enclaveAddress) internal {
         if (!executors[_enclaveAddress].draining) {
             uint8 env = executors[_enclaveAddress].env;
-            ( , uint256 totalDelegation) = REWARD_DELEGATORS.getTotalDelegation(_enclaveAddress);
+            uint256 totalDelegation = REWARD_DELEGATORS.getEffectiveDelegation(_enclaveAddress, keccak256("SERVERLESS_EXECUTOR"));
             // node might have been deleted due to max job capacity reached
             // if stakes are greater than minStakes then update the stakes for executors in tree if it already exists else add with latest stake
             if (totalDelegation >= MIN_STAKE_AMOUNT)
@@ -630,15 +649,22 @@ contract Executors is
         executors[_enclaveAddress].activeJobs -= 1;
     }
 
-    function _slashExecutor(address _enclaveAddress, address _recipient) internal returns (uint256) {
-        ( , uint256 totalDelegation) = REWARD_DELEGATORS.getTotalDelegation(_enclaveAddress);
-        uint256 totalComp = (totalDelegation * SLASH_PERCENT_IN_BIPS) / SLASH_MAX_BIPS;
-        // executors[_enclaveAddress].stakeAmount -= totalComp;
+    function _slashExecutor(
+        address _enclaveAddress,
+        uint256 _jobId,
+        address _recipient
+    ) internal returns (address[] memory tokens, uint256[] memory amounts) {
+        // uint256 totalDelegation = REWARD_DELEGATORS.getEffectiveDelegation(_enclaveAddress, keccak256("SERVERLESS_EXECUTOR"));
+        // uint256 totalComp = (totalDelegation * SLASH_PERCENT_IN_BIPS) / SLASH_MAX_BIPS;
+        // // executors[_enclaveAddress].stakeAmount -= totalComp;
 
-        TOKEN.safeTransfer(_recipient, totalComp);
+        // TOKEN.safeTransfer(_recipient, totalComp);
+
+        bytes32 lockId = keccak256(abi.encodePacked(_jobId, _enclaveAddress));
+        (tokens, amounts) = REWARD_DELEGATORS.slash(_enclaveAddress, lockId, _recipient);
 
         _releaseExecutor(_enclaveAddress);
-        return totalComp;
+        // return totalComp;
     }
 
     //-------------------------------- internal functions end ----------------------------------//
@@ -654,9 +680,10 @@ contract Executors is
      */
     function selectExecutors(
         uint8 _env,
-        uint256 _noOfNodesToSelect
+        uint256 _noOfNodesToSelect,
+        uint256 _jobId
     ) external onlyRole(JOBS_ROLE) isValidEnv(_env) returns (address[] memory selectedNodes) {
-        return _selectExecutors(_env, _noOfNodesToSelect);
+        return _selectExecutors(_env, _noOfNodesToSelect, _jobId);
     }
 
     /**
@@ -668,6 +695,10 @@ contract Executors is
         _releaseExecutor(_enclaveAddress);
     }
 
+    function unlockStakeAndReleaseExecutor(address _enclaveAddress, uint256 _jobId) external onlyRole(JOBS_ROLE) {
+        _unlockStakeAndReleaseExecutor(_enclaveAddress, _jobId);
+    }
+
     /**
      * @notice Slashes the stake of an executor node.
      * @dev Can only be called by an account with the `JOBS_ROLE`. This function
@@ -675,8 +706,8 @@ contract Executors is
      * @param _enclaveAddress The address of the executor enclave to be slashed.
      * @return The amount of stake that was slashed from the executor node.
      */
-    function slashExecutor(address _enclaveAddress) external onlyRole(JOBS_ROLE) returns (uint256) {
-        return _slashExecutor(_enclaveAddress, _msgSender());
+    function slashExecutor(address _enclaveAddress, uint256 _jobId) external onlyRole(JOBS_ROLE) returns (address[] memory /*tokens*/, uint256[] memory /*amounts*/) {
+        return _slashExecutor(_enclaveAddress, _jobId, _msgSender());
     }
 
     function issueReward(

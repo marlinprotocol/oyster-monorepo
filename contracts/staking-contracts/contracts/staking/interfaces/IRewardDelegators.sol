@@ -45,10 +45,12 @@ interface IRewardDelegators {
     ) external;
     function slash(
         address _operator,
-        bytes32 _lockId
-    ) external;
-    function getTotalDelegation(
-        address cluster
-    ) external view returns(uint256 _totalWeight, uint256 totalDelegations);
+        bytes32 _lockId,
+        address _recipient
+    ) external returns (address[] memory tokens, uint256[] memory amounts);
+    function getEffectiveDelegation(
+        address _operator,
+        bytes32 _networkId
+    ) external view returns (uint256);
     function getTokenList() external view returns (bytes32[] memory);
 }

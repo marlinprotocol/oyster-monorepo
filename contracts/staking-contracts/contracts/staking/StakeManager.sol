@@ -661,5 +661,16 @@ contract StakeManager is
 
 //-------------------------------- Stash externals end --------------------------------//
 
+    error StakeManager_InvalidRewardDelegators();
+
+    function transferSlashedToken(bytes32 _tokenId, uint256 _amount, address _recipient) external returns (address token) {
+        if(_msgSender() != address(rewardDelegators))
+            revert StakeManager_InvalidRewardDelegators();
+
+        token = tokens[_tokenId];
+        if(_amount > 0)
+            IERC20Upgradeable(token).safeTransfer(_recipient, _amount);
+    }
+
     uint256[50] private __gap6;
 }

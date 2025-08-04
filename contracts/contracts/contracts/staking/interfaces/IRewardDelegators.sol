@@ -39,9 +39,7 @@ interface IRewardDelegators {
     function lockTokens(
         address _operator,
         bytes32 _lockId,
-        uint256 _amount
-        // bytes32[] memory _tokens,
-        // uint256[] memory _amounts
+        uint256 _lockAmount
     ) external;
     function unlockTokens(
         address _operator,
@@ -49,9 +47,8 @@ interface IRewardDelegators {
     ) external;
     function slash(
         address _operator,
-        bytes32 _lockId
-    ) external;
-    function getTotalDelegation(
-        address cluster
-    ) external view returns(uint256 _totalWeight, uint256 totalDelegations);
+        bytes32 _lockId,
+        address _recipient
+    ) external returns (address[] memory tokens, uint256[] memory amounts);
+    function getEffectiveDelegation(address cluster, bytes32 networkId) external view returns(uint256 totalDelegations);
 }

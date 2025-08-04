@@ -20,6 +20,7 @@ import "./interfaces/IOperatorRewards.sol";
 import "./interfaces/IOperatorSelector.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 import "./interfaces/IInflationRewardsManager.sol";
+import "./interfaces/IStakeManager.sol";
 
 contract RewardDelegators is
     Initializable,  // initializer
@@ -159,20 +160,21 @@ contract RewardDelegators is
     IClusterRegistry public clusterRegistry;
     IERC20Upgradeable public PONDToken;
 
+    // @dev For services other than relay clusters, the networkId will be operatorManagerId
     mapping(bytes32 => uint256) public thresholdForSelection; // networkId -> threshold
     mapping(bytes32 => TokenWeight) public tokenWeights; // tokenId -> TokenWeight
 
     // NEW STORAGE VARS
-    bytes32 public constant JOBS_ROLE = keccak256("JOBS_ROLE");
+    // bytes32 public constant JOBS_ROLE = keccak256("JOBS_ROLE");
     IOperatorRegistry public operatorRegistry;
     IInflationRewardsManager public inflationRewardsManager;
 
-    // total delegation locked for the operator
-    mapping(address operator => mapping(bytes32 token => uint256 amount)) public operatorLockedStake;
+    // // total delegation locked for the operator
+    // mapping(address operator => mapping(bytes32 token => uint256 amount)) public operatorLockedStake;
 
-    // individual lock info
-    // lockId should be defined in each Service contracts (lockId = keccak256(executor, jobId))
-    mapping(bytes32 lockId => mapping(bytes32 token => uint256 amount)) public lockedStakes;
+    // // individual lock info
+    // // lockId should be defined in each Service contracts (lockId = keccak256(executor, jobId))
+    // mapping(bytes32 lockId => mapping(bytes32 token => uint256 amount)) public lockedStakes;
 
     struct OperatorSlashData {
         mapping(bytes32 tokenId => uint256) slashPerShare;
@@ -182,6 +184,10 @@ contract RewardDelegators is
     mapping(address operator => OperatorSlashData) operatorSlashData;
 
     using SafeERC20Upgradeable for IERC20Upgradeable;
+
+    mapping(address operator => mapping(bytes32 tokenId => uint256 amount)) public operatorSlashedStake;
+    mapping(address operator => uint256 amount) public operatorLockedStake;
+    mapping(bytes32 lockId => uint256 amount) public lockedStake;
 
     event AddReward(bytes32 tokenId, uint256 rewardFactor);
     event RemoveReward(bytes32 tokenId);
@@ -194,10 +200,25 @@ contract RewardDelegators is
     event PONDAddressUpdated(address _updatedPOND);
 
     error RewardDelegators_InvalidOperatorManager();
+    error RewardDelegators_InvalidOperatorSelector();
 
     modifier onlyStake() {
         require(_msgSender() == stakeAddress, "RD:OS-only stake contract can invoke");
         _;
+    }
+
+    function _checkIfOperatorManager(address _operator) internal view returns (bytes32 operatorManagerId) {
+        operatorManagerId = operatorRegistry.operatorToManagerId(_operator);
+        address operatorManager = operatorRegistry.getOperatorManager(operatorManagerId);
+        if(_msgSender() != operatorManager)
+            revert RewardDelegators_InvalidOperatorManager();
+    }
+
+    function _checkIfOperatorSelector(address _operator) internal view {
+        bytes32 operatorManagerId = operatorRegistry.operatorToManagerId(_operator);
+        address operatorSelector = operatorRegistry.getOperatorSelector(operatorManagerId);
+        if(_msgSender() != operatorSelector)
+            revert RewardDelegators_InvalidOperatorSelector();
     }
 
     function addRewardFactor(bytes32 _tokenId, uint256 _rewardFactor) external onlyAdmin {
@@ -323,7 +344,7 @@ contract RewardDelegators is
             IClusterSelector _clusterSelector = clusterRewards.clusterSelectors(_networkId);
             _updateClusterSelector(_networkId, _cluster, _clusterSelector);
         } else {
-            (, uint256 totalDelegations) = getTotalDelegation(_cluster);
+            uint256 totalDelegations = getEffectiveDelegation(_cluster, operatorManagerId);
             address operatorSelector = operatorRegistry.getOperatorSelector(operatorManagerId);
             IOperatorSelector(operatorSelector).updateOperatorSelector(_cluster, totalDelegations);
         }
@@ -406,7 +427,7 @@ contract RewardDelegators is
     }
 
     function _updateClusterSelector(bytes32 _networkId, address _cluster, IClusterSelector _clusterSelector) internal {
-        uint256 totalDelegations = _getEffectiveDelegation(_cluster, _networkId);
+        uint256 totalDelegations = getEffectiveDelegation(_cluster, _networkId);
 
         if(address(_clusterSelector) != address(0)) {
             // if total delegation is more than 0.5 million pond, then insert into selector
@@ -433,17 +454,14 @@ contract RewardDelegators is
     }
 
     function updateOperatorDelegation(address _operator, bytes memory _data) external {
-        bytes32 operatorManagerId = operatorRegistry.operatorToManagerId(_operator);
-        address operatorManager = operatorRegistry.getOperatorManager(operatorManagerId);
-        if(_msgSender() != operatorManager)
-            revert RewardDelegators_InvalidOperatorManager();
+        bytes32 operatorManagerId = _checkIfOperatorManager(_operator);
 
         if(operatorManagerId == keccak256("RELAY")) {
             // decode the networkId from the data
             (bytes32 networkId) = abi.decode(_data, (bytes32));
             _updateClusterDelegation(_operator, networkId);
         } else {
-            ( , uint256 totalDelegations) = getTotalDelegation(_operator);
+            uint256 totalDelegations = getEffectiveDelegation(_operator, operatorManagerId);
             // if the operator is a serverless service, we need to update the operator selector
             address operatorSelector = operatorRegistry.getOperatorSelector(operatorManagerId);
             IOperatorSelector(operatorSelector).updateOperatorSelector(_operator, totalDelegations);
@@ -462,10 +480,7 @@ contract RewardDelegators is
     }
 
     function removeOperatorDelegation(address _operator, bytes memory _data) external {
-        bytes32 operatorManagerId = operatorRegistry.operatorToManagerId(_operator);
-        address operatorManager = operatorRegistry.getOperatorManager(operatorManagerId);
-        if(_msgSender() != operatorManager)
-            revert RewardDelegators_InvalidOperatorManager();
+        bytes32 operatorManagerId = _checkIfOperatorManager(_operator);
 
         if(operatorManagerId == keccak256("RELAY")) {
             // decode the networkId from the data
@@ -596,7 +611,7 @@ contract RewardDelegators is
                 bytes32 _clusterNetwork = clusterRegistry.getNetwork(cluster);
                 require(_networkId == _clusterNetwork, "RD:RCD-incorrect network");
 
-                uint256 totalDelegations = _getEffectiveDelegation(cluster, _networkId);
+                uint256 totalDelegations = getEffectiveDelegation(cluster, _networkId);
 
                 if(totalDelegations == 0) continue;
 
@@ -615,127 +630,221 @@ contract RewardDelegators is
         _clusterSelector.upsertMultiple(validClusters, balances);
     }
 
-    function _getEffectiveDelegation(address cluster, bytes32 networkId) internal view returns(uint256 totalDelegations){
+    // @dev For services other than relay clusters, the networkId will be operatorManagerId
+    function getEffectiveDelegation(address cluster, bytes32 networkId) public view returns(uint256 totalDelegations){
         uint256 _totalWeight;
-        (_totalWeight, totalDelegations) = getTotalDelegation(cluster);
+        // (_totalWeight, totalDelegations) = getTotalDelegation(cluster);
+        for(uint256 i=0; i < tokenList.length; i++) {
+            bytes32 _tokenId = tokenList[i];
+            TokenWeight memory _weights = tokenWeights[_tokenId];
+            // subtract the slashed amount from the total delegation
+            uint256 _clusterTokenDelegation = clusters[cluster].totalDelegations[_tokenId] - operatorSlashedStake[cluster][_tokenId];
+            if(_weights.forThreshold != 0) {
+                _totalWeight += _weights.forThreshold * _clusterTokenDelegation;
+            }
+            if(_weights.forDelegation != 0) {
+                totalDelegations += _weights.forDelegation * _clusterTokenDelegation;
+            }
+        }
         if(_totalWeight < thresholdForSelection[networkId]){
             // if threshold is not met, delegations don't count
             return 0;
         }
+        totalDelegations -= operatorLockedStake[cluster]; // subtract the locked stake from the total delegations
     }
 
-    function getTotalDelegation(
-        address cluster
-    ) public view returns(uint256 _totalWeight, uint256 totalDelegations) {
-        for(uint256 i=0; i < tokenList.length; i++) {
-            bytes32 _tokenId = tokenList[i];
-            TokenWeight memory _weights = tokenWeights[_tokenId];
-            uint256 _clusterTokenDelegation = clusters[cluster].totalDelegations[_tokenId];
-            if(_weights.forThreshold != 0) {
-                _totalWeight += _weights.forThreshold * _clusterTokenDelegation;
-            }
-            if(_weights.forDelegation != 0) {
-                totalDelegations += _weights.forDelegation * _clusterTokenDelegation;
-            }
-        }
-    }
+    // function getTotalDelegation(
+    //     address cluster
+    // ) public view returns(uint256 _totalWeight, uint256 totalDelegations) {
+    //     for(uint256 i=0; i < tokenList.length; i++) {
+    //         bytes32 _tokenId = tokenList[i];
+    //         TokenWeight memory _weights = tokenWeights[_tokenId];
+    //         uint256 _clusterTokenDelegation = clusters[cluster].totalDelegations[_tokenId];
+    //         if(_weights.forThreshold != 0) {
+    //             _totalWeight += _weights.forThreshold * _clusterTokenDelegation;
+    //         }
+    //         if(_weights.forDelegation != 0) {
+    //             totalDelegations += _weights.forDelegation * _clusterTokenDelegation;
+    //         }
+    //     }
+    // }
 
-    function _getTotalActiveDelegation(
-        address cluster
-    ) internal view returns(uint256 _totalWeight, uint256 totalDelegations) {
-        for(uint256 i=0; i < tokenList.length; i++) {
-            bytes32 _tokenId = tokenList[i];
-            TokenWeight memory _weights = tokenWeights[_tokenId];
-            uint256 _clusterTokenDelegation = clusters[cluster].totalDelegations[_tokenId] - operatorLockedStake[cluster][_tokenId];
-            if(_weights.forThreshold != 0) {
-                _totalWeight += _weights.forThreshold * _clusterTokenDelegation;
-            }
-            if(_weights.forDelegation != 0) {
-                totalDelegations += _weights.forDelegation * _clusterTokenDelegation;
-            }
-        }
-    }
+    // function _getTotalActiveDelegation(
+    //     address cluster
+    // ) internal view returns(uint256 _totalWeight, uint256 totalDelegations) {
+    //     for(uint256 i=0; i < tokenList.length; i++) {
+    //         bytes32 _tokenId = tokenList[i];
+    //         TokenWeight memory _weights = tokenWeights[_tokenId];
+    //         uint256 _clusterTokenDelegation = clusters[cluster].totalDelegations[_tokenId] - operatorLockedStake[cluster][_tokenId];
+    //         if(_weights.forThreshold != 0) {
+    //             _totalWeight += _weights.forThreshold * _clusterTokenDelegation;
+    //         }
+    //         if(_weights.forDelegation != 0) {
+    //             totalDelegations += _weights.forDelegation * _clusterTokenDelegation;
+    //         }
+    //     }
+    // }
 
-    // for each executor selected for a job, we need to lock some of its stake tokens
     function lockTokens(
         address _operator,
         bytes32 _lockId,
-        uint256 _amount     // amount of usdc deposited for the job
-        // bytes32[] memory _tokens,
-        // uint256[] memory _amounts
-    ) external onlyRole(JOBS_ROLE) {
-        // require(_tokens.length == _amounts.length, "RD:LT-Invalid input lengths");
-        bytes32[] memory tokens = tokenList;
-        uint len = tokens.length;
-        for(uint i=0; i < len; i++) {
-            if(clusters[_operator].totalDelegations[tokens[i]] != 0) {
-                bytes32 tokenId = tokens[i];
-                // calculate the amount to lock
-                uint256 amount = _amount * (10**15);
-                operatorLockedStake[_operator][tokenId] += amount;
-                lockedStakes[_lockId][tokenId] = amount;
-            }
+        uint256 _lockAmount // amount of POND to be locked
+    ) external {
+        _checkIfOperatorSelector(_operator);
+
+        if(_lockAmount > 0) {
+            operatorLockedStake[_operator] += _lockAmount;
+            lockedStake[_lockId] = _lockAmount;
         }
-
-        // bytes32[] memory tokens = tokenList;
-        // uint256[] memory delegations = new uint256[](tokens.length);
-        // uint256 delegatedTokens = 0;
-        // for(uint i=0; i < tokens.length; i++) {
-        //     delegations[i] = clusters[_operator].totalDelegations[tokens[i]];
-        //     if(delegations[i] != 0) {
-        //         delegatedTokens++;
-        //     }
-        // }
-
-        // for(uint256 i = 0; i < tokens.length; i++) {
-        //     bytes32 tokenId = tokens[i];
-        //     if(delegations[i] != 0) {
-        //         // calculate the amount to lock
-        //         uint256 amount = ((_amount * (10**30)) / delegatedTokens) / delegations[i];
-        //         operatorLockedStake[_operator][tokenId] += amount;
-        //         lockedStakes[_lockId][tokenId] = amount;
-        //     }
-        // }
-
-        // TODO: do we need to update the stake tree?
+        // TODO: need to update tree
+        // remove the executor node from tree if effective delegation falls below lock amount
     }
 
-    // to be called via Jobs contract when the selected executor submits the output
+    // for each executor selected for a job, we need to lock some of its stake tokens
+    // function lockTokens(
+    //     address _operator,
+    //     bytes32 _lockId,
+    //     uint256 _amount     // amount of usdc deposited for the job
+    //     // bytes32[] memory _tokens,
+    //     // uint256[] memory _amounts
+    // ) external onlyRole(JOBS_ROLE) {
+    //     // require(_tokens.length == _amounts.length, "RD:LT-Invalid input lengths");
+    //     bytes32[] memory tokens = tokenList;
+    //     uint len = tokens.length;
+    //     for(uint i=0; i < len; i++) {
+    //         if(clusters[_operator].totalDelegations[tokens[i]] != 0) {
+    //             bytes32 tokenId = tokens[i];
+    //             // calculate the amount to lock
+    //             uint256 amount = _amount * (10**15);
+    //             operatorLockedStake[_operator][tokenId] += amount;
+    //             lockedStakes[_lockId][tokenId] = amount;
+    //         }
+    //     }
+
+    //     // bytes32[] memory tokens = tokenList;
+    //     // uint256[] memory delegations = new uint256[](tokens.length);
+    //     // uint256 delegatedTokens = 0;
+    //     // for(uint i=0; i < tokens.length; i++) {
+    //     //     delegations[i] = clusters[_operator].totalDelegations[tokens[i]];
+    //     //     if(delegations[i] != 0) {
+    //     //         delegatedTokens++;
+    //     //     }
+    //     // }
+
+    //     // for(uint256 i = 0; i < tokens.length; i++) {
+    //     //     bytes32 tokenId = tokens[i];
+    //     //     if(delegations[i] != 0) {
+    //     //         // calculate the amount to lock
+    //     //         uint256 amount = ((_amount * (10**30)) / delegatedTokens) / delegations[i];
+    //     //         operatorLockedStake[_operator][tokenId] += amount;
+    //     //         lockedStakes[_lockId][tokenId] = amount;
+    //     //     }
+    //     // }
+
+    //     // TODO: do we need to update the stake tree?
+    // }
+
     function unlockTokens(
         address _operator,
         bytes32 _lockId
-    ) external onlyRole(JOBS_ROLE) {
-        for(uint256 i = 0; i < tokenList.length; i++) {
+    ) external {
+        _checkIfOperatorSelector(_operator);
+
+        uint256 lockedAmount = lockedStake[_lockId];
+        operatorLockedStake[_operator] -= lockedAmount;
+        delete lockedStake[_lockId];
+    }
+
+    // to be called via Jobs contract when the selected executor submits the output
+    // function unlockTokens(
+    //     address _operator,
+    //     bytes32 _lockId
+    // ) external onlyRole(JOBS_ROLE) {
+    //     for(uint256 i = 0; i < tokenList.length; i++) {
+    //         bytes32 tokenId = tokenList[i];
+    //         if(lockedStakes[_lockId][tokenId] > 0) {
+    //             operatorLockedStake[_operator][tokenId] -= lockedStakes[_lockId][tokenId];
+    //             delete lockedStakes[_lockId][tokenId];
+    //         }
+    //     }
+
+    //     // TODO: do we need to update the stake tree?
+    // }
+
+    function slash(
+        address _operator,
+        bytes32 _lockId,
+        address _recipient
+    ) external returns (address[] memory tokens, uint256[] memory amounts) {
+        _checkIfOperatorSelector(_operator);
+
+        uint256 effectiveLockedAmount = lockedStake[_lockId];
+        uint256 mpondSlashPending;
+        uint256 len = tokenList.length;
+        tokens = new address[](len);
+        amounts = new uint256[](len);
+        for(uint256 i = 0; i < len; i++) {
             bytes32 tokenId = tokenList[i];
-            if(lockedStakes[_lockId][tokenId] > 0) {
-                operatorLockedStake[_operator][tokenId] -= lockedStakes[_lockId][tokenId];
-                delete lockedStakes[_lockId][tokenId];
+            uint256 lockedTokens;
+            // for MPOND
+            if(i == 0) {
+                uint256 effectiveMPondLocked = effectiveLockedAmount / 2;
+                lockedTokens = effectiveMPondLocked / tokenWeights[tokenId].forDelegation;
+                // remaining effective locked amount will be for POND
+                effectiveLockedAmount -= effectiveMPondLocked;
             }
+            // for POND
+            else {
+                lockedTokens = effectiveLockedAmount / tokenWeights[tokenId].forDelegation;
+            }
+
+            uint256 totalDelegation = clusters[_operator].totalDelegations[tokenId];
+            uint256 slashedAmount = operatorSlashedStake[_operator][tokenId];
+            // if the total delegation falls below 0.5 MPOND, we don't slash MPOND
+            // rather we slash equivalent amount of POND
+            if(i == 0 && (totalDelegation - slashedAmount - lockedTokens) < (5 * 10**17)) {
+                mpondSlashPending = (5 * 10**17) - (totalDelegation - slashedAmount - lockedTokens);
+                lockedTokens = (totalDelegation - slashedAmount) - (5 * 10**17);
+            }
+            else if(i == 1) {
+                // calculating the extra equivalent POND to slash due to insufficient MPOND
+                lockedTokens += (mpondSlashPending * 10**6);
+            }
+
+            // update slashPerShare for the operator and add the locked tokens to the slashed stake
+            operatorSlashData[_operator].slashPerShare[tokenId] += (lockedTokens / totalDelegation);
+            operatorSlashedStake[_operator][tokenId] += lockedTokens;
+
+            // TODO
+            address token = IStakeManager(stakeAddress).transferSlashedToken(tokenId, lockedTokens, _recipient);
+            tokens[i] = token;
+            amounts[i] = lockedTokens;
         }
 
-        // TODO: do we need to update the stake tree?
+        operatorLockedStake[_operator] -= lockedStake[_lockId];
+        delete lockedStake[_lockId];
     }
 
     // slash the operator's locked stake
-    function slash(
-        address _operator,
-        bytes32 _lockId
-    ) external onlyRole(JOBS_ROLE) {
-        for(uint256 i = 0; i < tokenList.length; i++) {
-            bytes32 tokenId = tokenList[i];
-            uint256 lockedAmount = lockedStakes[_lockId][tokenId];
-            if(lockedAmount > 0) {
-                uint256 totalDelegation = clusters[_operator].totalDelegations[tokenId];
-                require(totalDelegation >= lockedAmount, "RD:S-Insufficient locked stake to slash");
-                operatorSlashData[_operator].slashPerShare[tokenId] += (lockedAmount / totalDelegation);
+    // function slash(
+    //     address _operator,
+    //     bytes32 _lockId
+    // ) external onlyRole(JOBS_ROLE) {
+    //     for(uint256 i = 0; i < tokenList.length; i++) {
+    //         bytes32 tokenId = tokenList[i];
+    //         uint256 lockedAmount = lockedStakes[_lockId][tokenId];
+    //         if(lockedAmount > 0) {
+    //             uint256 totalDelegation = clusters[_operator].totalDelegations[tokenId];
+    //             require(totalDelegation >= lockedAmount, "RD:S-Insufficient locked stake to slash");
+    //             operatorSlashData[_operator].slashPerShare[tokenId] += (lockedAmount / totalDelegation);
 
-                // TODO: shall we transfer the slashed token to the jobs contract? YES, multiple tokens
-                // TODO: and no update in totalDelegations mapping? YES
-                operatorLockedStake[_operator][tokenId] -= lockedAmount;
-                delete lockedStakes[_lockId][tokenId];
-            }
-        }
-    }
+    //             // TODO: shall we transfer the slashed token to the jobs contract? YES, multiple tokens
+    //             // TODO: and no update in totalDelegations mapping? YES
+    //             operatorLockedStake[_operator][tokenId] -= lockedAmount;
+    //             delete lockedStakes[_lockId][tokenId];
+    //         }
+    //     }
+    // }
 
     function getTokenList() external view returns (bytes32[] memory) {
         return tokenList;
