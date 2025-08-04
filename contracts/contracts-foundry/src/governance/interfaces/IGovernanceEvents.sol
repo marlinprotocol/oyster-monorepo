@@ -8,9 +8,8 @@ interface IGovernanceEvents is IGovernanceTypes {
     event VoteActivationDelaySet(uint256 delay);
     event VoteDurationSet(uint256 duration);
     event ProposalDurationSet(uint256 duration);
-    event NetworkConfigSet(uint256 chainId, address tokenAddress, string[] rpcUrls);
-    event RpcUrlAdded(uint256 indexed chainId, string rpcUrl);
-    event RpcUrlUpdated(uint256 indexed chainId, uint256 index, string rpcUrl);
+    event NetworkConfigSet(uint256 chainId, address tokenAddress, string[] rpcUrls, bytes32 networkHash);
+    event RpcUrlUpdated(uint256 indexed chainId, string[] rpcUrls);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
     event KMSPathSet(string kmsPath);
     event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2, bytes32 indexed imageId);
@@ -18,6 +17,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
     event ProposalPassVetoThresholdSet(uint256 threshold);
     event MinQuorumThresholdSet(uint256 minQuorum);
+    event VetoSlashRateSet(uint256 vetoSlashRate);
     event ExpiredProposalRefunded(
         bytes32 indexed proposalId
     );
@@ -45,7 +45,6 @@ interface IGovernanceEvents is IGovernanceTypes {
 
     event ProposalCreated(
         bytes32 indexed proposalId,
-        address indexed proposer,
         uint256 nonce,
         address[] targets,
         uint256[] values,

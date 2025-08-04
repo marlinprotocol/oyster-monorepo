@@ -66,6 +66,7 @@ interface IGovernanceTypes {
         ProposalTimeInfo proposalTimeInfo;
         ProposalVoteInfo proposalVoteInfo;
         VoteOutcome voteOutcome;
+        bytes32 imageId;
         bytes32 networkHash;
         bool executed;
     }
