@@ -102,8 +102,23 @@ contract Governance is
 
     uint256[50] private __gap1;
 
+    /// @notice Initializes the governance contract with all required configuration parameters
+    /// @dev This function sets up the initial state of the governance system including roles, thresholds, and configurations
     /// @dev setTokenLockAmount, setNetworkConfig should be seperately called after initialization
     ///      Otherwise, propose() will revert
+    /// @param _admin The address that will have admin privileges
+    /// @param _configSetter The address that can modify configuration parameters
+    /// @param _treasury The address where slashed funds will be sent
+    /// @param _minQuorumThreshold The minimum percentage of total voting power required for a proposal to be valid
+    /// @param _proposalPassVetoThreshold The percentage of votes required for a proposal to pass or be vetoed
+    /// @param _vetoSlashRate The percentage of deposit that will be slashed when a proposal is vetoed (in basis points)
+    /// @param _voteActivationDelay The delay before voting can start after proposal creation
+    /// @param _voteDuration The duration of the voting period
+    /// @param _proposalDuration The total duration of a proposal from creation to deadline
+    /// @param _maxRPCUrlsPerChain The maximum number of RPC URLs allowed per chain
+    /// @param _pcr The PCR configuration containing pcr0, pcr1, and pcr2 values
+    /// @param _kmsRootServerPubKey The public key of the KMS root server
+    /// @param _kmsPath The path configuration for KMS operations
     function initialize(
         address _admin,
         address _configSetter,
@@ -166,12 +181,18 @@ contract Governance is
 
     //-------------------------------- Admin start --------------------------------//
 
+    /// @notice Sets the required deposit amount for a specific token when creating proposals
+    /// @dev This function allows config setters to specify how much of a particular token must be deposited to create a proposal
+    /// @param _token The address of the token for which to set the deposit amount
+    /// @param _amount The amount of tokens required as deposit for proposal creation
     function setTokenLockAmount(address _token, uint256 _amount) external onlyConfigSetter {
         proposalDepositAmounts[_token] = _amount;
         emit TokenLockAmountSet(_token, _amount);
     }
 
     /// @notice Sets the proposal pass threshold, which is the minimum percentage of votes required for a proposal to pass or be vetoed
+    /// @dev This threshold determines the minimum percentage of total voting power needed for a proposal to be considered passed or vetoed
+    /// @param _proposalPassVetoThreshold The percentage threshold for proposal pass/veto (in basis points)
     function setProposalPassVetoThreshold(uint256 _proposalPassVetoThreshold) external onlyConfigSetter {
         _setProposalPassVetoThreshold(_proposalPassVetoThreshold);
     }
@@ -182,6 +203,9 @@ contract Governance is
         emit ProposalPassVetoThresholdSet(_proposalPassVetoThreshold);
     }
 
+    /// @notice Sets the minimum quorum threshold required for a proposal to be valid
+    /// @dev This threshold ensures that a minimum percentage of total voting power participates in the proposal
+    /// @param _minQuorumThreshold The minimum percentage of total voting power required for quorum (in basis points)
     function setMinQuorumThreshold(uint256 _minQuorumThreshold) external onlyConfigSetter {
         _setMinQuorumThreshold(_minQuorumThreshold);
     }
@@ -192,6 +216,9 @@ contract Governance is
         emit MinQuorumThresholdSet(_minQuorumThreshold);
     }
 
+    /// @notice Sets the percentage of deposit that will be slashed when a proposal is vetoed
+    /// @dev This rate determines how much of the proposer's deposit is taken as penalty when their proposal is vetoed
+    /// @param _vetoSlashRate The percentage of deposit to slash on veto (in basis points, max 100%)
     function setVetoSlashRate(uint256 _vetoSlashRate) external onlyConfigSetter {
         _setVetoSlashRate(_vetoSlashRate);
     }
@@ -202,6 +229,9 @@ contract Governance is
         emit VetoSlashRateSet(_vetoSlashRate);
     }
 
+    /// @notice Sets the treasury address where slashed funds will be sent
+    /// @dev This address receives the slashed portion of deposits when proposals are vetoed
+    /// @param _treasury The address to set as the treasury
     function setTreasury(address _treasury) external onlyConfigSetter {
         _setTreasury(_treasury);
     }
@@ -212,6 +242,11 @@ contract Governance is
         emit TreasurySet(_treasury);
     }
 
+    /// @notice Sets the timing configuration for proposals including activation delay, voting duration, and total proposal duration
+    /// @dev This function configures the time-based parameters that control the proposal lifecycle
+    /// @param _voteActivationDelay The delay before voting can start after proposal creation
+    /// @param _voteDuration The duration of the voting period
+    /// @param _proposalDuration The total duration of a proposal from creation to deadline
     function setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration)
         external
         onlyConfigSetter
@@ -239,6 +274,9 @@ contract Governance is
 
     /// @dev Condition `voteActivationDelay + voteDuration < proposalDuration` is not checked here
 
+    /// @notice Sets the maximum number of RPC URLs allowed per chain
+    /// @dev This limit prevents excessive RPC URL storage and ensures efficient network configuration management
+    /// @param _maxRPCUrlsPerChain The maximum number of RPC URLs allowed per chain
     function setMaxRPCUrlsPerChain(uint256 _maxRPCUrlsPerChain) external onlyConfigSetter {
         _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
     }
@@ -348,7 +386,9 @@ contract Governance is
         emit RpcUrlUpdated(_chainId, _rpcUrls);
     }
 
-    /// @notice Sets KMS Root Server Key
+    /// @notice Sets the KMS Root Server public key for signature verification
+    /// @dev This public key is used to verify KMS signatures during proposal result submission
+    /// @param _kmsRootServerPubKey The public key of the KMS root server
     function setKMSRootServerKey(bytes calldata _kmsRootServerPubKey) external onlyConfigSetter {
         _setKMSRootServerKey(_kmsRootServerPubKey);
     }
@@ -372,7 +412,11 @@ contract Governance is
         emit KMSPathSet(_kmsPath);
     }
 
-    /// @notice Set PCR0, PCR1, PCR2 value, and update imageId with the generated imageId from the PCR0,PCR1,PCR2 values
+    /// @notice Sets the PCR configuration (PCR0, PCR1, PCR2) and generates the corresponding image ID
+    /// @dev This configuration is used for enclave verification and must be unique from the current configuration
+    /// @param _pcr0 The PCR0 value for enclave verification
+    /// @param _pcr1 The PCR1 value for enclave verification
+    /// @param _pcr2 The PCR2 value for enclave verification
     function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyConfigSetter {
         _setPCRConfig(_pcr0, _pcr1, _pcr2);
     }
@@ -387,10 +431,14 @@ contract Governance is
         emit PCRConfigSet(_pcr0, _pcr1, _pcr2, imageIdGenerated);
     }
 
+    /// @notice Pauses the governance contract, preventing all state-changing operations
+    /// @dev Only admin can pause the contract, and it can only be called when not already paused
     function pause() external whenNotPaused onlyAdmin {
         _pause();
     }
 
+    /// @notice Unpauses the governance contract, allowing state-changing operations to resume
+    /// @dev Only admin can unpause the contract, and it can only be called when currently paused
     function unpause() external whenPaused onlyAdmin {
         _unpause();
     }
@@ -399,6 +447,11 @@ contract Governance is
 
     //-------------------------------- Propose start --------------------------------//
 
+    /// @notice Creates a new governance proposal with the specified parameters
+    /// @dev This function validates inputs, locks deposit tokens, and stores the proposal data
+    /// @dev The caller must send the exact amount of ETH specified in the proposal values
+    /// @param _params The proposal parameters including targets, values, calldatas, title, description, and deposit token
+    /// @return proposalId The unique identifier of the created proposal
     function propose(ProposeInputParams calldata _params) external payable whenNotPaused returns (bytes32) {
         // Validate input
         require(
@@ -480,6 +533,11 @@ contract Governance is
 
     //-------------------------------- Vote start --------------------------------//
 
+    /// @notice Submits an encrypted vote for a specific proposal
+    /// @dev This function can only be called during the active voting period of a proposal
+    /// @dev The vote is encrypted and stored along with the voter's address
+    /// @param _proposalId The unique identifier of the proposal to vote on
+    /// @param _voteEncrypted The encrypted vote data
     function vote(bytes32 _proposalId, bytes calldata _voteEncrypted) external {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
@@ -506,6 +564,10 @@ contract Governance is
 
     //-------------------------------- Result start --------------------------------//
 
+    /// @notice Submits the final voting result for a proposal after the voting period has ended
+    /// @dev This function verifies KMS and enclave signatures before processing the result
+    /// @dev The result determines whether the proposal passes, fails, or is vetoed
+    /// @param _params The result submission parameters including result data, enclave public key, and signatures
     function submitResult(SubmitResultInputParams calldata _params) external nonReentrant {
         // Decode `_resultData`
         (bytes32 proposalId, VoteDecisionResult memory voteDecisionResult) =
@@ -566,6 +628,7 @@ contract Governance is
         emit ExpiredProposalRefunded(_proposalId);
     }
 
+    /// @dev Handles the outcome of a vote by updating the proposal state and processing deposits
     function _handleVoteOutcome(bytes32 _proposalId, VoteOutcome _voteOutcome) internal {
         proposals[_proposalId].voteOutcome = _voteOutcome;
 
@@ -582,6 +645,7 @@ contract Governance is
         }
     }
 
+    /// @dev Refunds the ETH value sent with the proposal to the proposer
     function _refundValue(bytes32 _proposalId) internal {
         uint256 valueSum;
         for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
@@ -594,6 +658,7 @@ contract Governance is
         emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, valueSum);
     }
 
+    /// @dev Queues a passed proposal for execution
     function _queueExecution(bytes32 _proposalId) internal {
         // This should never revert
         require(executionQueue[_proposalId] == false, ProposalAlreadyInQueue());
@@ -607,6 +672,10 @@ contract Governance is
 
     //-------------------------------- Execution start --------------------------------//
 
+    /// @notice Executes a proposal that has been queued for execution
+    /// @dev This function can only be called for proposals that have passed and been queued
+    /// @dev The function executes all target contract calls with their specified values and calldata
+    /// @param _proposalId The unique identifier of the proposal to execute
     function execute(bytes32 _proposalId) external whenNotPaused {
         require(executionQueue[_proposalId] == true, ProposalNotInQueue());
         require(proposals[_proposalId].executed == false, ProposalAlreadySubmitted());
@@ -631,22 +700,26 @@ contract Governance is
 
     //-------------------------------- Helpers start --------------------------------//
 
+    /// @dev Transfers tokens from proposer and locks them as deposit
     function _depositTokenAndLock(bytes32 _proposalId, address _token, uint256 _amount) internal {
         IERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
         _lockDeposit(_proposalId, _token, _amount);
     }
 
+    /// @dev Stores the locked deposit information for a proposal
     function _lockDeposit(bytes32 _proposalId, address _token, uint256 _amount) internal {
         proposals[_proposalId].tokenLockInfo = TokenLockInfo({token: _token, amount: _amount});
         emit DepositLocked(_proposalId, _token, _amount);
     }
 
+    /// @dev Unlocks and refunds the deposit tokens to the proposer
     function _unlockDepositAndRefund(bytes32 _proposalId) internal {
         TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
         _deleteDepositLock(_proposalId);
         IERC20(tokenLockInfo.token).safeTransfer(proposals[_proposalId].proposalInfo.proposer, tokenLockInfo.amount);
     }
 
+    /// @dev Slashes a portion of the deposit based on vetoSlashRate and refunds the remainder
     function _slashDeposit(bytes32 _proposalId) internal {
         TokenLockInfo memory tokenLockInfo = proposals[_proposalId].tokenLockInfo;
         address proposer = proposals[_proposalId].proposalInfo.proposer;
@@ -669,10 +742,13 @@ contract Governance is
         emit DepositSlashed(_proposalId, tokenLockInfo.token, slashAmount);
     }
 
+    /// @dev Deletes the deposit lock information for a proposal
     function _deleteDepositLock(bytes32 _proposalId) internal {
         delete proposals[_proposalId].tokenLockInfo;
     }
 
+    /// @dev Converts a public key to an Ethereum address
+    /// @return address The Ethereum address derived from the public key
     function _pubKeyToAddress(bytes memory _pubKey) internal pure returns (address) {
         require(_pubKey.length == 64, InvalidPubKeyLength());
 
@@ -680,7 +756,8 @@ contract Governance is
         return address(uint160(uint256(pubKeyHash)));
     }
 
-    /// @notice Calculates the result of the proposal based on the vote result
+    /// @dev Calculates the final outcome of a proposal based on vote counts and thresholds
+    /// @return voteOutcome The final outcome of the proposal (Passed, Failed, or Vetoed)
     function _calcVoteResult(VoteDecisionResult memory _voteDecisionCount) internal view returns (VoteOutcome) {
         uint256 yes = _voteDecisionCount.yes;
         uint256 no = _voteDecisionCount.no;
@@ -710,6 +787,8 @@ contract Governance is
         return VoteOutcome.Failed;
     }
 
+    /// @dev Generates an image ID from PCR values for enclave verification
+    /// @return imageId The generated image ID for enclave verification
     function _generateImageId(bytes memory _pcr0, bytes memory _pcr1, bytes memory _pcr2)
         internal
         pure
@@ -720,6 +799,8 @@ contract Governance is
         return sha256(abi.encodePacked(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
     }
 
+    /// @dev Verifies the signature from an enclave using the provided public key
+    /// @return isValid True if the signature is valid, false otherwise
     function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory message)
         internal
         pure
@@ -738,6 +819,8 @@ contract Governance is
         return recoveredAddress == enclaveAddress;
     }
 
+    /// @dev Converts bytes32 to a hex string without the '0x' prefix
+    /// @return hexString The hex string representation without '0x' prefix
     function _toHexStringWithNoPrefix(bytes32 data) internal pure returns (string memory) {
         bytes memory alphabet = "0123456789abcdef";
         bytes memory str = new bytes(64);
@@ -748,6 +831,12 @@ contract Governance is
         return string(str);
     }
 
+    /// @notice Verifies a KMS signature for enclave public key derivation
+    /// @dev This function reconstructs the URI and verifies the signature against the KMS root server public key
+    /// @param _imageId The image ID used in the KMS path
+    /// @param _enclavePubKey The enclave public key to verify
+    /// @param _kmsSig The KMS signature to verify
+    /// @return isValid True if the signature is valid, false otherwise
     function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig)
         public
         view
@@ -775,6 +864,8 @@ contract Governance is
 
     //-------------------------------- Getters start --------------------------------//
 
+    /// @dev Generates a unique proposal ID based on proposal parameters and proposer nonce
+    /// @return proposalId The unique proposal identifier
     function _generateProposalId(
         address[] calldata _targets,
         uint256[] calldata _values,
@@ -786,10 +877,23 @@ contract Governance is
         return sha256(abi.encode(_targets, _values, _calldatas, _descriptionHash, _proposer, _nonce));
     }
 
+    /// @notice Retrieves the timing information for a specific proposal
+    /// @dev Returns the complete timing structure including proposed, activation, voting deadline, and proposal deadline timestamps
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return proposalTimeInfo The timing information structure for the proposal
     function getProposalTimeInfo(bytes32 _proposalId) public view returns (ProposalTimeInfo memory) {
         return proposals[_proposalId].proposalTimeInfo;
     }
 
+    /// @notice Retrieves the complete proposal information for a specific proposal
+    /// @dev Returns all proposal details including proposer, targets, values, calldatas, title, and description
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return proposer The address of the proposal creator
+    /// @return targets Array of target contract addresses for the proposal
+    /// @return values Array of ETH values to send with each call
+    /// @return calldatas Array of calldata for each target contract call
+    /// @return title The title of the proposal
+    /// @return description The description of the proposal
     function getProposalInfo(bytes32 _proposalId)
         public
         view
@@ -813,16 +917,27 @@ contract Governance is
         );
     }
 
+    /// @notice Calculates the hash of a proposal's title and description
+    /// @dev This hash is used as part of the proposal ID generation process
+    /// @param _title The title of the proposal
+    /// @param _description The description of the proposal
+    /// @return descriptionHash The hash of the title and description
     function getDescriptionHash(string calldata _title, string calldata _description) public pure returns (bytes32) {
         return sha256(abi.encode(_title, _description));
     }
 
+    /// @notice Returns the current network hash that represents the state of all supported chains
+    /// @dev This hash is used to verify that proposal execution happens with the same network configuration
+    /// @return networkHash The current network hash
     function getNetworkHash() public view returns (bytes32) {
         return networkHash;
     }
 
-    /// @notice Returns the network hash for a given proposal ID
-    /// @notice This does not check if the vote is done, so the hash could not be the final hash
+    /// @notice Returns the vote hash for a given proposal ID
+    /// @dev This hash represents the cumulative hash of all votes cast for the proposal
+    /// @dev This does not check if the vote is done, so the hash could not be the final hash
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return voteHash The vote hash for the proposal
     function getVoteHash(bytes32 _proposalId) public view returns (bytes32) {
         // reverts if proposal does not exist
         require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
@@ -831,15 +946,23 @@ contract Governance is
         return proposalVoteInfo.voteHash;
     }
 
-    /// @notice Total vote count for a given proposal
-    /// @notice This function does not check if the vote is done, so the count could not be the final count
-    function getVoteCount(bytes32 _proposalI) external view returns (uint256) {
+    /// @notice Returns the total vote count for a given proposal
+    /// @dev This function does not check if the vote is done, so the count could not be the final count
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return voteCount The total number of votes cast for the proposal
+    function getVoteCount(bytes32 _proposalId) external view returns (uint256) {
         // reverts if proposal does not exist
-        require(proposals[_proposalI].proposalInfo.proposer != address(0), ProposalDoesNotExist());
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
 
-        return proposals[_proposalI].proposalVoteInfo.voteCount;
+        return proposals[_proposalId].proposalVoteInfo.voteCount;
     }
 
+    /// @notice Returns the vote information for a specific vote index in a proposal
+    /// @dev Returns the voter address and encrypted vote data for the specified vote index
+    /// @param _proposalId The unique identifier of the proposal
+    /// @param _idx The index of the vote to retrieve
+    /// @return voter The address of the voter
+    /// @return voteEncrypted The encrypted vote data
     function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns (address, bytes memory) {
         return (
             proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
@@ -847,6 +970,12 @@ contract Governance is
         );
     }
 
+    /// @notice Returns all vote information for a specific proposal
+    /// @dev Returns an array of all votes, the total vote count, and the cumulative vote hash
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return votes Array of all votes cast for the proposal
+    /// @return voteCount The total number of votes cast
+    /// @return voteHash The cumulative hash of all votes
     function getAllVoteInfo(bytes32 _proposalId)
         external
         view
@@ -861,6 +990,10 @@ contract Governance is
         voteHash = proposalVoteInfo.voteHash;
     }
 
+    /// @notice Returns all network configurations for all supported chains
+    /// @dev Returns arrays of chain IDs and their corresponding network configurations
+    /// @return supportedChainIds Array of supported chain IDs
+    /// @return tokenNetworkConfigs Array of token network configurations for each chain
     function getAllNetworkConfigs() external view returns (uint256[] memory, TokenNetworkConfig[] memory) {
         uint256 chainCount = supportedChainIds.length;
         TokenNetworkConfig[] memory tokenNetworkConfigList = new TokenNetworkConfig[](chainCount);
