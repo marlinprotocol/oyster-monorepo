@@ -3,6 +3,7 @@ pragma solidity 0.8.29;
 
 import {Script} from "forge-std/Script.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 import {console} from "forge-std/console.sol";
@@ -12,14 +13,20 @@ import {console} from "forge-std/console.sol";
  */
 contract DeployGovernance is Script {
 
+    HelperConfig helperConfig;
+    HelperConfig.Config activeConfig;
+
+    constructor() {
+        helperConfig = new HelperConfig();
+        activeConfig = helperConfig.getActiveConfig();
+    }
+
     function run() external returns (address) {
         address governanceProxy = deployGovernance();
         return governanceProxy;
     }
 
     function deployGovernance() public returns (address) {
-        HelperConfig helperConfig = new HelperConfig();
-        HelperConfig.Config memory activeConfig = helperConfig.getActiveConfig();
         
         vm.startBroadcast();
 
@@ -34,8 +41,9 @@ contract DeployGovernance is Script {
             activeConfig.initializeParams.admin,
             activeConfig.initializeParams.configSetter,
             activeConfig.initializeParams.treasury,
-            activeConfig.initializeParams.proposalPassVetoThreshold,
             activeConfig.initializeParams.minQuorumThreshold,
+            activeConfig.initializeParams.proposalPassVetoThreshold,
+            activeConfig.initializeParams.vetoSlashRate,
             activeConfig.initializeParams.voteActivationDelay,
             activeConfig.initializeParams.voteDuration,
             activeConfig.initializeParams.proposalDuration,
@@ -44,29 +52,35 @@ contract DeployGovernance is Script {
             activeConfig.initializeParams.kmsRootServerPubKey,
             activeConfig.initializeParams.kmsPath
         );
-
-        // Set Token Lock Configurations
-        for (uint256 i = 0; i < activeConfig.tokenLockConfigs.length; i++) {
-            Governance(address(proxy)).setTokenLockAmount(
-                activeConfig.tokenLockConfigs[i].tokenAddress,
-                activeConfig.tokenLockConfigs[i].lockAmount
-            );
-        }
-
-        // Set Token Network Configurations
-        for (uint256 i = 0; i < activeConfig.governanceNetworkConfigs.length; i++) {
-            Governance(address(proxy)).setNetworkConfig(
-                activeConfig.governanceNetworkConfigs[i].chainId,
-                activeConfig.governanceNetworkConfigs[i].tokenAddress,
-                activeConfig.governanceNetworkConfigs[i].rpcUrls
-            );
-        }
-        
         vm.stopBroadcast();
 
         console.log("Governance Implementation deployed at:", address(governance));
         console.log("Governance Proxy deployed at:", address(proxy));
 
         return address(governance);
+    }
+
+    function initializeGovernance(address governanceProxy, HelperConfig.InitializeParams memory initializeParams) public {
+        Governance governance = Governance(governanceProxy);
+
+        vm.startBroadcast();
+
+        governance.initialize(
+            initializeParams.admin,
+            initializeParams.configSetter,
+            initializeParams.treasury,
+            initializeParams.minQuorumThreshold,
+            initializeParams.proposalPassVetoThreshold,
+            initializeParams.vetoSlashRate,
+            initializeParams.voteActivationDelay,
+            initializeParams.voteDuration,
+            initializeParams.proposalDuration,
+            initializeParams.maxRPCUrlsPerChain,
+            initializeParams.pcr,
+            initializeParams.kmsRootServerPubKey,
+            initializeParams.kmsPath
+        );
+
+        vm.stopBroadcast();
     }
 }

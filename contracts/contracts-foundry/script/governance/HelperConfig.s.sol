@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import {Script} from "forge-std/Script.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 
 contract HelperConfig is Script {
 
@@ -13,6 +14,7 @@ contract HelperConfig is Script {
         address treasury;
         uint256 proposalPassVetoThreshold;
         uint256 minQuorumThreshold;
+        uint256 vetoSlashRate;
         uint256 voteActivationDelay;
         uint256 voteDuration;
         uint256 proposalDuration;
@@ -48,6 +50,8 @@ contract HelperConfig is Script {
 
     Config public activeConfig;
     Governance public governance;
+    MockERC20 public governanceToken;
+    MockERC20 public depositToken;
 
     constructor() {
         if(block.chainid == ARBITRUM_ONE_MAINNET) {
@@ -55,6 +59,10 @@ contract HelperConfig is Script {
         } else if (block.chainid == ARBITRUM_SEPOLIA) {
             activeConfig = getArbitrumSepoliaConfig();
             governance = Governance(0x5A4cDc889698a42D7DFE0C15da3adCF41E3db138); // "Governance" in "Arbitrum Sepolia"
+            governanceToken = MockERC20(_readTestnetTokenAddressFromJson("governanceToken", "arbitrumSepolia"));
+            depositToken = MockERC20(_readTestnetTokenAddressFromJson("depositToken", "arbitrumSepolia"));
+        } else if(block.chainid == ETHEREUM_SEPOLIA) {
+            governanceToken = MockERC20(_readTestnetTokenAddressFromJson("governanceToken", "ethereumSepolia"));
         } else {
             revert UnsupportedChainId(block.chainid);
         }
@@ -83,6 +91,7 @@ contract HelperConfig is Script {
             treasury: treasuryAddress, // Replace with actual treasury address
             proposalPassVetoThreshold: 0.05 * 10**18, // 5%
             minQuorumThreshold: 0.05 * 10**18, // 5%
+            vetoSlashRate: 0.3 * 10**18, // 30%
             voteActivationDelay: 5 minutes,
             voteDuration: 15 minutes,
             proposalDuration: 30 minutes,
@@ -139,5 +148,12 @@ contract HelperConfig is Script {
             governanceNetworkConfigs: governanceNetworkConfigs
         });
     }
-    
+
+    function _readTestnetTokenAddressFromJson(string memory tokenType, string memory network) internal view returns (address) {
+        string memory root = vm.projectRoot();
+        string memory path = string.concat(root, "/script/governance/interactions/inputs/tokens.json");
+        string memory json = vm.readFile(path);
+
+        return vm.parseJsonAddress(json, string.concat(".testnet.", tokenType, ".", network));
+    }
 }

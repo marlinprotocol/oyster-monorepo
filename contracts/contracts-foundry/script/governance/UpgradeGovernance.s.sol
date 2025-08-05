@@ -18,6 +18,22 @@ contract UpgradeGovernance is Script, HelperConfig {
         vm.startBroadcast();
         Governance governanceImpl = new Governance();
         UUPSUpgradeable(payable(governanceProxy)).upgradeTo(address(governanceImpl));
+
+        // Governance(address(governance)).setPCRConfig(
+        //     activeConfig.initializeParams.pcr.pcr0,
+        //     activeConfig.initializeParams.pcr.pcr1,
+        //     activeConfig.initializeParams.pcr.pcr2
+        // );
+
+
+        // // Set Token Network Configurations
+        // for (uint256 i = 0; i < activeConfig.governanceNetworkConfigs.length; i++) {
+        //     Governance(address(governance)).setNetworkConfig(
+        //         activeConfig.governanceNetworkConfigs[i].chainId,
+        //         activeConfig.governanceNetworkConfigs[i].tokenAddress,
+        //         activeConfig.governanceNetworkConfigs[i].rpcUrls
+        //     );
+        // }
         vm.stopBroadcast();
     }
 }

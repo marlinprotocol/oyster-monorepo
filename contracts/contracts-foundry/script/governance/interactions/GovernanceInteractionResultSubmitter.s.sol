@@ -12,7 +12,7 @@ contract GovernanceInteractionResultSubmitter is Script, GovernanceInteraction {
     // Submits the result for a given proposalId and related data from JSON
     function submitResultByIndex(uint256 idx) public {
         // Read JSON file
-        string memory json = vm.readFile("../inputs/results.json");
+        string memory json = vm.readFile("script/governance/interactions/inputs/results.json");
         string memory base = string.concat("[", vm.toString(idx), "]");
 
         // Parse fields from JSON
@@ -30,7 +30,8 @@ contract GovernanceInteractionResultSubmitter is Script, GovernanceInteraction {
         });
 
         // Read private key from .env
-        uint256 submitterPrivateKey = vm.envUint("SUBMITTER_PRIVATE_KEY");
+        string memory submitter = vm.envString("SUBMITTER_PRIVATE_KEY");
+        uint256 submitterPrivateKey = vm.envUint(submitter);
 
         // Broadcast the transaction using the submitter's private key
         vm.startBroadcast(submitterPrivateKey);

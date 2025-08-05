@@ -58,6 +58,7 @@ contract GovernanceInteractionProposer is GovernanceInteraction {
             console.logBytes(calldatas[i]);
         }
 
+
         // console.log("Proposal Id: ");
         // address proposer = vm.addr(proposerPrivateKey);
         // bytes32 descriptionHash = governance.getDescriptionHash(title, description);

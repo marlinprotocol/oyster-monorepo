@@ -4,7 +4,7 @@ pragma solidity 0.8.29;
 import {GovernanceInteraction} from "./GovernanceInteraction.s.sol";
 import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTypes.sol";
 import {console} from "forge-std/console.sol";
-
+import {HelperConfig} from "../HelperConfig.s.sol";
 
 contract SetGovernancePCRConfig is GovernanceInteraction {
 
@@ -16,7 +16,6 @@ contract SetGovernancePCRConfig is GovernanceInteraction {
 
     PCR public pcr;
 
-
     constructor() {
         pcr = PCR({
             /* 21/07/2025 Testnet e2e ver. */
@@ -27,26 +26,19 @@ contract SetGovernancePCRConfig is GovernanceInteraction {
     }
 
     function run() external {
-        setPCRConfig();
-
-        bytes32 imageId;
-        IGovernanceTypes.PCR memory currentPCRConfig;
-        (currentPCRConfig, imageId) = governance.pcrConfig();
-
-        console.log("PCR Config set successfully.");
-        console.log(" ");
-        console.log("PCR0: ");
-        console.logBytes(currentPCRConfig.pcr0);
-        console.log("PCR1: ");
-        console.logBytes(currentPCRConfig.pcr1);
-        console.log("PCR2: ");
-        console.logBytes(currentPCRConfig.pcr2);
-        console.log(" ");
+        // setPCRConfig();
+        setProposalTimingConfig();
     }
 
     function setPCRConfig() public {
         vm.startBroadcast();
         governance.setPCRConfig(pcr.pcr0, pcr.pcr1, pcr.pcr2);
+        vm.stopBroadcast();
+    }
+
+    function setProposalTimingConfig() public {
+        vm.startBroadcast();
+        governance.setProposalTimingConfig(0, 5 minutes, 0);
         vm.stopBroadcast();
     }
 }
