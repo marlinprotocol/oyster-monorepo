@@ -141,8 +141,8 @@ contract Governance is
         __Pausable_init_unchained();
 
         // Set Roles
-        require(_admin != address(0), ZeroAdminAddress());
-        require(_configSetter != address(0), ZeroConfigSetterAddress());
+        require(_admin != address(0), InvalidAddress());
+        require(_configSetter != address(0), InvalidAddress());
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(CONFIG_SETTER_ROLE, _configSetter);
 
@@ -185,6 +185,7 @@ contract Governance is
     /// @param _token The address of the token for which to set the deposit amount
     /// @param _amount The amount of tokens required as deposit for proposal creation
     function setTokenLockAmount(address _token, uint256 _amount) external onlyConfigSetter {
+        require(_amount > 0, InvalidAddress());
         proposalDepositAmounts[_token] = _amount;
         emit TokenLockAmountSet(_token, _amount);
     }
@@ -236,7 +237,7 @@ contract Governance is
     }
 
     function _setTreasury(address _treasury) internal {
-        require(_treasury != address(0), ZeroTreasuryAddress());
+        require(_treasury != address(0), InvalidAddress());
         treasury = _treasury;
         emit TreasurySet(_treasury);
     }
@@ -459,7 +460,7 @@ contract Governance is
         );
         require(bytes(_params.title).length > 0 && bytes(_params.description).length > 0, InvalidTitleLength());
         for (uint256 i = 0; i < _params.targets.length; ++i) {
-            require(_params.targets[i] != address(this), InvalidTargetAddress());
+            require(_params.targets[i] != address(this), InvalidAddress());
         }
         uint256 valueSum;
         for (uint256 i = 0; i < _params.values.length; ++i) {
@@ -473,7 +474,7 @@ contract Governance is
         bytes32 descriptionHash = sha256(abi.encode(_params.title, _params.description));
         bytes32 proposalId = _generateProposalId(
             _params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]
-        );
+        );  
         require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
 
         // Deposit and store
@@ -641,6 +642,7 @@ contract Governance is
             _refundValue(_proposalId);
         } else if (_voteOutcome == VoteOutcome.Vetoed) {
             _slashDeposit(_proposalId);
+            _refundValue(_proposalId);
         }
     }
 
@@ -650,10 +652,13 @@ contract Governance is
         for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
             valueSum += proposals[_proposalId].proposalInfo.values[i];
         }
+
         if (valueSum > 0) {
+            // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
             (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
             ok;
         }
+
         emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, valueSum);
     }
 
@@ -675,7 +680,7 @@ contract Governance is
     /// @dev This function can only be called for proposals that have passed and been queued
     /// @dev The function executes all target contract calls with their specified values and calldata
     /// @param _proposalId The unique identifier of the proposal to execute
-    function execute(bytes32 _proposalId) external whenNotPaused {
+    function execute(bytes32 _proposalId) external whenNotPaused nonReentrant {
         require(executionQueue[_proposalId] == true, ProposalNotInQueue());
         require(proposals[_proposalId].executed == false, ProposalAlreadySubmitted());
 
@@ -954,6 +959,7 @@ contract Governance is
     /// @return voter The address of the voter
     /// @return voteEncrypted The encrypted vote data
     function getVoteInfo(bytes32 _proposalId, uint256 _idx) external view returns (address, bytes memory) {
+        require(_idx < proposals[_proposalId].proposalVoteInfo.voteCount, InvalidVoteIndex());
         return (
             proposals[_proposalId].proposalVoteInfo.votes[_idx].voter,
             proposals[_proposalId].proposalVoteInfo.votes[_idx].voteEncrypted

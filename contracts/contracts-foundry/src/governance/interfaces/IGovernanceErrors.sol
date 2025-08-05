@@ -15,9 +15,8 @@ interface IGovernanceErrors {
     error InvalidProposalTimeConfig();
     error InvalidPubKeyLength();
     error InvalidRpcUrl();
-    error InvalidTargetAddress();
     error InvalidTitleLength();
-    error InvalidTokenAddress();
+    error InvalidVoteIndex();
     error InvalidVetoSlashRate();
     error InvadidKMSSignature();
     error MaxRpcUrlsPerChainReached();
@@ -36,10 +35,8 @@ interface IGovernanceErrors {
     error SameImageId();
     error TokenNotSupported();
     error VotingNotActive();
-    error ZeroAdminAddress();
-    error ZeroConfigSetterAddress();
     error ZeroProposalPassThreshold();
     error ZeroProposalTimeConfig();
-    error ZeroTreasuryAddress();
     error InvalidMinQuorumThreshold();
+    error InvalidAddress();
 }
