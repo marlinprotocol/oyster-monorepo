@@ -41,7 +41,6 @@ contract Governance is
     // ========== State Variables ==========
 
     // Core Contracts
-    IERC20 public usdc;
     address public treasury;
 
     // Proposal Management
@@ -62,7 +61,7 @@ contract Governance is
     string public kmsPath;
 
     // Network Configuration
-    bytes32 public networkHash;
+    bytes32 private networkHash;
     uint256[] public supportedChainIds;
     uint256 public maxRPCUrlsPerChain;
     mapping(uint256 chainId => TokenNetworkConfig config) public tokenNetworkConfigs;
@@ -471,7 +470,7 @@ contract Governance is
         require(supportedChainIds.length > 0, NoSupportedChainConfigured());
 
         // Calculate proposalId
-        bytes32 descriptionHash = getDescriptionHash(_params.title, _params.description);
+        bytes32 descriptionHash = sha256(abi.encode(_params.title, _params.description));
         bytes32 proposalId = _generateProposalId(
             _params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]
         );
@@ -915,15 +914,6 @@ contract Governance is
             proposalInfo.title,
             proposalInfo.description
         );
-    }
-
-    /// @notice Calculates the hash of a proposal's title and description
-    /// @dev This hash is used as part of the proposal ID generation process
-    /// @param _title The title of the proposal
-    /// @param _description The description of the proposal
-    /// @return descriptionHash The hash of the title and description
-    function getDescriptionHash(string calldata _title, string calldata _description) public pure returns (bytes32) {
-        return sha256(abi.encode(_title, _description));
     }
 
     /// @notice Returns the current network hash that represents the state of all supported chains
