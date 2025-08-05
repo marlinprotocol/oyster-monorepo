@@ -478,7 +478,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 200);
@@ -486,7 +486,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,
@@ -552,7 +552,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 300);
@@ -560,7 +560,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,
@@ -624,7 +624,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 400);
@@ -632,7 +632,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,
@@ -697,7 +697,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 500);
@@ -705,7 +705,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,
@@ -770,7 +770,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 600);
@@ -778,7 +778,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,
@@ -844,7 +844,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         targets[0] = address(mockTarget);
         
         uint256[] memory values = new uint256[](1);
-        values[0] = 0;
+        values[0] = 0.1 ether;
         
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 700);
@@ -852,7 +852,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
-        bytes32 proposalId = governance.propose{value: 0}(
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
                 targets: targets,

@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {Governance} from "../../src/governance/Governance.sol";
-import {MockERC20} from "../../src/governance/Mocks/MockERC20.sol";
+import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract GovernanceSetup is Test {
@@ -78,6 +78,14 @@ contract GovernanceSetup is Test {
         vm.deal(voter1, GAS_FUND_AMOUNT);
         vm.deal(voter2, GAS_FUND_AMOUNT);
         vm.deal(voter3, GAS_FUND_AMOUNT);
+
+        vm.label(admin, "admin");
+        vm.label(configSetter, "configSetter");
+        vm.label(treasury, "treasury");
+        vm.label(proposer, "proposer");
+        vm.label(voter1, "voter1");
+        vm.label(voter2, "voter2");
+        vm.label(voter3, "voter3");
 
         /* Deploy Tokens */
         depositToken = MockERC20(address(new ERC1967Proxy(address(new MockERC20()), "")));

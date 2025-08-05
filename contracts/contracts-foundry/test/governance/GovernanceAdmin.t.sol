@@ -50,6 +50,15 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.setTokenLockAmount(newToken, newAmount);
     }
 
+    function test_setTokenLockAmount_revert_when_ZeroAmount() public {
+        address newToken = makeAddr("newToken");
+        uint256 zeroAmount = 0;
+
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.InvalidAddress.selector);
+        governance.setTokenLockAmount(newToken, zeroAmount);
+    }
+
     // ========== setProposalPassVetoThreshold Tests ==========
     
     function test_setProposalPassVetoThreshold_FromConfigSetter() public {
@@ -98,6 +107,42 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.prank(configSetter);
         vm.expectRevert(IGovernanceErrors.InvalidMinQuorumThreshold.selector);
         governance.setMinQuorumThreshold(0);
+    }
+
+    // ========== setVetoSlashRate Tests ==========
+    
+    function test_setVetoSlashRate_FromConfigSetter() public {
+        uint256 newRate = 0.1 * 1e18; // 10%
+
+        vm.prank(configSetter);
+        governance.setVetoSlashRate(newRate);
+
+        assertEq(governance.vetoSlashRate(), newRate, "vetoSlashRate not matching");
+    }
+
+    function test_setVetoSlashRate_revert_when_FromNonConfigSetter() public {
+        uint256 newRate = 0.1 * 1e18;
+
+        vm.prank(admin);
+        vm.expectRevert(IGovernanceErrors.NotConfigSetterRole.selector);
+        governance.setVetoSlashRate(newRate);
+    }
+
+    function test_setVetoSlashRate_revert_when_ExceedsMaxRate() public {
+        uint256 exceedRate = 1.1 * 1e18; // 110%
+
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.InvalidVetoSlashRate.selector);
+        governance.setVetoSlashRate(exceedRate);
+    }
+
+    function test_setVetoSlashRate_WhenMaxRate() public {
+        uint256 maxRate = 1e18; // 100%
+
+        vm.prank(configSetter);
+        governance.setVetoSlashRate(maxRate);
+
+        assertEq(governance.vetoSlashRate(), maxRate, "vetoSlashRate should accept max rate");
     }
 
     // ========== setTreasury Tests ==========
@@ -164,6 +209,23 @@ contract GovernanceAdminTest is GovernanceSetup {
         assertEq(voteActivationDelay_, 30 * 60, "voteActivationDelay not set correctly");
         assertEq(voteDuration_, 30 * 60, "voteDuration not set correctly");
         assertEq(proposalDuration_, 30 * 60, "proposalDuration not set correctly");
+    }
+
+    function test_setProposalTimingConfig_revert_when_AllZeroValues() public {
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.ZeroProposalTimeConfig.selector);
+        governance.setProposalTimingConfig(0, 0, 0);
+    }
+
+    function test_setProposalTimingConfig_WhenPartialZeroValues() public {
+        // Should succeed when at least one value is non-zero
+        vm.prank(configSetter);
+        governance.setProposalTimingConfig(10 * 60, 0, 0);
+        
+        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
+        assertEq(voteActivationDelay_, 10 * 60, "voteActivationDelay should be set");
+        assertEq(voteDuration_, 0, "voteDuration should be zero");
+        assertEq(proposalDuration_, 0, "proposalDuration should be zero");
     }
 
     // ========== setMaxRPCUrlsPerChain Tests ==========
@@ -269,6 +331,42 @@ contract GovernanceAdminTest is GovernanceSetup {
         assertFalse(found, "Chain should be removed when token address is zero");
     }
 
+    function test_setNetworkConfig_WhenRemovingChain() public {
+        uint256 chainId = 1;
+        string[] memory rpcUrls = new string[](1);
+        rpcUrls[0] = "https://rpc.example.com";
+
+        // First set a valid network config
+        vm.prank(configSetter);
+        governance.setNetworkConfig(chainId, makeAddr("validToken"), rpcUrls);
+
+        // Verify chain was added
+        (uint256[] memory supportedChainIds,) = governance.getAllNetworkConfigs();
+        bool found = false;
+        for (uint256 i = 0; i < supportedChainIds.length; i++) {
+            if (supportedChainIds[i] == chainId) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, "Chain should be added initially");
+
+        // Then remove the chain
+        vm.prank(configSetter);
+        governance.setNetworkConfig(chainId, address(0), rpcUrls);
+
+        // Verify the chain was removed
+        (supportedChainIds,) = governance.getAllNetworkConfigs();
+        found = false;
+        for (uint256 i = 0; i < supportedChainIds.length; i++) {
+            if (supportedChainIds[i] == chainId) {
+                found = true;
+                break;
+            }
+        }
+        assertFalse(found, "Chain should be removed when token address is zero");
+    }
+
     function test_setNetworkConfig_revert_when_EmptyRpcUrls() public {
         uint256 chainId = 1;
         address tokenAddress = makeAddr("tokenAddress");
@@ -346,6 +444,37 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.setRpcUrls(0, newRpcUrls);
     }
 
+    function test_setRpcUrls_revert_when_ChainNotExists() public {
+        uint256 nonExistentChainId = 999;
+        string[] memory newRpcUrls = new string[](1);
+        newRpcUrls[0] = "https://newrpc.example.com";
+
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.InvalidChainId.selector);
+        governance.setRpcUrls(nonExistentChainId, newRpcUrls);
+    }
+
+    function test_setRpcUrls_revert_when_EmptyRpcUrls() public {
+        uint256 chainId = 1;
+        string[] memory emptyRpcUrls = new string[](0);
+
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.InvalidRpcUrl.selector);
+        governance.setRpcUrls(chainId, emptyRpcUrls);
+    }
+
+    function test_setRpcUrls_revert_when_TooManyRpcUrls() public {
+        uint256 chainId = 1;
+        string[] memory tooManyRpcUrls = new string[](11); // More than maxRPCUrlsPerChain (10)
+        for (uint256 i = 0; i < 11; i++) {
+            tooManyRpcUrls[i] = "https://rpc.example.com";
+        }
+
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.MaxRpcUrlsPerChainReached.selector);
+        governance.setRpcUrls(chainId, tooManyRpcUrls);
+    }
+
     // ========== setKMSRootServerKey Tests ==========
     
     function test_setKMSRootServerKey_FromConfigSetter() public {
@@ -373,6 +502,15 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.setKMSRootServerKey(emptyKey);
     }
 
+    function test_setKMSRootServerKey_WithValidKey() public {
+        bytes memory validKey = hex"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+
+        vm.prank(configSetter);
+        governance.setKMSRootServerKey(validKey);
+
+        assertEq(governance.kmsRootServerPubKey(), validKey, "KMS root server key should be set correctly");
+    }
+
     // ========== setKMSPath Tests ==========
     
     function test_setKMSPath_FromConfigSetter() public {
@@ -398,6 +536,15 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.prank(configSetter);
         vm.expectRevert(IGovernanceErrors.InvalidKMSPath.selector);
         governance.setKMSPath(emptyPath);
+    }
+
+    function test_setKMSPath_WithValidPath() public {
+        string memory validPath = "/derive/secp256k1/public?image_id=abc123&path=test";
+
+        vm.prank(configSetter);
+        governance.setKMSPath(validPath);
+
+        assertEq(governance.kmsPath(), validPath, "KMS path should be set correctly");
     }
 
     // ========== setPCRConfig Tests ==========
@@ -449,6 +596,30 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.setPCRConfig(pcr0, pcr1, pcr2);
     }
 
+    function test_setPCRConfig_WithDifferentPCRs() public {
+        // Set PCR config first time
+        bytes memory pcr0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        bytes memory pcr1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
+        bytes memory pcr2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
+
+        vm.prank(configSetter);
+        governance.setPCRConfig(pcr0, pcr1, pcr2);
+
+        // Set different PCR config
+        bytes memory newPcr0 = hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        bytes memory newPcr1 = hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
+        bytes memory newPcr2 = hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
+
+        vm.prank(configSetter);
+        governance.setPCRConfig(newPcr0, newPcr1, newPcr2);
+
+        // Verify the new PCR config was set
+        (IGovernanceTypes.PCR memory pcr_,) = governance.pcrConfig();
+        assertEq(pcr_.pcr0, newPcr0, "PCR0 should be updated");
+        assertEq(pcr_.pcr1, newPcr1, "PCR1 should be updated");
+        assertEq(pcr_.pcr2, newPcr2, "PCR2 should be updated");
+    }
+
     // ========== pause/unpause Tests ==========
     
     function test_pause_FromAdmin() public {
@@ -491,6 +662,17 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.prank(admin);
         vm.expectRevert(); // Pausable: not paused
         governance.unpause();
+    }
+
+    function test_pause_revert_when_AlreadyPaused() public {
+        // First pause the contract
+        vm.prank(admin);
+        governance.pause();
+
+        // Try to pause again
+        vm.prank(admin);
+        vm.expectRevert(); // Pausable: paused
+        governance.pause();
     }
 
     // ========== Pause State Tests ==========
@@ -574,6 +756,37 @@ contract GovernanceAdminTest is GovernanceSetup {
             // If it reverts, it should not be due to pause
             // We can't easily check the revert reason here, but the point is it's not pause-related
         }
+    }
+
+    function test_submitResult_WhenPaused() public {
+        // First pause the contract
+        vm.prank(admin);
+        governance.pause();
+
+        // Try to submit result when paused
+        IGovernanceTypes.SubmitResultInputParams memory params = IGovernanceTypes.SubmitResultInputParams({
+            kmsSig: "",
+            enclavePubKey: "",
+            enclaveSig: "",
+            resultData: ""
+        });
+
+        vm.prank(admin);
+        vm.expectRevert(); // Pausable: paused
+        governance.submitResult(params);
+    }
+
+    function test_refund_WhenPaused() public {
+        // First pause the contract
+        vm.prank(admin);
+        governance.pause();
+
+        // Try to refund when paused
+        bytes32 proposalId = bytes32(0);
+
+        vm.prank(admin);
+        vm.expectRevert(); // Pausable: paused
+        governance.refund(proposalId);
     }
 
     // ========== Override Functions Tests ==========
@@ -686,5 +899,286 @@ contract GovernanceAdminTest is GovernanceSetup {
         
         // IGovernance interface ID should be zero since the interface is empty
         assertEq(governanceInterfaceId, bytes4(0x00000000), "IGovernance interface ID should be zero when interface is empty");
+    }
+
+    // ========== Initialize Function Tests ==========
+    
+    function test_initialize_WithValidParameters() public {
+        // Create a new governance contract for testing initialize
+        Governance newGovernance = new Governance();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(newGovernance), "");
+        Governance governanceProxy = Governance(address(proxy));
+
+        address testAdmin = makeAddr("testAdmin");
+        address testConfigSetter = makeAddr("testConfigSetter");
+        address testTreasury = makeAddr("testTreasury");
+        uint256 testMinQuorumThreshold = 0.1 * 1e18;
+        uint256 testProposalPassVetoThreshold = 0.5 * 1e18;
+        uint256 testVetoSlashRate = 0.2 * 1e18;
+        uint256 testVoteActivationDelay = 10 * 60;
+        uint256 testVoteDuration = 20 * 60;
+        uint256 testProposalDuration = 60 * 60;
+        uint256 testMaxRPCUrlsPerChain = 5;
+        
+        IGovernanceTypes.PCR memory testPcr = IGovernanceTypes.PCR({
+            pcr0: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            pcr1: hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+            pcr2: hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+        });
+        
+        bytes memory testKmsRootServerPubKey = hex"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        string memory testKmsPath = "/derive/secp256k1/public?image_id=test&path=test";
+
+        // Initialize the governance contract
+        governanceProxy.initialize(
+            testAdmin,
+            testConfigSetter,
+            testTreasury,
+            testMinQuorumThreshold,
+            testProposalPassVetoThreshold,
+            testVetoSlashRate,
+            testVoteActivationDelay,
+            testVoteDuration,
+            testProposalDuration,
+            testMaxRPCUrlsPerChain,
+            testPcr,
+            testKmsRootServerPubKey,
+            testKmsPath
+        );
+
+        // Verify all parameters were set correctly
+        assertTrue(governanceProxy.hasRole(governanceProxy.DEFAULT_ADMIN_ROLE(), testAdmin), "Admin role not set correctly");
+        assertTrue(governanceProxy.hasRole(governanceProxy.CONFIG_SETTER_ROLE(), testConfigSetter), "Config setter role not set correctly");
+        assertEq(governanceProxy.treasury(), testTreasury, "Treasury not set correctly");
+        assertEq(governanceProxy.minQuorumThreshold(), testMinQuorumThreshold, "Min quorum threshold not set correctly");
+        assertEq(governanceProxy.proposalPassVetoThreshold(), testProposalPassVetoThreshold, "Proposal pass veto threshold not set correctly");
+        assertEq(governanceProxy.vetoSlashRate(), testVetoSlashRate, "Veto slash rate not set correctly");
+        
+        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governanceProxy.proposalTimingConfig();
+        assertEq(voteActivationDelay_, testVoteActivationDelay, "Vote activation delay not set correctly");
+        assertEq(voteDuration_, testVoteDuration, "Vote duration not set correctly");
+        assertEq(proposalDuration_, testProposalDuration, "Proposal duration not set correctly");
+        
+        assertEq(governanceProxy.maxRPCUrlsPerChain(), testMaxRPCUrlsPerChain, "Max RPC URLs per chain not set correctly");
+        assertEq(governanceProxy.kmsRootServerPubKey(), testKmsRootServerPubKey, "KMS root server pub key not set correctly");
+        assertEq(governanceProxy.kmsPath(), testKmsPath, "KMS path not set correctly");
+        
+        (IGovernanceTypes.PCR memory pcr_,) = governanceProxy.pcrConfig();
+        assertEq(pcr_.pcr0, testPcr.pcr0, "PCR0 not set correctly");
+        assertEq(pcr_.pcr1, testPcr.pcr1, "PCR1 not set correctly");
+        assertEq(pcr_.pcr2, testPcr.pcr2, "PCR2 not set correctly");
+    }
+
+    function test_initialize_revert_when_ZeroAdmin() public {
+        Governance newGovernance = new Governance();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(newGovernance), "");
+        Governance governanceProxy = Governance(address(proxy));
+
+        vm.expectRevert(IGovernanceErrors.InvalidAddress.selector);
+        governanceProxy.initialize(
+            address(0), // Zero admin
+            configSetter,
+            treasury,
+            minQuorumThreshold,
+            proposalPassVetoThreshold,
+            vetoSlashRate,
+            voteActivationDelay,
+            voteDuration,
+            proposalDuration,
+            maxRPCUrlsPerChain,
+            pcr,
+            kmsRootServerPubKey,
+            kmsPath
+        );
+    }
+
+    function test_initialize_revert_when_ZeroConfigSetter() public {
+        Governance newGovernance = new Governance();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(newGovernance), "");
+        Governance governanceProxy = Governance(address(proxy));
+
+        vm.expectRevert(IGovernanceErrors.InvalidAddress.selector);
+        governanceProxy.initialize(
+            admin,
+            address(0), // Zero config setter
+            treasury,
+            minQuorumThreshold,
+            proposalPassVetoThreshold,
+            vetoSlashRate,
+            voteActivationDelay,
+            voteDuration,
+            proposalDuration,
+            maxRPCUrlsPerChain,
+            pcr,
+            kmsRootServerPubKey,
+            kmsPath
+        );
+    }
+
+    function test_initialize_revert_when_CalledTwice() public {
+        Governance newGovernance = new Governance();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(newGovernance), "");
+        Governance governanceProxy = Governance(address(proxy));
+
+        // First initialization should succeed
+        governanceProxy.initialize(
+            admin,
+            configSetter,
+            treasury,
+            minQuorumThreshold,
+            proposalPassVetoThreshold,
+            vetoSlashRate,
+            voteActivationDelay,
+            voteDuration,
+            proposalDuration,
+            maxRPCUrlsPerChain,
+            pcr,
+            kmsRootServerPubKey,
+            kmsPath
+        );
+
+        // Second initialization should fail
+        vm.expectRevert("Initializable: contract is already initialized");
+        governanceProxy.initialize(
+            admin,
+            configSetter,
+            treasury,
+            minQuorumThreshold,
+            proposalPassVetoThreshold,
+            vetoSlashRate,
+            voteActivationDelay,
+            voteDuration,
+            proposalDuration,
+            maxRPCUrlsPerChain,
+            pcr,
+            kmsRootServerPubKey,
+            kmsPath
+        );
+    }
+
+    // ========== Additional Coverage Tests ==========
+    
+    function test_setNetworkConfig_WhenRemovingNonExistentChain() public {
+        uint256 nonExistentChainId = 999;
+        string[] memory rpcUrls = new string[](1);
+        rpcUrls[0] = "https://rpc.example.com";
+
+        // Try to remove a non-existent chain - should work without error
+        vm.prank(configSetter);
+        governance.setNetworkConfig(nonExistentChainId, address(0), rpcUrls);
+
+        // Verify the chain is not in supported chains
+        (uint256[] memory supportedChainIds,) = governance.getAllNetworkConfigs();
+        bool found = false;
+        for (uint256 i = 0; i < supportedChainIds.length; i++) {
+            if (supportedChainIds[i] == nonExistentChainId) {
+                found = true;
+                break;
+            }
+        }
+        assertFalse(found, "Non-existent chain should not be in supported chains");
+    }
+
+    function test_setRpcUrls_WhenChainExists() public {
+        uint256 chainId = 1;
+        address tokenAddress = makeAddr("tokenAddress");
+        string[] memory initialRpcUrls = new string[](1);
+        initialRpcUrls[0] = "https://rpc.example.com";
+        
+        // First, set up the network config
+        vm.prank(configSetter);
+        governance.setNetworkConfig(chainId, tokenAddress, initialRpcUrls);
+        
+        // Then update the RPC URLs
+        string[] memory newRpcUrls = new string[](2);
+        newRpcUrls[0] = "https://newrpc1.example.com";
+        newRpcUrls[1] = "https://newrpc2.example.com";
+
+        vm.prank(configSetter);
+        governance.setRpcUrls(chainId, newRpcUrls);
+
+        // Verify the RPC URLs were updated
+        (uint256[] memory supportedChainIds, IGovernanceTypes.TokenNetworkConfig[] memory configs) = governance.getAllNetworkConfigs();
+        // Find the config for our chainId
+        IGovernanceTypes.TokenNetworkConfig memory config;
+        for (uint256 i = 0; i < supportedChainIds.length; i++) {
+            if (supportedChainIds[i] == chainId) {
+                config = configs[i];
+                break;
+            }
+        }
+        assertEq(config.rpcUrls.length, 2, "RPC URLs not updated correctly");
+        assertEq(config.rpcUrls[0], "https://newrpc1.example.com", "First RPC URL not updated correctly");
+        assertEq(config.rpcUrls[1], "https://newrpc2.example.com", "Second RPC URL not updated correctly");
+    }
+
+    function test_getVoteHash_WhenProposalExists() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+
+        // Test getVoteHash - initially should be zero since no votes exist
+        bytes32 voteHash = governance.getVoteHash(proposalId);
+        assertEq(voteHash, bytes32(0), "Vote hash should be zero initially");
+    }
+
+    function test_getVoteHash_revert_when_ProposalNotExists() public {
+        bytes32 nonExistentProposalId = bytes32(0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef);
+        
+        vm.expectRevert(IGovernanceErrors.ProposalDoesNotExist.selector);
+        governance.getVoteHash(nonExistentProposalId);
+    }
+
+    function test_getVoteCount_revert_when_ProposalNotExists() public {
+        bytes32 nonExistentProposalId = bytes32(0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef);
+        
+        vm.expectRevert(IGovernanceErrors.ProposalDoesNotExist.selector);
+        governance.getVoteCount(nonExistentProposalId);
+    }
+
+    function test_getVoteInfo_revert_when_InvalidIndex() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+
+        // Try to get vote info with invalid index
+        vm.expectRevert(IGovernanceErrors.InvalidVoteIndex.selector);
+        governance.getVoteInfo(proposalId, 0); // No votes exist, so index 0 is invalid
     }
 }

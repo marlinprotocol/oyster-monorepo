@@ -23,6 +23,7 @@ interface IGovernanceErrors {
     error NoSupportedChainConfigured();
     error NotConfigSetterRole();
     error NotDefaultAdmin();
+    error NoValueToRefund();
     error NotRefundableProposal();
     error NotResultSubmissionPhase();
     error ProposalAlreadyExists();

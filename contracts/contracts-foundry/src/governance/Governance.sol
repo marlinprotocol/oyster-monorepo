@@ -653,11 +653,13 @@ contract Governance is
             valueSum += proposals[_proposalId].proposalInfo.values[i];
         }
 
-        if (valueSum > 0) {
-            // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
-            (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
-            ok;
+        if (valueSum == 0) {
+            revert NoValueToRefund();
         }
+
+        // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
+        (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
+        ok;
 
         emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, valueSum);
     }

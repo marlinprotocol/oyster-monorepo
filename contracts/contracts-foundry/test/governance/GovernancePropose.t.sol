@@ -6,11 +6,11 @@ import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {IGovernanceErrors} from "../../src/governance/interfaces/IGovernanceErrors.sol";
 import {Governance} from "../../src/governance/Governance.sol";
-import {MockERC20} from "../../src/governance/Mocks/MockERC20.sol";
+import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
 
-contract GovernanceVoteTest is GovernanceSetup {
+contract GovernanceProposeTest is GovernanceSetup {
 
     // ========== Basic Propose Tests ==========
     
@@ -619,5 +619,166 @@ contract GovernanceVoteTest is GovernanceSetup {
         assertTrue(proposalId1 != proposalId2, "Proposals from different proposers should have different IDs");
         assertEq(governance.proposerNonce(proposer), 1, "First proposer nonce should be 1");
         assertEq(governance.proposerNonce(proposer2), 1, "Second proposer nonce should be 1");
+    }
+
+    // ========== Getter Function Tests ==========
+    
+    function test_getProposalInfo() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0.1 ether;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(params);
+
+        // Test getProposalInfo
+        (
+            address proposalProposer,
+            address[] memory proposalTargets,
+            uint256[] memory proposalValues,
+            bytes[] memory proposalCalldatas,
+            string memory proposalTitle,
+            string memory proposalDescription
+        ) = governance.getProposalInfo(proposalId);
+        
+        assertEq(proposalProposer, proposer, "Proposer should match");
+        assertEq(proposalTargets.length, 1, "Should have 1 target");
+        assertEq(proposalTargets[0], makeAddr("target"), "Target should match");
+        assertEq(proposalValues.length, 1, "Should have 1 value");
+        assertEq(proposalValues[0], 0.1 ether, "Value should match");
+        assertEq(proposalCalldatas.length, 1, "Should have 1 calldata");
+        assertEq(proposalCalldatas[0], abi.encodeWithSignature("someFunction()"), "Calldata should match");
+        assertEq(proposalTitle, "Test Proposal", "Title should match");
+        assertEq(proposalDescription, "This is a test proposal description", "Description should match");
+    }
+
+    function test_getAllVoteInfo() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+
+        // Wait for voting to be active
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+
+        // Add some votes
+        vm.prank(voter1);
+        governance.vote(proposalId, "encrypted_vote_1");
+        
+        vm.prank(voter2);
+        governance.vote(proposalId, "encrypted_vote_2");
+
+        // Test getAllVoteInfo
+        (
+            IGovernanceTypes.Vote[] memory allVotes,
+            uint256 voteCount,
+            bytes32 voteHash
+        ) = governance.getAllVoteInfo(proposalId);
+        
+        assertEq(allVotes.length, 2, "Should have 2 votes");
+        assertEq(voteCount, 2, "Vote count should be 2");
+        assertEq(allVotes[0].voter, voter1, "First voter should match");
+        assertEq(allVotes[0].voteEncrypted, "encrypted_vote_1", "First vote should match");
+        assertEq(allVotes[1].voter, voter2, "Second voter should match");
+        assertEq(allVotes[1].voteEncrypted, "encrypted_vote_2", "Second vote should match");
+    }
+
+    function test_getVoteCount_WhenNoVotes() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+
+        // Test getVoteCount when no votes
+        uint256 voteCount = governance.getVoteCount(proposalId);
+        assertEq(voteCount, 0, "Vote count should be 0 when no votes");
+    }
+
+    function test_getVoteInfo_WhenVoteExists() public {
+        // Create a proposal first
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("someFunction()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal",
+            description: "This is a test proposal description",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+
+        // Wait for voting to be active
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+
+        // Add a vote
+        vm.prank(voter1);
+        governance.vote(proposalId, "encrypted_vote_1");
+
+        // Test getVoteInfo
+        (address voteVoter, bytes memory voteEncrypted) = governance.getVoteInfo(proposalId, 0);
+        
+        assertEq(voteVoter, voter1, "Voter should match");
+        assertEq(voteEncrypted, "encrypted_vote_1", "Vote should match");
     }
 }
