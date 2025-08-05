@@ -159,9 +159,7 @@ contract Governance is
         _setVetoSlashRate(_vetoSlashRate);
 
         // Set Proposal Time Config
-        _setVoteActivationDelay(_voteActivationDelay);
-        _setVoteDuration(_voteDuration);
-        _setProposalDuration(_proposalDuration);
+        _setProposalTimingConfig(_voteActivationDelay, _voteDuration, _proposalDuration);
 
         // Set Max RPC URLs per Chain
         _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
@@ -251,10 +249,26 @@ contract Governance is
         external
         onlyConfigSetter
     {
+        _setProposalTimingConfig(_voteActivationDelay, _voteDuration, _proposalDuration);
+    }
+
+    function _setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration) internal {
         require(_voteActivationDelay + _voteDuration + _proposalDuration > 0, ZeroProposalTimeConfig());
-        _setVoteActivationDelay(_voteActivationDelay);
-        _setVoteDuration(_voteDuration);
-        _setProposalDuration(_proposalDuration);
+        require(
+            proposalTimingConfig.voteActivationDelay + proposalTimingConfig.voteDuration
+                < proposalTimingConfig.proposalDuration,
+            InvalidProposalTimeConfig()
+        );
+
+        if(_voteActivationDelay > 0) {
+            _setVoteActivationDelay(_voteActivationDelay);
+        }
+        if(_voteDuration > 0) {
+            _setVoteDuration(_voteDuration);
+        }
+        if(_proposalDuration > 0) {
+            _setProposalDuration(_proposalDuration);
+        }
     }
 
     function _setVoteActivationDelay(uint256 _voteActivationDelay) internal {
@@ -474,7 +488,7 @@ contract Governance is
         bytes32 descriptionHash = sha256(abi.encode(_params.title, _params.description));
         bytes32 proposalId = _generateProposalId(
             _params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]
-        );  
+        );
         require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
 
         // Deposit and store
