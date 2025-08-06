@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use crate::schema::jobs;
 use crate::schema::rate_revisions;
+use crate::LogsProvider;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
@@ -12,12 +13,17 @@ use anyhow::Result;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
+use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_revise_rate_finalized(
+    conn: &mut PgConnection,
+    log: Log,
+    provider: &impl LogsProvider,
+) -> Result<()> {
     info!(?log, "processing");
 
     // while we do have enough context here to handle this properly,
@@ -32,15 +38,45 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
         .block_number
         .ok_or(anyhow!("did not get block from log"))?;
 
+    // Fetch the block timestamp from the RPC,
+    // can remove once alloy supports block_timestamp
+    let block_timestamp = provider.block_timestamp(block)?;
+
+    info!(
+        id,
+        ?rate,
+        ?block,
+        ?block_timestamp,
+        "finalizing job rate revision"
+    );
+
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, ?rate, ?block, "finalizing job rate revision");
+    // get the reduced job balance as jobs get settled when the rate is revised
+    let job_balance = jobs::table
+        .filter(jobs::id.eq(&id))
+        .filter(jobs::is_closed.eq(false))
+        .select(jobs::balance)
+        .get_result::<BigDecimal>(conn)
+        .context("failed to get job balance");
 
-    // TODO: we need to update the end epoch
+    if job_balance.is_err() {
+        // !!! should never happen
+        // the only reason this would happen is if the job does not exist or is closed
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("failed to find balance for job"));
+    }
+
+    let job_balance = job_balance.unwrap();
+    let new_end_epoch =
+        &BigDecimal::from(block_timestamp) + ((&job_balance * 10u64.pow(12)) / &rate).round(0);
+
+    info!(id, ?job_balance, ?new_end_epoch, "calculated new end epoch");
+
     // target sql:
     // UPDATE jobs
-    // SET rate = <rate>
+    // SET rate = <rate>, end_epoch = <new_end_epoch>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -49,7 +85,7 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::rate.eq(&rate))
+        .set((jobs::rate.eq(&rate), jobs::end_epoch.eq(&new_end_epoch)))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -61,7 +97,6 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    // TODO: add timestamp
     // target sql:
     // INSERT INTO rate_revisions (job_id, value, block)
     // VALUES ("<id>", "<rate>", "<block>");
@@ -70,6 +105,7 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
             rate_revisions::job_id.eq(&id),
             rate_revisions::value.eq(&rate),
             rate_revisions::block.eq(block as i64),
+            rate_revisions::timestamp.eq(BigDecimal::from(block_timestamp)),
         ))
         .execute(conn)
         .context("failed to insert rate revision")?;
@@ -89,6 +125,7 @@ mod tests {
 
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
     use crate::schema::{jobs, providers};
 
     use super::*;
@@ -218,8 +255,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(creation_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -249,7 +287,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + 4 + (4 * 10u64.pow(12))),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -267,7 +305,6 @@ mod tests {
         );
 
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
-        // FIXME: add actual timestamp
         assert_eq!(
             rate_revisions::table
                 .select(rate_revisions::all_columns)
@@ -276,7 +313,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(5),
                 42i64,
-                BigDecimal::from(creation_timestamp)
+                BigDecimal::from(creation_timestamp + 4)
             )])
         );
 
@@ -373,8 +410,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -387,7 +425,10 @@ mod tests {
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find balance for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -538,8 +579,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(creation_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -552,7 +594,10 @@ mod tests {
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find balance for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
             jobs::table

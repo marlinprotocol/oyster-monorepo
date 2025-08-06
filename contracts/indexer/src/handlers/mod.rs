@@ -119,7 +119,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
     } else if log_type == JOB_REVISE_RATE_CANCELLED {
         handle_job_revise_rate_cancelled(conn, log)
     } else if log_type == JOB_REVISE_RATE_FINALIZED {
-        handle_job_revise_rate_finalized(conn, log)
+        handle_job_revise_rate_finalized(conn, log, provider)
     } else if log_type == JOB_METADATA_UPDATED {
         handle_job_metadata_updated(conn, log)
     } else if log_type == LOCK_CREATED {
