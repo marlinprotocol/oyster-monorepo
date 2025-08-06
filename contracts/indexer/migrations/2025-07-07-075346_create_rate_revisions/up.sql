@@ -4,4 +4,4 @@ CREATE TABLE rate_revisions (
   block BIGINT NOT NULL,
   timestamp NUMERIC NOT NULL,
   PRIMARY KEY (job_id, block)
-)
+);
