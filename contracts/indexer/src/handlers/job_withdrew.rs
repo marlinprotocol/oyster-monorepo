@@ -1,6 +1,7 @@
 use std::ops::Sub;
 use std::str::FromStr;
 
+use crate::constants::RATE_SCALING_FACTOR;
 use crate::schema::jobs;
 use crate::schema::transactions;
 use alloy::hex::ToHexExt;
@@ -58,7 +59,7 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     }
 
     let rate = rate.unwrap();
-    let duration_removed = ((&amount * 10u64.pow(12)) / &rate).round(0);
+    let duration_removed = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
 
     info!(?rate, ?duration_removed, "duration removed");
 
@@ -118,8 +119,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_utils::TestDb;
     use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::test_utils::TestDb;
     use crate::schema::providers;
 
     use super::*;
@@ -157,7 +158,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -178,7 +181,9 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12)))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    creation_timestamp + (20 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -224,7 +229,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -236,7 +241,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -313,7 +318,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (15 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + (15 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -325,7 +330,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -392,7 +397,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -437,7 +444,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             )])
         );
 
@@ -516,7 +523,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             )])
         );
 
@@ -571,7 +578,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (7 * 10u64.pow(12)))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -592,7 +601,9 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
-                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12)))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    creation_timestamp + (20 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -638,7 +649,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
-                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -650,7 +661,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -731,7 +742,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
-                    BigDecimal::from(creation_timestamp + (20 * 10u64.pow(12))),
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -743,7 +754,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (7 * 10u64.pow(12))),
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
