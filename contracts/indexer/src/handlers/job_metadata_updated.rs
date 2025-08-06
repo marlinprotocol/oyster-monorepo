@@ -60,6 +60,7 @@ mod tests {
 
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
     use crate::schema::providers;
 
     use super::*;
@@ -189,8 +190,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -330,8 +333,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -493,8 +498,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));

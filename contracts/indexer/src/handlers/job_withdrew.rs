@@ -58,7 +58,6 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     }
 
     let rate = rate.unwrap();
-
     let duration_removed = ((&amount * 10u64.pow(12)) / &rate).round(0);
 
     info!(?rate, ?duration_removed, "duration removed");
