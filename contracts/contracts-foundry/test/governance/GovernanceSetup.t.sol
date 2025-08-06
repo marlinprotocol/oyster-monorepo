@@ -56,9 +56,9 @@ contract GovernanceSetup is Test {
         proposalPassVetoThreshold = 1 * 10e18 / 100; // 1% of total supply
         minQuorumThreshold = 5 * 10e18 / 100; // 5% of total supply
         vetoSlashRate = 30 * 1e18 / 100; // 30% 
-        voteActivationDelay = 5 * 60; // 5 minutes
-        voteDuration = 15 * 60; // 5 minutes
-        proposalDuration = 60 * 60; // 1 hour
+        voteActivationDelay = 1 * 60; // 1 minute
+        voteDuration = 2 * 60; // 2 minutes
+        proposalDuration = 10 * 60; // 10 minutes (must be > voteActivationDelay + voteDuration)
         maxRPCUrlsPerChain = 10;
         pcr = IGovernanceTypes.PCR({
                 pcr0: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",

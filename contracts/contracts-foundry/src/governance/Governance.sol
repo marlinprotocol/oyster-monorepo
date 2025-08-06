@@ -254,11 +254,6 @@ contract Governance is
 
     function _setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration) internal {
         require(_voteActivationDelay + _voteDuration + _proposalDuration > 0, ZeroProposalTimeConfig());
-        require(
-            proposalTimingConfig.voteActivationDelay + proposalTimingConfig.voteDuration
-                < proposalTimingConfig.proposalDuration,
-            InvalidProposalTimeConfig()
-        );
 
         if(_voteActivationDelay > 0) {
             _setVoteActivationDelay(_voteActivationDelay);
@@ -269,6 +264,12 @@ contract Governance is
         if(_proposalDuration > 0) {
             _setProposalDuration(_proposalDuration);
         }
+
+        require(
+            proposalTimingConfig.voteActivationDelay + proposalTimingConfig.voteDuration
+                < proposalTimingConfig.proposalDuration,
+            InvalidProposalTimeConfig()
+        );
     }
 
     function _setVoteActivationDelay(uint256 _voteActivationDelay) internal {

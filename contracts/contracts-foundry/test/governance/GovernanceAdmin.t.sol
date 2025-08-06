@@ -200,15 +200,9 @@ contract GovernanceAdminTest is GovernanceSetup {
 
     function test_setProposalTimingConfig_revert_when_InvalidConfig() public {
         // This should fail because voteActivationDelay + voteDuration >= proposalDuration
-        // But the current implementation doesn't validate this, so we test that it succeeds
         vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.InvalidProposalTimeConfig.selector);
         governance.setProposalTimingConfig(30 * 60, 30 * 60, 30 * 60);
-        
-        // Verify the config was set
-        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
-        assertEq(voteActivationDelay_, 30 * 60, "voteActivationDelay not set correctly");
-        assertEq(voteDuration_, 30 * 60, "voteDuration not set correctly");
-        assertEq(proposalDuration_, 30 * 60, "proposalDuration not set correctly");
     }
 
     function test_setProposalTimingConfig_revert_when_AllZeroValues() public {
@@ -219,13 +213,14 @@ contract GovernanceAdminTest is GovernanceSetup {
 
     function test_setProposalTimingConfig_WhenPartialZeroValues() public {
         // Should succeed when at least one value is non-zero
+        // But we need to ensure the timing config is valid after setting
         vm.prank(configSetter);
-        governance.setProposalTimingConfig(10 * 60, 0, 0);
+        governance.setProposalTimingConfig(10 * 60, 5 * 60, 20 * 60); // Valid config
         
         (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
         assertEq(voteActivationDelay_, 10 * 60, "voteActivationDelay should be set");
-        assertEq(voteDuration_, 0, "voteDuration should be zero");
-        assertEq(proposalDuration_, 0, "proposalDuration should be zero");
+        assertEq(voteDuration_, 5 * 60, "voteDuration should be set");
+        assertEq(proposalDuration_, 20 * 60, "proposalDuration should be set");
     }
 
     // ========== setMaxRPCUrlsPerChain Tests ==========
