@@ -59,8 +59,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_db::TestDb;
-    use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::tests::TestDb;
+    use crate::handlers::tests::MockProvider;
     use crate::schema::providers;
 
     use super::*;
