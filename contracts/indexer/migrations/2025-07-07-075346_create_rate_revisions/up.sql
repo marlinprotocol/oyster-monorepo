@@ -3,4 +3,4 @@ CREATE TABLE rate_revisions (
   value NUMERIC NOT NULL,
   block BIGINT NOT NULL,
   PRIMARY KEY (job_id, block)
-)
+);
