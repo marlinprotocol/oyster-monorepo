@@ -1,4 +1,4 @@
-create table settlement_history (
+CREATE TABLE settlement_history (
     id CHAR(66) REFERENCES jobs (id),
     amount NUMERIC NOT NULL,
     timestamp NUMERIC NOT NULL,
