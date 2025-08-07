@@ -463,9 +463,9 @@ contract GovernanceSlashTest is GovernanceSetup {
         vm.prank(proposer);
         governance.refund(proposalId);
         
-        // Second refund should succeed but fail internally due to OutOfFunds
-        // The current implementation doesn't revert on OutOfFunds, so this will succeed
+        // Second refund should fail due to NoValueToRefund
         vm.prank(proposer);
+        vm.expectRevert(IGovernanceErrors.NoValueToRefund.selector);
         governance.refund(proposalId);
     }
 }

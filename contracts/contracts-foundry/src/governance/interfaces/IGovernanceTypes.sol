@@ -8,10 +8,10 @@ interface IGovernanceTypes {
     //////////////////////////////////////////////////////////////*/
 
     enum VoteOutcome {
-        Pending, // Proposal is submitted and waiting for the result submission
-        Passed, // Proposal is executed and deposit is refunded
-        Failed, // Proposal is not executed and deposit is refunded
-        Vetoed // Proposal is not executed and deposit is slashed
+        Pending,
+        Passed,
+        Failed,
+        Vetoed
     }
     struct ProposalInfo {
         address proposer;
@@ -111,6 +111,4 @@ interface IGovernanceTypes {
         bytes enclaveSig;
         bytes resultData;
     }
-
-
 }

@@ -672,6 +672,11 @@ contract Governance is
             revert NoValueToRefund();
         }
 
+        // Clear the values array to prevent double refunding
+        for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
+            proposals[_proposalId].proposalInfo.values[i] = 0;
+        }
+
         // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
         (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
         ok;
