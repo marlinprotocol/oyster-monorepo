@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./Executors.sol";
 import "../staking/interfaces/IRewardDelegators.sol";
+import "../staking/interfaces/IInflationRewardsManager.sol";
 
 /**
  * @title Jobs Contract
@@ -51,7 +52,8 @@ contract Jobs is
         uint256 _noOfNodesToSelect,
         address _stakingPaymentPoolAddress,
         address _usdcPaymentPoolAddress,
-        Executors _executors
+        Executors _executors,
+        IInflationRewardsManager _inflationRewardsManager
     ) {
         _disableInitializers();
 
@@ -69,6 +71,7 @@ contract Jobs is
         USDC_PAYMENT_POOL = _usdcPaymentPoolAddress;
 
         EXECUTORS = _executors;
+        INFLATION_REWARDS_MANAGER = _inflationRewardsManager;
     }
 
     //-------------------------------- Overrides start --------------------------------//
@@ -131,6 +134,9 @@ contract Jobs is
 
     /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     Executors public immutable EXECUTORS;
+
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
+    IInflationRewardsManager public immutable INFLATION_REWARDS_MANAGER;
 
     //-------------------------------- Execution Env start --------------------------------//
 
@@ -416,6 +422,8 @@ contract Jobs is
             );
             emit JobResultCallbackCalled(_jobId, success);
         }
+
+        INFLATION_REWARDS_MANAGER.notifyOutputSubmission(enclaveAddress);
         emit JobResponded(_jobId, enclaveAddress, _output, _totalTime, _errorCode, outputCount);
     }
 

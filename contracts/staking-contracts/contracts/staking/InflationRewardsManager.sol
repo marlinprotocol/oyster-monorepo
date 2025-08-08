@@ -87,9 +87,9 @@ contract InflationRewardsManager is
     IRewardDelegators public rewardDelegators;
     IInflationRewardsEmitter public inflationRewardsEmitter;
 
-    mapping(address => uint256) public executorEpochJobs;
+    mapping(address executor => uint256 jobCount) public executorEpochJobCount;
     // epoch => total jobs
-    mapping(uint256 => uint256) public totalEpochJobs;
+    mapping(uint256 epoch => uint256 jobCount) public totalEpochJobCount;
 
     struct DelegationAmountInfo {
         mapping(bytes32 tokenId => uint256 amounts) activeDelegation;
@@ -122,10 +122,10 @@ contract InflationRewardsManager is
     mapping (address executor => DelegationAmountInfo) executorDelegationInfo;
 
     // Delegation info of each Delegator
-    mapping (address operator => mapping(address delegator => DelegationEpochInfo)) delegatorDelegationEpochInfo;
-    mapping (address operator => mapping(address delegator => DelegationAmountInfo)) delegatorDelegationInfo;
+    mapping (address executor => mapping(address delegator => DelegationEpochInfo)) delegatorDelegationEpochInfo;
+    mapping (address executor => mapping(address delegator => DelegationAmountInfo)) delegatorDelegationInfo;
     // mapping (address delegator => mapping(bytes32 token => uint256 amount)) delegatorRewardDebt;
-    mapping (address operator => mapping(address delegator => mapping(bytes32 token => uint256 amount))) delegatorRewardDebt;
+    mapping (address executor => mapping(address delegator => mapping(bytes32 token => uint256 amount))) delegatorRewardDebt;
 
     // uint256 public activeEpoch;
     mapping(uint256 epoch => uint256 reward) public epochRewards;
@@ -147,50 +147,50 @@ contract InflationRewardsManager is
     }
 
     function notifyOutputSubmission(
-        address _operator
+        address _executor
     ) external onlyRole(JOBS_ROLE) {
         bytes32[] memory tokens = rewardDelegators.getTokenList();
 
         uint256 currentEpoch = inflationRewardsEmitter.getCurrentEpoch();
-        if(currentEpoch > executorEpochInfo[_operator].lastJobDoneEpoch) {
-            _updateRewards(_operator, tokens);
-            _activateOperatorStake(_operator, tokens);
+        if(currentEpoch > executorEpochInfo[_executor].lastJobDoneEpoch) {
+            _updateRewards(_executor, tokens);
+            _activateExecutorStake(_executor, tokens);
 
-            // executorEpochInfo[_operator].lastDistributedEpoch = executorEpochInfo[_operator].lastJobDoneEpoch;
-            executorEpochInfo[_operator].lastJobDoneEpoch = currentEpoch;
+            // executorEpochInfo[_executor].lastDistributedEpoch = executorEpochInfo[_executor].lastJobDoneEpoch;
+            executorEpochInfo[_executor].lastJobDoneEpoch = currentEpoch;
 
-            executorEpochJobs[_operator] = 1;
-            totalEpochJobs[currentEpoch] = 1;
+            executorEpochJobCount[_executor] = 1;
+            totalEpochJobCount[currentEpoch] = 1;
             // activeEpoch = currentEpoch;
 
             epochRewards[currentEpoch] = inflationRewardsEmitter.emitInflationaryReward();
         } else {
-            executorEpochJobs[_operator] += 1;
-            totalEpochJobs[currentEpoch] += 1;
+            executorEpochJobCount[_executor] += 1;
+            totalEpochJobCount[currentEpoch] += 1;
         }
     }
 
     function updateInflationRewards(
-        address _operator,
+        address _executor,
         address _delegator,
         bytes32[] memory _tokens,
         uint256[] memory _amounts,
         bool _isDelegation
     ) external onlyRewardDelegators {
-        _updateTokens(_operator, _delegator, _tokens, _amounts, _isDelegation);
+        _updateTokens(_executor, _delegator, _tokens, _amounts, _isDelegation);
     }
 
     // function delegate(
-    //     address _operator,
+    //     address _executor,
     //     address _delegator,
     //     bytes32[] memory _tokens,
     //     uint256[] memory _amounts
     // ) external onlyRewardDelegators {
-    //     _updateTokens(_operator, _delegator, _tokens, _amounts, true);
+    //     _updateTokens(_executor, _delegator, _tokens, _amounts, true);
     // }
 
     function _updateTokens(
-        address _operator,
+        address _executor,
         address _delegator,
         bytes32[] memory _tokens,
         uint256[] memory _amounts,
@@ -199,13 +199,13 @@ contract InflationRewardsManager is
         require(_tokens.length == _amounts.length, "Tokens and amounts length mismatch");
 
         uint256 currentEpoch = inflationRewardsEmitter.getCurrentEpoch();
-        // checks if it is the first update for the operator in the current epoch
-        bool isFirstEpochUpdate = (currentEpoch > executorEpochInfo[_operator].lastJobDoneEpoch && 
-            executorEpochInfo[_operator].lastJobDoneEpoch != executorEpochInfo[_operator].lastDistributedEpoch);
+        // checks if it is the first update for the executor in the current epoch
+        bool isFirstEpochUpdate = (currentEpoch > executorEpochInfo[_executor].lastJobDoneEpoch && 
+            executorEpochInfo[_executor].lastJobDoneEpoch != executorEpochInfo[_executor].lastDistributedEpoch);
 
         if(isFirstEpochUpdate) {
-            // update rewards for the operator till last job done epoch
-            _updateRewards(_operator, _tokens);
+            // update rewards for the executor till last job done epoch
+            _updateRewards(_executor, _tokens);
         }
 
         uint256 reward;
@@ -214,13 +214,13 @@ contract InflationRewardsManager is
             uint256 amount = _amounts[i];
 
             // Update executor's delegation amounts
-            _updateExecutorDelegationInfo(_operator, isFirstEpochUpdate, tokenId, amount, _isDelegation);
+            _updateExecutorDelegationInfo(_executor, isFirstEpochUpdate, tokenId, amount, _isDelegation);
 
             // Update delegator's delegation amounts
-            reward += _updateDelegatorDelegationInfo(_operator, _delegator, tokenId, amount, _isDelegation);
+            reward += _updateDelegatorDelegationInfo(_executor, _delegator, tokenId, amount, _isDelegation);
         }
 
-        // delegatorDelegationEpochInfo[_operator][_delegator].epochPending = currentEpoch;
+        // delegatorDelegationEpochInfo[_executor][_delegator].epochPending = currentEpoch;
 
         if(reward != 0) {
             IERC20 rewardToken = inflationRewardsEmitter.rewardToken();
@@ -229,7 +229,7 @@ contract InflationRewardsManager is
     }
 
     function _updateExecutorDelegationInfo(
-        address _operator,
+        address _executor,
         bool _isFirstEpochUpdate,
         bytes32 _tokenId,
         uint256 _amount,
@@ -237,63 +237,63 @@ contract InflationRewardsManager is
     ) internal {
         if(_isFirstEpochUpdate) {
             // Update executor's delegation amounts
-            _activateOperatorTokenStake(_operator, _tokenId);
+            _activateExecutorTokenStake(_executor, _tokenId);
             if(_isDelegation) {
-                executorDelegationInfo[_operator].pendingDelegation[_tokenId] = _amount;
+                executorDelegationInfo[_executor].pendingDelegation[_tokenId] = _amount;
             } else {
-                executorDelegationInfo[_operator].activeDelegation[_tokenId] -= _amount;
+                executorDelegationInfo[_executor].activeDelegation[_tokenId] -= _amount;
             }
         } else {
             if(_isDelegation) {
-                executorDelegationInfo[_operator].pendingDelegation[_tokenId] += _amount;
+                executorDelegationInfo[_executor].pendingDelegation[_tokenId] += _amount;
             } else {
-                uint256 executorPendingAmount = executorDelegationInfo[_operator].pendingDelegation[_tokenId];
+                uint256 executorPendingAmount = executorDelegationInfo[_executor].pendingDelegation[_tokenId];
                 uint256 minAmount = _amount < executorPendingAmount ? _amount : executorPendingAmount;
-                executorDelegationInfo[_operator].pendingDelegation[_tokenId] -= minAmount;
+                executorDelegationInfo[_executor].pendingDelegation[_tokenId] -= minAmount;
                 // If the amount to be undelegated is more than the pending delegation
                 if(_amount - minAmount > 0) {
-                    executorDelegationInfo[_operator].activeDelegation[_tokenId] -= (_amount - minAmount);
+                    executorDelegationInfo[_executor].activeDelegation[_tokenId] -= (_amount - minAmount);
                 }
             }
         }
     }
 
     function _updateDelegatorDelegationInfo(
-        address _operator,
+        address _executor,
         address _delegator,
         bytes32 _tokenId,
         uint256 _amount,
         bool _isDelegation
     ) internal returns (uint256 reward) {
         uint256 currentEpoch = inflationRewardsEmitter.getCurrentEpoch();
-        if(currentEpoch > delegatorDelegationEpochInfo[_operator][_delegator].epochPending) {
-            uint256 oldBalance = delegatorDelegationInfo[_operator][_delegator].activeDelegation[_tokenId];
-            uint256 newBalance = oldBalance + delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_tokenId];
+        if(currentEpoch > delegatorDelegationEpochInfo[_executor][_delegator].epochPending) {
+            uint256 oldBalance = delegatorDelegationInfo[_executor][_delegator].activeDelegation[_tokenId];
+            uint256 newBalance = oldBalance + delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_tokenId];
 
             // Update delegator's delegation amounts
-            _activateDelegatorTokenStake(_operator, _delegator, _tokenId);
+            _activateDelegatorTokenStake(_executor, _delegator, _tokenId);
             
             if(_isDelegation) {
-                delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_tokenId] = _amount;
+                delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_tokenId] = _amount;
             } else {
                 newBalance -= _amount;
-                delegatorDelegationInfo[_operator][_delegator].activeDelegation[_tokenId] -= _amount;
+                delegatorDelegationInfo[_executor][_delegator].activeDelegation[_tokenId] -= _amount;
             }
 
             // Update delegator's reward debt
-            reward = _updateDelegatorRewards(_operator, _delegator, _tokenId, oldBalance, newBalance);
+            reward = _updateDelegatorRewards(_executor, _delegator, _tokenId, oldBalance, newBalance);
 
-            delegatorDelegationEpochInfo[_operator][_delegator].epochPending = currentEpoch;
+            delegatorDelegationEpochInfo[_executor][_delegator].epochPending = currentEpoch;
         } else {
             if(_isDelegation) {
-                delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_tokenId] += _amount;
+                delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_tokenId] += _amount;
             } else {
-                uint256 delegatorPendingAmount = delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_tokenId];
+                uint256 delegatorPendingAmount = delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_tokenId];
                 uint256 minAmount = _amount < delegatorPendingAmount ? _amount : delegatorPendingAmount;
-                delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_tokenId] -= minAmount;
+                delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_tokenId] -= minAmount;
                 // If the _amount to be undelegated is more than the pending delegation
                 if(_amount - minAmount > 0) {
-                    delegatorDelegationInfo[_operator][_delegator].activeDelegation[_tokenId] -= (_amount - minAmount);
+                    delegatorDelegationInfo[_executor][_delegator].activeDelegation[_tokenId] -= (_amount - minAmount);
                 }
             }
         }
@@ -302,12 +302,12 @@ contract InflationRewardsManager is
     // Update the rewardPerShare till the lastJobDoneEpoch
     // to be only called once in an epoch for each executor
     function _updateRewards(
-        address _operator,
+        address _executor,
         bytes32[] memory tokens
     ) internal {
-        uint256 lastJobDoneEpoch = executorEpochInfo[_operator].lastJobDoneEpoch;
-        uint256 executorReward = epochRewards[lastJobDoneEpoch] * executorEpochJobs[_operator] / 
-                                    totalEpochJobs[lastJobDoneEpoch];
+        uint256 lastJobDoneEpoch = executorEpochInfo[_executor].lastJobDoneEpoch;
+        uint256 executorReward = epochRewards[lastJobDoneEpoch] * executorEpochJobCount[_executor] / 
+                                    totalEpochJobCount[lastJobDoneEpoch];
         if(executorReward == 0)
             return;
 
@@ -316,7 +316,7 @@ contract InflationRewardsManager is
         for (uint256 i = 0; i < tokens.length; i++) {
             bytes32 tokenId = tokens[i];
 
-            tokenDelegations[i] = executorDelegationInfo[_operator].activeDelegation[tokenId];
+            tokenDelegations[i] = executorDelegationInfo[_executor].activeDelegation[tokenId];
             if(tokenDelegations[i] > 0)
                 ++delegatedTokens;
         }
@@ -324,47 +324,47 @@ contract InflationRewardsManager is
         for (uint256 i = 0; i < tokens.length; i++) {
             bytes32 tokenId = tokens[i];
             if(tokenDelegations[i] > 0)
-                executorRewardPerToken[_operator][tokenId] += ((executorReward * (10**30) / delegatedTokens) / 
+                executorRewardPerToken[_executor][tokenId] += ((executorReward * (10**30) / delegatedTokens) / 
                                                                 tokenDelegations[i]);
         }
 
-        executorEpochInfo[_operator].lastDistributedEpoch = executorEpochInfo[_operator].lastJobDoneEpoch;
+        executorEpochInfo[_executor].lastDistributedEpoch = executorEpochInfo[_executor].lastJobDoneEpoch;
     }
 
-    function _activateOperatorStake(
-        address _operator,
+    function _activateExecutorStake(
+        address _executor,
         bytes32[] memory tokens
     ) internal {
         // Update the executor's delegation amounts
         for (uint256 i = 0; i < tokens.length; i++) {
             bytes32 tokenId = tokens[i];
-            _activateOperatorTokenStake(_operator, tokenId);
+            _activateExecutorTokenStake(_executor, tokenId);
         }
     }
 
-    function _activateOperatorTokenStake(
-        address _operator,
+    function _activateExecutorTokenStake(
+        address _executor,
         bytes32 _token
     ) internal {
-        executorDelegationInfo[_operator].activeDelegation[_token] += 
-            executorDelegationInfo[_operator].pendingDelegation[_token];
+        executorDelegationInfo[_executor].activeDelegation[_token] += 
+            executorDelegationInfo[_executor].pendingDelegation[_token];
 
-        executorDelegationInfo[_operator].pendingDelegation[_token] = 0;
+        executorDelegationInfo[_executor].pendingDelegation[_token] = 0;
     }
 
     function _activateDelegatorTokenStake(
-        address _operator,
+        address _executor,
         address _delegator,
         bytes32 _token
     ) internal {
-        delegatorDelegationInfo[_operator][_delegator].activeDelegation[_token] += 
-            delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_token];
+        delegatorDelegationInfo[_executor][_delegator].activeDelegation[_token] += 
+            delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_token];
 
-        delegatorDelegationInfo[_operator][_delegator].pendingDelegation[_token] = 0;
+        delegatorDelegationInfo[_executor][_delegator].pendingDelegation[_token] = 0;
     }
 
     function _updateDelegatorRewards(
-        address _operator,
+        address _executor,
         address _delegator,
         bytes32 _token,
         uint256 _oldBalance,
@@ -372,37 +372,37 @@ contract InflationRewardsManager is
     ) internal returns (uint256 reward) {
         // update delegation reward debt for the delegator
 
-        // uint256 lastJobDoneEpoch = executorEpochInfo[_operator].lastJobDoneEpoch;
+        // uint256 lastJobDoneEpoch = executorEpochInfo[_executor].lastJobDoneEpoch;
         // uint256 currentEpoch = inflationRewardsEmitter.getCurrentEpoch();
         // // No need to update if the last job done epoch is same as current epoch
         // if(lastJobDoneEpoch == currentEpoch)
         //     return;
 
-        uint256 operatorAccruedReward = executorRewardPerToken[_operator][_token];
-        uint256 rewardDebt = delegatorRewardDebt[_operator][_delegator][_token];
+        uint256 executorAccruedReward = executorRewardPerToken[_executor][_token];
+        uint256 rewardDebt = delegatorRewardDebt[_executor][_delegator][_token];
 
-        uint256 executorReward = operatorAccruedReward * _oldBalance / (10**30);
+        uint256 executorReward = executorAccruedReward * _oldBalance / (10**30);
         reward = executorReward - rewardDebt;
 
-        delegatorRewardDebt[_operator][_delegator][_token] = operatorAccruedReward * _newBalance / (10**30);
+        delegatorRewardDebt[_executor][_delegator][_token] = executorAccruedReward * _newBalance / (10**30);
     }
 
     // function undelegate(
-    //     address _operator,
+    //     address _executor,
     //     address _delegator,
     //     bytes32[] memory _tokens,
     //     uint256[] memory _amounts
     // ) external onlyRewardDelegators {
-    //     _updateTokens(_operator, _delegator, _tokens, _amounts, false);
+    //     _updateTokens(_executor, _delegator, _tokens, _amounts, false);
     // }
 
     // function withdrawRewards(
-    //     address _operator,
+    //     address _executor,
     //     address _delegator,
     //     uint256[] memory _amounts,
     //     bytes32[] memory _tokens
     // ) external onlyRewardDelegators {
-    //     _updateTokens(_operator, _delegator, _tokens, _amounts, true);
+    //     _updateTokens(_executor, _delegator, _tokens, _amounts, true);
     // }
 
 }
