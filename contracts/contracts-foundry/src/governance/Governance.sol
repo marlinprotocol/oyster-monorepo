@@ -638,7 +638,9 @@ contract Governance is
             NotRefundableProposal()
         );
 
-        _refundValue(_proposalId);
+        uint256 valueSum = _getValueSum(_proposalId);
+        require(valueSum > 0, NoValueToRefund());
+        _refundValue(_proposalId, valueSum);
 
         emit ExpiredProposalRefunded(_proposalId);
     }
@@ -654,34 +656,28 @@ contract Governance is
             _unlockDepositAndRefund(_proposalId);
         } else if (_voteOutcome == VoteOutcome.Failed) {
             _unlockDepositAndRefund(_proposalId);
-            _refundValue(_proposalId);
+            _refundValue(_proposalId, _getValueSum(_proposalId));
         } else if (_voteOutcome == VoteOutcome.Vetoed) {
             _slashDeposit(_proposalId);
-            _refundValue(_proposalId);
+            _refundValue(_proposalId, _getValueSum(_proposalId));
         }
     }
 
-    /// @dev Refunds the ETH value sent with the proposal to the proposer
-    function _refundValue(bytes32 _proposalId) internal {
+    function _getValueSum(bytes32 _proposalId) internal view returns (uint256) {
         uint256 valueSum;
         for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
             valueSum += proposals[_proposalId].proposalInfo.values[i];
         }
+        return valueSum;
+    }
 
-        if (valueSum == 0) {
-            revert NoValueToRefund();
-        }
-
-        // Clear the values array to prevent double refunding
-        for (uint256 i = 0; i < proposals[_proposalId].proposalInfo.values.length; ++i) {
-            proposals[_proposalId].proposalInfo.values[i] = 0;
-        }
-
+    /// @dev Refunds the ETH value sent with the proposal to the proposer
+    function _refundValue(bytes32 _proposalId, uint256 _amount) internal {
         // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
-        (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: valueSum}("");
+        (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: _amount}("");
         ok;
 
-        emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, valueSum);
+        emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, _amount);
     }
 
     /// @dev Queues a passed proposal for execution
