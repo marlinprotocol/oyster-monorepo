@@ -149,14 +149,14 @@ fn run() -> Result<()> {
         .finalize();
     
 
-    // if digest.as_slice()
-    //     != BASE64_STANDARD
-    //         .decode(init_params.digest)
-    //         .context("failed to decode digest")?
-    //         .as_slice()
-    // {
-    //     bail!("digest mismatch");
-    // }
+    if digest.as_slice()
+        != BASE64_STANDARD
+            .decode(init_params.digest)
+            .context("failed to decode digest")?
+            .as_slice()
+    {
+        bail!("digest mismatch");
+    }
 
     Ok(())
 }

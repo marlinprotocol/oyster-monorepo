@@ -40,16 +40,14 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 
 # Debug
 ./cli/oyster-cvm/target/release/oyster-cvm deploy \
---wallet-private-key priv_key \
---image-url https://1fbadff6d8c1.ngrok-free.app/image.eif \
+--wallet-private-key PRIV_KEY \
+--image-url https://5d14f4a0b8a7.ngrok-free.app/image.eif \
 --instance-type c6g.xlarge \
 --duration-in-minutes 15 \
---init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
+--init-params config/rpc_url:0:0:utf8:https://sepolia-rollup.arbitrum.io/rpc \
 --init-params secrets/default_api_key:0:0:utf8:l86jFYjBFWZTQMRof96TpIGigjbZMUcr \
---init-params config/gov_contract:0:0:utf8:0x5A4cDc889698a42D7DFE0C15da3adCF41E3db138 \
---init-params params/proposal_id:0:0:utf8:0x541c9ed73525aee08e5767948513456f938b7f044e9059d6ad85568d0ba1d81b \
---init-params params/start_ts:0:0:utf8:1753429929 \
---init-params params/data_hash:0:0:utf8:0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+--init-params config/gov_contract:0:0:utf8:0x765134172aDeC674057E5D62653aC44288662061 \
+--init-params params/proposal_id:0:0:utf8:0xed202dd20938ed6ed2e1a637987a28233c45ef3d1bedbbc52560952f3cb7b68f \
 --init-params secrets/api_keys.json:0:0:file:./api_keys.json \
 --init-params config/chain_ids.json:0:0:file:./chain_ids.json \
 --init-params config/rpc_index.json:0:0:file:./rpc_index.json \
@@ -57,8 +55,8 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 
 # Normal
 ./cli/oyster-cvm/target/release/oyster-cvm deploy \
---wallet-private-key priv_key \
---image-url https://8d496d360731.ngrok-free.app/image.eif \
+--wallet-private-key PRIV_KEY \
+--image-url https://5d14f4a0b8a7.ngrok-free.app/image.eif \
 --instance-type c6g.xlarge \
 --duration-in-minutes 15 \
 --init-params config/rpc_url:0:0:utf8:https://arb-sepolia.g.alchemy.com/v2 \
@@ -75,6 +73,3 @@ nix build .#packages.aarch64-linux.default.enclaves.governance.default
 running python server for http
 python3 -m http.server 8000
 ngrok http 8000
-
-601be54359df7a7947880232f7a3a98e64a071f93339f2b95f4a05b3457772693fe585f87f9cad9c1248313295156528f6
-601be54359df7a7947880232f7a3a98e64a071f93339f2b95f4a05b3457772693fe585f87f9cad9c1248313295156528f6
