@@ -27,12 +27,11 @@ axum = "0.8.4"
 base64 = "0.22.1"
 clap = { version = "4.5.44", features = ["derive"] }
 hex = "0.4.3"
-rand_core = { version = "0.9.3", features = ["os_rng"] }
 reqwest = { version = "0.12.22", features = ["rustls-tls"], default-features = false }
 serde = "1.0.219"
 serde_json = "1.0.142"
 shell-escape = "0.1.5"
-ssh-key = { version = "0.6.7", features = ["ed25519"] }
+ssh-key = { version = "0.6.7", features = ["ed25519", "rand_core"] }
 ssh2 = { version = "0.9.5", features = ["vendored-openssl"] }
 tokio = { version = "1.47.1", features = ["full", "test-util"] }
 tokio-stream = "0.1"
