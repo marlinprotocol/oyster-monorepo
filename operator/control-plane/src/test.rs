@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, LogData, B256, U256};
 use alloy::providers::Provider;
-use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::eth::Log;
 use anyhow::{anyhow, Result};
 use tokio::time::{Duration, Instant};
@@ -207,7 +206,7 @@ pub struct TestLogger {}
 impl LogsProvider for TestLogger {
     async fn new_jobs<'a>(
         &'a self,
-        _client: &'a impl Provider<PubSubFrontend>,
+        _client: &'a impl Provider,
     ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
         let logs: Vec<Log> = Vec::new();
         Ok(tokio_stream::iter(
@@ -220,7 +219,7 @@ impl LogsProvider for TestLogger {
 
     async fn job_logs<'a>(
         &'a self,
-        _client: &'a impl Provider<PubSubFrontend>,
+        _client: &'a impl Provider,
         job: B256,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
         let logs: Vec<Log> = Vec::new();

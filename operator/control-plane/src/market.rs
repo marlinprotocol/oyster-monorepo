@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use alloy::hex::ToHexExt;
 use alloy::primitives::{keccak256, Address, B256, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::pubsub::PubSubFrontend;
 use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
 use alloy::transports::ws::{WebSocketConfig, WsConnect};
@@ -128,12 +127,12 @@ where
 pub trait LogsProvider {
     fn new_jobs<'a>(
         &'a self,
-        client: &'a impl Provider<PubSubFrontend>,
+        client: &'a impl Provider,
     ) -> impl Future<Output = Result<impl StreamExt<Item = (B256, bool)> + 'a>>;
 
     fn job_logs<'a>(
         &'a self,
-        client: &'a impl Provider<PubSubFrontend>,
+        client: &'a impl Provider,
         job: B256,
     ) -> impl Future<Output = Result<impl StreamExt<Item = Log> + Send + 'a>> + Send;
 }
@@ -147,14 +146,14 @@ pub struct EthersProvider {
 impl LogsProvider for EthersProvider {
     async fn new_jobs<'a>(
         &'a self,
-        client: &'a impl Provider<PubSubFrontend>,
+        client: &'a impl Provider,
     ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
         new_jobs(client, self.contract, self.provider).await
     }
 
     async fn job_logs<'a>(
         &'a self,
-        client: &'a impl Provider<PubSubFrontend>,
+        client: &'a impl Provider,
         job: B256,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
         job_logs(client, self.contract, job).await
@@ -209,7 +208,7 @@ pub async fn run(
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .on_ws(WsConnect::new(url.clone()).with_config(ws_config))
+            .connect_ws(WsConnect::new(url.clone()).with_config(ws_config))
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
@@ -308,7 +307,7 @@ async fn run_once(
 }
 
 async fn new_jobs(
-    client: &impl Provider<PubSubFrontend>,
+    client: &impl Provider,
     address: Address,
     provider: Address,
 ) -> Result<impl StreamExt<Item = (B256, bool)> + '_> {
@@ -386,7 +385,7 @@ async fn job_manager(
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .on_ws(WsConnect::new(url.clone()).with_config(ws_config))
+            .connect_ws(WsConnect::new(url.clone()).with_config(ws_config))
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
@@ -695,7 +694,7 @@ impl<'a> JobState<'a> {
         if log.topics()[0] == JOB_OPENED {
             // decode
             let Ok((metadata, _rate, _balance, timestamp)) =
-                <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)
+                <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data)
                     .inspect_err(|err| error!(?err, data = ?log.data(), "OPENED: Decode failure"))
             else {
                 return JobResult::Internal;
@@ -829,9 +828,8 @@ impl<'a> JobState<'a> {
             }
         } else if log.topics()[0] == JOB_SETTLED {
             // decode
-            let Ok((amount, timestamp)) =
-                <(U256, U256)>::abi_decode_sequence(&log.data().data, true)
-                    .inspect_err(|err| error!(?err, data = ?log.data(), "SETTLED: Decode failure"))
+            let Ok((amount, timestamp)) = <(U256, U256)>::abi_decode_sequence(&log.data().data)
+                .inspect_err(|err| error!(?err, data = ?log.data(), "SETTLED: Decode failure"))
             else {
                 return JobResult::Internal;
             };
@@ -861,7 +859,7 @@ impl<'a> JobState<'a> {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
-            let Ok(amount) = U256::abi_decode(&log.data().data, true)
+            let Ok(amount) = U256::abi_decode(&log.data().data)
                 .inspect_err(|err| error!(?err, data = ?log.data(), "DEPOSITED: Decode failure"))
             else {
                 return JobResult::Internal;
@@ -889,7 +887,7 @@ impl<'a> JobState<'a> {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
-            let Ok(amount) = U256::abi_decode(&log.data().data, true)
+            let Ok(amount) = U256::abi_decode(&log.data().data)
                 .inspect_err(|err| error!(?err, data = ?log.data(), "WITHDREW: Decode failure"))
             else {
                 return JobResult::Internal;
@@ -916,7 +914,7 @@ impl<'a> JobState<'a> {
         } else if log.topics()[0] == JOB_REVISE_RATE_INITIATED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
-            let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
+            let Ok(new_rate) = U256::abi_decode(&log.data().data).inspect_err(
                 |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_INTIATED: Decode failure"),
             ) else {
                 return JobResult::Internal;
@@ -963,7 +961,7 @@ impl<'a> JobState<'a> {
         } else if log.topics()[0] == JOB_REVISE_RATE_FINALIZED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
-            let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
+            let Ok(new_rate) = U256::abi_decode(&log.data().data).inspect_err(
                 |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_FINALIZED: Decode failure"),
             ) else {
                 return JobResult::Internal;
@@ -993,7 +991,7 @@ impl<'a> JobState<'a> {
         } else if log.topics()[0] == METADATA_UPDATED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
-            let Ok(metadata) = String::abi_decode(&log.data().data, true).inspect_err(
+            let Ok(metadata) = String::abi_decode(&log.data().data).inspect_err(
                 |err| error!(?err, data = ?log.data(), "METADATA_UPDATED: Decode failure"),
             ) else {
                 return JobResult::Internal;
@@ -1260,7 +1258,7 @@ async fn job_manager_once(
 }
 
 async fn job_logs(
-    client: &impl Provider<PubSubFrontend>,
+    client: &impl Provider,
     contract: Address,
     job: B256,
 ) -> Result<impl StreamExt<Item = Log> + Send + '_> {

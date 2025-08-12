@@ -114,7 +114,7 @@ async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRa
 
 async fn get_chain_id_from_rpc_url(url: String) -> Result<String> {
     let provider = ProviderBuilder::new()
-        .on_ws(WsConnect::new(url))
+        .connect_ws(WsConnect::new(url))
         .await
         .context("failed to create websocket provider")?;
     let chain_id = provider
