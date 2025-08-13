@@ -36,8 +36,6 @@ interface IRewardDelegators {
         address _operator,
         bytes32 _lockId,
         uint256 _amount
-        // bytes32[] memory _tokens,
-        // uint256[] memory _amounts
     ) external;
     function unlockTokens(
         address _operator,

@@ -11,7 +11,6 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./interfaces/IOperatorRegistry.sol";
 import "./interfaces/IClusterRegistry.sol";
 import "./interfaces/IOperatorManager.sol";
-import "./interfaces/IRewardDelegators.sol";
 
 contract OperatorRegistry is
     Initializable, // initializer
@@ -69,7 +68,7 @@ contract OperatorRegistry is
 
     uint256[50] private __gap1;
 
-    function initialize(address _rewardDelegators) public initializer {
+    function initialize(address _clusterRegistry) public initializer {
         __Context_init_unchained();
         __ERC165_init_unchained();
         __AccessControl_init_unchained();
@@ -79,20 +78,20 @@ contract OperatorRegistry is
 
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
 
-        _updateRewardDelegators(_rewardDelegators);
+        _updateClusterRegistry(_clusterRegistry);
     }
 
     //-------------------------------- Initializer end --------------------------------//
 
     //-------------------------------- Admin calls start --------------------------------//
 
-    function updateRewardDelegators(address _updatedRewardDelegators) external onlyAdmin {
-        _updateRewardDelegators(_updatedRewardDelegators);
+    function updateClusterRegistry(address _updatedClusterRegistry) external onlyAdmin {
+        _updateClusterRegistry(_updatedClusterRegistry);
     }
 
-    function _updateRewardDelegators(address _updatedRewardDelegators) internal {
-        rewardDelegators = IRewardDelegators(_updatedRewardDelegators);
-        emit RewardDelegatorsUpdated(_updatedRewardDelegators);
+    function _updateClusterRegistry(address _updatedClusterRegistry) internal {
+        clusterRegistry = IClusterRegistry(_updatedClusterRegistry);
+        emit ClusterRegistryUpdated(_updatedClusterRegistry);
     }
 
     //-------------------------------- Admin calls end --------------------------------//
@@ -115,14 +114,12 @@ contract OperatorRegistry is
     // Serverless executor service - keccak256("SERVERLESS_EXECUTOR")
     // Serverless gateway service - keccak256("SERVERLESS_GATEWAY")
 
-    IRewardDelegators public rewardDelegators;
-
     IClusterRegistry public clusterRegistry;
 
-    event RewardDelegatorsUpdated(address indexed rewardDelegators);
+    event ClusterRegistryUpdated(address indexed clusterRegistry);
     event ServiceAdded(bytes32 indexed operatorManagerId, address operatorManager, bool isTwoStepDeregister);
     event OperatorRegistered(address indexed operator, bytes32 indexed operatorManagerId);
-    event DeregisterRequested(address indexed operator, bytes32 indexed operatorManagerId);
+    event OperatorDeregisterRequested(address indexed operator, bytes32 indexed operatorManagerId);
     event OperatorDeregistered(address indexed operator, bytes32 indexed operatorManagerId);
 
     error OperatorRegistry_ServiceAlreadyExists();
@@ -185,7 +182,7 @@ contract OperatorRegistry is
         bool success;
         if(_data.length == 0) {
             (success, ) = operatorManagers[id].operatorManager.call(
-                abi.encodeWithSignature("requestDeregister(address)", operator)
+                abi.encodeWithSignature("requestUnregister(address)", operator)
             );
         } else {
             (success, ) = operatorManagers[id].operatorManager.call(
@@ -196,7 +193,7 @@ contract OperatorRegistry is
         if(!success)
             revert OperatorRegistry_DeregisterRequestFailed();
         
-        emit DeregisterRequested(operator, id);
+        emit OperatorDeregisterRequested(operator, id);
     }
 
     function deregister(bytes calldata _data) external {
@@ -204,9 +201,6 @@ contract OperatorRegistry is
         bytes32 id = operatorToManagerId[operator];
         if(id == bytes32(0))
             revert OperatorRegistry_OperatorNotRegistered();
-
-        if(!operatorManagers[id].isTwoStepDeregister)
-            revert OperatorRegistry_TwoStepDeregisterDisabled();
 
         // Low-level call to the operator manager to request deregistration
         // if case for Relay service, else case for serverless service

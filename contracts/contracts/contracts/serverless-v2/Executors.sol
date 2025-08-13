@@ -40,10 +40,8 @@ contract Executors is
      * @dev Initializes the logic contract without any admins, safeguarding against takeover.
      * @param attestationVerifier The attestation verifier contract.
      * @param maxAge Maximum age for attestations.
-     * @param _token The ERC20 token used for staking.
+     * @param _token The ERC20 token used for job rewards.
      * @param _minStakeAmount Minimum stake amount required.
-     * @param _slashPercentInBips Slashing percentage in basis points.
-     * @param _slashMaxBips Maximum basis points for slashing.
      */
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(
@@ -51,8 +49,7 @@ contract Executors is
         uint256 maxAge,
         IERC20 _token,
         uint256 _minStakeAmount,
-        uint256 _slashPercentInBips,
-        uint256 _slashMaxBips
+        IRewardDelegators _rewardDelegators
     ) AttestationAutherUpgradeable(attestationVerifier, maxAge) {
         _disableInitializers();
 
@@ -61,9 +58,7 @@ contract Executors is
 
         TOKEN = _token;
         MIN_STAKE_AMOUNT = _minStakeAmount;
-
-        SLASH_PERCENT_IN_BIPS = _slashPercentInBips;
-        SLASH_MAX_BIPS = _slashMaxBips;
+        REWARD_DELEGATORS = _rewardDelegators;
     }
 
     //-------------------------------- Overrides start --------------------------------//
@@ -111,13 +106,13 @@ contract Executors is
     /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     uint256 public immutable MIN_STAKE_AMOUNT;
 
-    /// @notice an integer in the range 0-10^6
-    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
-    uint256 public immutable SLASH_PERCENT_IN_BIPS;
+    // /// @notice an integer in the range 0-10^6
+    // /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
+    // uint256 public immutable SLASH_PERCENT_IN_BIPS;
 
-    /// @notice expected to be 10^6
-    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
-    uint256 public immutable SLASH_MAX_BIPS;
+    // /// @notice expected to be 10^6
+    // /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
+    // uint256 public immutable SLASH_MAX_BIPS;
 
     /// @notice executor stake amount will be divided by 10^18 before adding to the tree
     uint256 public constant STAKE_ADJUSTMENT_FACTOR = 1e18;
@@ -125,13 +120,18 @@ contract Executors is
     bytes32 public constant JOBS_ROLE = keccak256("JOBS_ROLE");
     bytes32 public constant OPERATOR_REGISTRY_ROLE = keccak256("OPERATOR_REGISTRY_ROLE");
 
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     IRewardDelegators public immutable REWARD_DELEGATORS;
 
     //-------------------------------- Execution Env start --------------------------------//
 
     modifier isValidEnv(uint8 _env) {
-        if (!isTreeInitialized(_env)) revert ExecutorsUnsupportedEnv();
+        _isValidEnv(_env);
         _;
+    }
+
+    function _isValidEnv(uint8 _env) internal view {
+        if (!isTreeInitialized(_env)) revert ExecutorsUnsupportedEnv();
     }
 
     function initTree(uint8 _env) external onlyRole(JOBS_ROLE) {
@@ -162,6 +162,8 @@ contract Executors is
         _;
     }
 
+    enum Status{NOT_REGISTERED, REGISTERED}
+
     struct Executor {
         uint256 jobCapacity;
         uint256 activeJobs;
@@ -171,6 +173,7 @@ contract Executors is
         address owner;
         bool draining;
         uint8 env;
+        Status status;
     }
 
     // enclaveAddress => Execution node details
@@ -186,7 +189,7 @@ contract Executors is
         );
 
     bytes32 private constant REGISTER_TYPEHASH =
-        keccak256("Register(address owner,uint256 jobCapacity,uint8 env,uint256 signTimestamp)");
+        keccak256("Register(address owner,uint256 jobCapacity,uint8 env,uint256 commission,uint256 signTimestamp)");
 
     /// @notice Emitted when a new executor is registered.
     /// @param enclaveAddress The address of the enclave.
@@ -242,6 +245,7 @@ contract Executors is
     error ExecutorsInvalidOwner();
     /// @notice Thrown when the provided execution environment is not supported globally.
     error ExecutorsUnsupportedEnv();
+    error ExecutorsNotRegistered();
 
     //-------------------------------- Admin methods start --------------------------------//
 
@@ -289,6 +293,7 @@ contract Executors is
             uint8 _env
         ) = abi.decode(_data, (bytes, IAttestationVerifier.Attestation, uint256, uint256, bytes, uint256, uint8));
 
+        _isValidEnv(_env);
         address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
         if (executors[enclaveAddress].owner != address(0)) revert ExecutorsExecutorAlreadyExists();
 
@@ -332,6 +337,7 @@ contract Executors is
         executors[_enclaveAddress].owner = _owner;
         executors[_enclaveAddress].env = _env;
         executors[_enclaveAddress].commission = _commission;
+        executors[_enclaveAddress].status = Status.REGISTERED;
 
         emit ExecutorRegistered(_enclaveAddress, _owner, _jobCapacity, _env, _commission);
     }
@@ -350,6 +356,7 @@ contract Executors is
     function _reviveExecutor(address _enclaveAddress) internal {
         Executor memory executorNode = executors[_enclaveAddress];
         if (!executorNode.draining) revert ExecutorsAlreadyRevived();
+        if(executorNode.status != Status.REGISTERED) revert ExecutorsNotRegistered();
 
         executors[_enclaveAddress].draining = false;
 
@@ -368,6 +375,7 @@ contract Executors is
 
     function _deregisterExecutor(address _enclaveAddress) internal {
         if (!executors[_enclaveAddress].draining) revert ExecutorsNotDraining();
+        if (executors[_enclaveAddress].status != Status.REGISTERED) revert ExecutorsNotRegistered();
         if (executors[_enclaveAddress].activeJobs != 0) revert ExecutorsHasPendingJobs();
 
         // _removeStake(_enclaveAddress, executors[_enclaveAddress].stakeAmount);
@@ -375,13 +383,14 @@ contract Executors is
 
         // TODO: do we need to delete or mark as deregistered?
         _revokeEnclaveKey(_enclaveAddress);
+        executors[_enclaveAddress].status = Status.NOT_REGISTERED;
         // delete executors[_enclaveAddress];
 
         emit ExecutorDeregistered(_enclaveAddress);
     }
 
     // to be called during (1) operator registration (2) stake updates (delegation, undelegation, withdraw rewards)
-    function updateOperatorSelector(address _enclaveAddress, uint256 _totalDelegation) external {
+    function updateOperatorSelector(address _enclaveAddress, uint256 _totalDelegation) external isRewardDelegators {
         Executor memory executorNode = executors[_enclaveAddress];
 
         if (
@@ -396,7 +405,7 @@ contract Executors is
         }
     }
 
-    function removeOperatorSelector(address _enclaveAddress) external {
+    function removeOperatorSelector(address _enclaveAddress) external isRewardDelegators {
         if (!executors[_enclaveAddress].draining) revert ExecutorsNotDraining();
         if (executors[_enclaveAddress].activeJobs != 0) revert ExecutorsHasPendingJobs();
     }
