@@ -7,7 +7,7 @@ interface IRewardDelegators {
     function addRewardFactor(bytes32 _tokenId, uint256 _rewardFactor) external;
     function removeRewardFactor(bytes32 _tokenId) external;
     function updateRewardFactor(bytes32 _tokenId, uint256 _updatedRewardFactor) external;
-    function _updateRewards(address _cluster, bytes32 _operatorManagerId) external;
+    function _updateRewards(address _cluster) external;
     function delegate(
         address _delegator,
         address _cluster,
@@ -32,10 +32,14 @@ interface IRewardDelegators {
     function getAccRewardPerShare(address _cluster, bytes32 _tokenId) external view returns(uint256);
     function updateClusterDelegation(address _cluster, bytes32 _networkId) external;
     function removeClusterDelegation(address _cluster, bytes32 _networkId) external;
+
+    function updateOperatorDelegation(address _operator, bytes memory _data) external;
+    function removeOperatorDelegation(address _operator, bytes memory _data) external;
+
     function lockTokens(
         address _operator,
         bytes32 _lockId,
-        uint256 _amount
+        uint256 _lockAmount
     ) external;
     function unlockTokens(
         address _operator,
@@ -46,9 +50,5 @@ interface IRewardDelegators {
         bytes32 _lockId,
         address _recipient
     ) external returns (address[] memory tokens, uint256[] memory amounts);
-    function getEffectiveDelegation(
-        address _operator,
-        bytes32 _networkId
-    ) external view returns (uint256);
-    function getTokenList() external view returns (bytes32[] memory);
+    function getEffectiveDelegation(address cluster, bytes32 networkId) external view returns(uint256 totalDelegations);
 }

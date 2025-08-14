@@ -551,7 +551,12 @@ contract GatewayJobs is
         emit JobResponded(jobId, _output, _totalTime, _errorCode);
     }
 
-    function _oysterFailureCall(uint256 _execJobId, uint256 _slashAmount) internal {
+    function _oysterFailureCall(
+        uint256 _execJobId,
+        // uint256 _slashAmount,
+        address[] memory _tokens,
+        uint256[] memory _amounts
+    ) internal {
         uint jobId = execJobs[_execJobId];
         address gateway = relayJobs[jobId].gateway;
         uint256 usdcDeposit = relayJobs[jobId].usdcDeposit;
@@ -562,8 +567,18 @@ contract GatewayJobs is
         address gatewayOwner = GATEWAYS.getOwner(gateway);
 
         USDC_TOKEN.safeTransfer(gatewayOwner, usdcDeposit);
-        STAKING_TOKEN.safeTransfer(jobOwner, _slashAmount - SLASH_COMP_FOR_GATEWAY);
-        STAKING_TOKEN.safeTransfer(gatewayOwner, SLASH_COMP_FOR_GATEWAY);
+        // STAKING_TOKEN.safeTransfer(jobOwner, _slashAmount - SLASH_COMP_FOR_GATEWAY);
+        // STAKING_TOKEN.safeTransfer(gatewayOwner, SLASH_COMP_FOR_GATEWAY);
+        for (uint256 index = 0; index < _tokens.length; index++) {
+            uint256 slashAmount = _amounts[index];
+            // TODO: need to fix this scenario
+            if(slashAmount <= SLASH_COMP_FOR_GATEWAY) {
+                IERC20(_tokens[index]).safeTransfer(jobOwner, slashAmount);
+            } else {
+                IERC20(_tokens[index]).safeTransfer(jobOwner, slashAmount - SLASH_COMP_FOR_GATEWAY);
+                IERC20(_tokens[index]).safeTransfer(gatewayOwner, SLASH_COMP_FOR_GATEWAY);
+            }
+        }
         emit JobFailed(jobId);
     }
     //-------------------------------- internal functions end ----------------------------------//
@@ -591,10 +606,14 @@ contract GatewayJobs is
      * @notice External function to call the internal _oysterFailureCall function after a job has failed.
      * @dev Can only be called by an address with the JOBS_ROLE.
      * @param _jobId The ID of the job that failed.
-     * @param _slashAmount The amount of tokens to be slashed due to the failure.
      */
-    function oysterFailureCall(uint256 _jobId, uint256 _slashAmount) external onlyRole(JOBS_ROLE) {
-        _oysterFailureCall(_jobId, _slashAmount);
+    function oysterFailureCall(
+        uint256 _jobId,
+        // uint256 _slashAmount,
+        address[] memory _tokens,
+        uint256[] memory _amounts
+    ) external onlyRole(JOBS_ROLE) {
+        _oysterFailureCall(_jobId, _tokens, _amounts);
     }
     //-------------------------------- external functions end ----------------------------------//
 
