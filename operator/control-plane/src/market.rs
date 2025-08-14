@@ -205,10 +205,15 @@ pub async fn run(
     let mut job_count = 0;
     loop {
         info!("Connecting to RPC endpoint...");
-        let mut ws_config = WebSocketConfig::default();
-        ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .connect_ws(WsConnect::new(url.clone()).with_config(ws_config))
+            // we will not be sending any transactions, do not need fillers
+            .disable_recommended_fillers()
+            .connect_ws(
+                WsConnect::new(url.clone())
+                    // we handle backoffs and retries ourselves
+                    .with_max_retries(0)
+                    .with_config(WebSocketConfig::default().max_frame_size(Some(64 << 20))),
+            )
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
@@ -382,10 +387,15 @@ async fn job_manager(
     // since subscriptions are stateful
     loop {
         info!("Connecting to RPC endpoint...");
-        let mut ws_config = WebSocketConfig::default();
-        ws_config.max_frame_size = Some(64 << 20);
         let res = ProviderBuilder::new()
-            .connect_ws(WsConnect::new(url.clone()).with_config(ws_config))
+            // we will not be sending any transactions, do not need fillers
+            .disable_recommended_fillers()
+            .connect_ws(
+                WsConnect::new(url.clone())
+                    // we handle backoffs and retries ourselves
+                    .with_max_retries(0)
+                    .with_config(WebSocketConfig::default().max_frame_size(Some(64 << 20))),
+            )
             .await;
         if let Err(err) = res {
             // exponential backoff on connection errors
