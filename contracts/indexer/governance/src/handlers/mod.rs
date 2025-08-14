@@ -11,6 +11,9 @@ use crate::LogsProvider;
 mod proposal_created;
 use proposal_created::handle_proposal_created;
 
+mod result_submitted;
+use result_submitted::handle_result_submitted;
+
 // proposal logs
 static PROPOSAL_CREATED: [u8; 32] = event!(
     "ProposalCreated(bytes32,address,uint256,address[],uint256[],bytes[],string,string,(uint256,uint256,uint256,uint256))"
@@ -24,6 +27,10 @@ static DEPOSIT_SLASHED: [u8; 32] = event!("DepositSlashed(bytes32,address,uint25
 
 // vote logs
 static VOTE_SUBMITTED: [u8; 32] = event!("VoteSubmitted(bytes32,uint256,address,bytes)");
+
+// result logs
+static RESULT_SUBMITTED: [u8; 32] =
+    event!("ResultSubmitted(bytes32,(uint256,uint256,uint256,uint256,uint256),uint8)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
@@ -57,6 +64,8 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
 
     if log_type == PROPOSAL_CREATED {
         handle_proposal_created(conn, log)
+    } else if log_type == RESULT_SUBMITTED {
+        handle_result_submitted(conn, log)
     } else if log_type == UPGRADED
         || log_type == INITIALIZED
         || log_type == TOKEN_LOCK_AMOUNT_SET
