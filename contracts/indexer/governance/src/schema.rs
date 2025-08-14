@@ -1,5 +1,11 @@
 // @generated automatically by Diesel CLI.
 
+pub mod sql_types {
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "result_outcome"))]
+    pub struct ResultOutcome;
+}
+
 diesel::table! {
     proposals (id) {
         #[max_length = 66]
@@ -20,6 +26,24 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::ResultOutcome;
+
+    results (proposal_id) {
+        #[max_length = 66]
+        proposal_id -> Bpchar,
+        yes -> Numeric,
+        no -> Numeric,
+        abstain -> Numeric,
+        no_with_veto -> Numeric,
+        total_voting_power -> Numeric,
+        outcome -> ResultOutcome,
+        #[max_length = 66]
+        tx_hash -> Bpchar,
+    }
+}
+
+diesel::table! {
     sync (block) {
         block -> Int8,
     }
@@ -35,10 +59,12 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(results -> proposals (proposal_id));
 diesel::joinable!(votes -> proposals (proposal_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     proposals,
+    results,
     sync,
     votes,
 );
