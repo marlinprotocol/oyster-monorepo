@@ -10,6 +10,7 @@ use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
 use alloy::transports::ws::{WebSocketConfig, WsConnect};
 use anyhow::{Context, Result};
+use async_stream::stream;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -156,7 +157,7 @@ impl LogsProvider for EthersProvider {
         client: &'a impl Provider,
         job: B256,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
-        job_logs(client, self.contract, job).await
+        Ok(job_logs(client, self.contract, job, 0))
     }
 }
 
@@ -323,43 +324,7 @@ async fn new_jobs(
         )])
         .topic3(provider.into_word());
 
-    // ordering is important to prevent race conditions while getting all logs but
-    // it still relies on the RPC being consistent between registering the subscription
-    // and querying the cutoff block number
-
-    // register subscription
-    let stream = client
-        .subscribe_logs(&event_filter.clone().select(0..))
-        .await
-        .context("failed to subscribe to new jobs")?
-        .into_stream();
-
-    // get cutoff block number
-    let cutoff = client
-        .get_block_number()
-        .await
-        .context("failed to get cutoff block")?;
-
-    // cut off stream at cutoff block, extract data from items
-    let stream = stream.filter_map(move |item| {
-        if item.block_number.unwrap() > cutoff {
-            Some((item.topics()[1], item.removed))
-        } else {
-            None
-        }
-    });
-
-    // get logs up to cutoff
-    let old_logs = client
-        .get_logs(&event_filter.select(0..=cutoff))
-        .await
-        .context("failed to query old logs")?;
-
-    // convert to a stream, extract data from items
-    let old_logs = tokio_stream::iter(old_logs).map(|item| (item.topics()[1], item.removed));
-
-    // stream
-    let stream = old_logs.chain(stream);
+    let stream = log_stream(client, event_filter, 0).map(|item| (item.topics()[1], item.removed));
 
     Ok(stream)
 }
@@ -1267,11 +1232,12 @@ async fn job_manager_once(
     job_result
 }
 
-async fn job_logs(
+fn job_logs(
     client: &impl Provider,
     contract: Address,
     job: B256,
-) -> Result<impl StreamExt<Item = Log> + Send + '_> {
+    start_block: u64,
+) -> impl StreamExt<Item = Log> + '_ {
     let event_filter = Filter::new()
         .address(contract)
         .event_signature(vec![
@@ -1287,45 +1253,95 @@ async fn job_logs(
         ])
         .topic1(job);
 
-    // ordering is important to prevent race conditions while getting all logs but
-    // it still relies on the RPC being consistent between registering the subscription
-    // and querying the cutoff block number
+    log_stream(client, event_filter, start_block)
+}
 
-    // register subscription
-    let stream = client
-        .subscribe_logs(&event_filter.clone().select(0..))
-        .await
-        .context("failed to subscribe to job logs")?
-        .into_stream();
+fn log_stream(
+    client: &impl Provider,
+    event_filter: Filter,
+    mut start_block: u64,
+) -> impl StreamExt<Item = Log> + '_ {
+    stream! {
+        // get close to the latest block
+        // loop since end block can change quite a bit since the start of sync
+        loop {
+            // get latest end block
+            let Ok(end_block) = client.get_block_number().await else {return;};
 
-    // get cutoff block number
-    let cutoff = client
-        .get_block_number()
-        .await
-        .context("failed to get cutoff block")?;
+            // get at least 1000 blocks close
+            if start_block + 1000 > end_block {
+                break;
+            }
 
-    // cut off stream at cutoff block
-    let stream = stream.filter_map(move |item| {
-        if item.block_number.unwrap() > cutoff {
-            Some(item)
-        } else {
-            None
+            // get to end block
+            while start_block <= end_block {
+                let cutoff = std::cmp::min(start_block + 9999, end_block);
+                let Ok(old_logs) = client
+                    .get_logs(&event_filter.clone().select(start_block..=cutoff))
+                    .await
+                    .context("failed to query old logs")
+                    .inspect_err(|e| error!(?e)) else {
+                    return;
+                };
+                start_block = cutoff + 1;
+
+                for log in old_logs {
+                    yield log;
+                }
+            }
         }
-    });
 
-    // get logs up to cutoff
-    let old_logs = client
-        .get_logs(&event_filter.select(0..=cutoff))
-        .await
-        .context("failed to query old logs")?;
+        // make a stream with everything else now
 
-    // convert to a stream, extract data from items
-    let old_logs = tokio_stream::iter(old_logs);
+        // ordering is important to prevent race conditions while getting all logs but
+        // it still relies on the RPC being consistent between registering the subscription
+        // and querying the cutoff block number
 
-    // stream
-    let stream = old_logs.chain(stream);
+        // register subscription
+        let Ok(stream) = client
+            .subscribe_logs(&event_filter.clone().select(0..))
+            .await
+            .context("failed to subscribe to job logs")
+            .inspect_err(|e| error!(?e))
+            .map(|x| x.into_stream()) else {
+            return;
+        };
 
-    Ok(stream)
+        // get cutoff block number
+        let Ok(cutoff) = client
+            .get_block_number()
+            .await
+            .context("failed to get cutoff block")
+            .inspect_err(|e| error!(?e)) else {
+            return;
+        };
+
+        // cut off stream at cutoff block
+        let mut stream = stream.filter_map(move |item| {
+            if item.block_number.unwrap() > cutoff {
+                Some(item)
+            } else {
+                None
+            }
+        });
+
+        // get logs up to cutoff
+        let Ok(old_logs) = client
+            .get_logs(&event_filter.clone().select(start_block..=cutoff))
+            .await
+            .context("failed to query old logs")
+            .inspect_err(|e| error!(?e)) else {
+            return;
+        };
+
+        for log in old_logs {
+            yield log;
+        }
+
+        while let Some(log) = stream.next().await {
+            yield log;
+        }
+    }
 }
 
 // --------------------------------------------------------------------------------------------------------------------------------------------------------
