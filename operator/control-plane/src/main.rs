@@ -126,6 +126,10 @@ async fn get_chain_id_from_rpc_url(url: String) -> Result<String> {
 }
 
 async fn run() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install default rustls crypto provider");
+
     let cli = Cli::parse();
 
     info!(?cli.profile);

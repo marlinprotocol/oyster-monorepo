@@ -1748,6 +1748,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "httpc-test",
+ "rustls 0.23.31",
  "serde",
  "serde_json",
  "shell-escape",
@@ -4170,6 +4171,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0ebcbd2f03de0fc1122ad9bb24b127a5a6cd51d72604a3f3c50ac459762b6cc"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
