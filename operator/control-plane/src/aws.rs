@@ -10,8 +10,8 @@ use aws_sdk_ec2::types::*;
 use aws_types::region::Region;
 use serde_json::Value;
 use ssh2::Session;
-use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::rand_core::OsRng;
+use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
@@ -582,7 +582,7 @@ impl Aws {
             // Calculate hash of new params
             let mut hasher = Sha256::new();
             hasher.update(init_params);
-            let new_hash = hex::encode(hasher.finalize());
+            let new_hash = alloy::hex::encode(hasher.finalize());
 
             // get old hash
             let (old_hash, _) = Self::ssh_exec(
