@@ -321,6 +321,8 @@ async fn new_jobs(
     provider: Address,
 ) -> Result<impl StreamExt<Item = (B256, u64)> + '_> {
     let start_block = find_deployment_block(client, address).await?;
+    info!(start_block, "Start block");
+
     let event_filter = Filter::new()
         .address(address)
         .event_signature(vec![keccak256(
@@ -1268,11 +1270,14 @@ fn log_stream(
     mut start_block: u64,
 ) -> impl StreamExt<Item = Log> + '_ {
     stream! {
+        info!(start_block, "Sync start");
         // get close to the latest block
         // loop since end block can change quite a bit since the start of sync
         loop {
             // get latest end block
             let Ok(end_block) = client.get_block_number().await else {return;};
+
+            info!(start_block, end_block, "Sync progress");
 
             // get at least 1000 blocks close
             if start_block + 1000 > end_block {
@@ -1296,6 +1301,7 @@ fn log_stream(
                 }
             }
         }
+        info!("Sync end");
 
         // make a stream with everything else now
 
@@ -1357,7 +1363,10 @@ async fn find_deployment_block(client: &impl Provider, address: Address) -> Resu
     let mut deployment_block = 0;
     while low <= high {
         let mid = (low + high) / 2;
-        let code = client.get_code_at(address).await?;
+        let code = client
+            .get_code_at(address)
+            .block_id(alloy::eips::BlockId::Number(mid.into()))
+            .await?;
 
         if code.is_empty() {
             // no code, go forward
