@@ -317,6 +317,7 @@ async fn new_jobs(
     address: Address,
     provider: Address,
 ) -> Result<impl StreamExt<Item = (B256, bool)> + '_> {
+    let start_block = find_deployment_block(client, address).await?;
     let event_filter = Filter::new()
         .address(address)
         .event_signature(vec![keccak256(
@@ -324,7 +325,8 @@ async fn new_jobs(
         )])
         .topic3(provider.into_word());
 
-    let stream = log_stream(client, event_filter, 0).map(|item| (item.topics()[1], item.removed));
+    let stream =
+        log_stream(client, event_filter, start_block).map(|item| (item.topics()[1], item.removed));
 
     Ok(stream)
 }
@@ -1342,6 +1344,28 @@ fn log_stream(
             yield log;
         }
     }
+}
+
+async fn find_deployment_block(client: &impl Provider, address: Address) -> Result<u64> {
+    let mut low = 0;
+    let mut high = client.get_block_number().await?;
+
+    let mut deployment_block = 0;
+    while low <= high {
+        let mid = (low + high) / 2;
+        let code = client.get_code_at(address).await?;
+
+        if code.is_empty() {
+            // no code, go forward
+            low = mid + 1;
+        } else {
+            // yes code, store and go backward
+            deployment_block = mid;
+            high = mid - 1;
+        }
+    }
+
+    Ok(deployment_block)
 }
 
 // --------------------------------------------------------------------------------------------------------------------------------------------------------
