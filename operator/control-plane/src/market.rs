@@ -129,12 +129,13 @@ pub trait LogsProvider {
     fn new_jobs<'a>(
         &'a self,
         client: &'a impl Provider,
-    ) -> impl Future<Output = Result<impl StreamExt<Item = (B256, bool)> + 'a>>;
+    ) -> impl Future<Output = Result<impl StreamExt<Item = (B256, u64)> + 'a>>;
 
     fn job_logs<'a>(
         &'a self,
         client: &'a impl Provider,
         job: B256,
+        start_block: u64,
     ) -> impl Future<Output = Result<impl StreamExt<Item = Log> + Send + 'a>> + Send;
 }
 
@@ -148,7 +149,7 @@ impl LogsProvider for EthersProvider {
     async fn new_jobs<'a>(
         &'a self,
         client: &'a impl Provider,
-    ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
+    ) -> Result<impl StreamExt<Item = (B256, u64)> + 'a> {
         new_jobs(client, self.contract, self.provider).await
     }
 
@@ -156,8 +157,9 @@ impl LogsProvider for EthersProvider {
         &'a self,
         client: &'a impl Provider,
         job: B256,
+        start_block: u64,
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
-        Ok(job_logs(client, self.contract, job, 0))
+        Ok(job_logs(client, self.contract, job, start_block))
     }
 }
 
@@ -258,7 +260,7 @@ pub async fn run(
 }
 
 async fn run_once(
-    mut job_stream: impl StreamExt<Item = (B256, bool)> + Unpin,
+    mut job_stream: impl StreamExt<Item = (B256, u64)> + Unpin,
     infra_provider: impl InfraProvider + Send + Sync + Clone + 'static,
     logs_provider: impl LogsProvider + Send + Sync + Clone + 'static,
     url: String,
@@ -272,8 +274,8 @@ async fn run_once(
     job_registry: JobRegistry,
 ) -> usize {
     let mut job_count = 0;
-    while let Some((job, removed)) = job_stream.next().await {
-        info!(?job, removed, "New job");
+    while let Some((job, start_block)) = job_stream.next().await {
+        info!(?job, start_block, "New job");
 
         let job_registry = job_registry.clone();
 
@@ -301,6 +303,7 @@ async fn run_once(
                 address_whitelist,
                 address_blacklist,
                 job_registry,
+                start_block,
             )
             .instrument(info_span!(parent: None, "job", ?job)),
         );
@@ -316,7 +319,7 @@ async fn new_jobs(
     client: &impl Provider,
     address: Address,
     provider: Address,
-) -> Result<impl StreamExt<Item = (B256, bool)> + '_> {
+) -> Result<impl StreamExt<Item = (B256, u64)> + '_> {
     let start_block = find_deployment_block(client, address).await?;
     let event_filter = Filter::new()
         .address(address)
@@ -325,8 +328,8 @@ async fn new_jobs(
         )])
         .topic3(provider.into_word());
 
-    let stream =
-        log_stream(client, event_filter, start_block).map(|item| (item.topics()[1], item.removed));
+    let stream = log_stream(client, event_filter, start_block)
+        .map(move |item| (item.topics()[1], item.block_number.unwrap_or(start_block)));
 
     Ok(stream)
 }
@@ -344,6 +347,7 @@ async fn job_manager(
     address_whitelist: &[String],
     address_blacklist: &[String],
     job_registry: JobRegistry,
+    start_block: u64,
 ) {
     let mut backoff = 1;
     let job = job_id.id.clone();
@@ -380,7 +384,7 @@ async fn job_manager(
         let client = res.unwrap();
         let res = logs_provider
             // TODO: Bad unwrap?
-            .job_logs(&client, job.parse().unwrap())
+            .job_logs(&client, job.parse().unwrap(), start_block)
             .await;
         if let Err(err) = res {
             error!(?err, "Subscribe error");
