@@ -66,6 +66,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
                         app_state.tee_manager_contract_addr,
                         err,
                     );
+                    sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             };
@@ -115,6 +116,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
                     "Failed to subscribe to Jobs ({:?}) contract 'JobCreated' event logs: {:?}",
                     app_state.jobs_contract_addr, err,
                 );
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -136,6 +138,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
                     "Failed to subscribe to Jobs ({:?}) contract 'JobResponded' event logs: {:?}",
                     app_state.jobs_contract_addr, err,
                 );
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -159,6 +162,7 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
                     "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
                     app_state.tee_manager_contract_addr, err
                 );
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };

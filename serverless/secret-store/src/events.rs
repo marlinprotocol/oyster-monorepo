@@ -65,6 +65,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                         app_state.tee_manager_contract_addr,
                         err,
                     );
+                    sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             };
@@ -126,6 +127,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     "Failed to subscribe to SecretManager ({:?}) contract event logs: {:?}",
                     app_state.secret_manager_contract_addr, err,
                 );
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -149,6 +151,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
                     app_state.tee_manager_contract_addr, err
                 );
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
