@@ -12,6 +12,7 @@ use tokio::select;
 use tokio::time::sleep;
 use tokio_stream::{Stream, StreamExt};
 
+use crate::constants::RPC_ERROR_RETRY_DELAY_SECS;
 use crate::model::SecretManagerContract::acknowledgeStoreFailedCall;
 use crate::model::{
     AppState, SecretCreatedMetadata, SecretManagerContract, SecretMetadata, StoresTransaction,
@@ -37,7 +38,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     "Failed to connect to the common chain websocket provider: {}",
                     err
                 );
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
                 continue;
             }
         };
@@ -65,7 +66,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                         app_state.tee_manager_contract_addr,
                         err,
                     );
-                    sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
                     continue;
                 }
             };
@@ -127,7 +128,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     "Failed to subscribe to SecretManager ({:?}) contract event logs: {:?}",
                     app_state.secret_manager_contract_addr, err,
                 );
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
                 continue;
             }
         };
@@ -151,7 +152,7 @@ pub async fn events_listener(app_state: Data<AppState>, starting_block: u64) {
                     "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
                     app_state.tee_manager_contract_addr, err
                 );
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
                 continue;
             }
         };
