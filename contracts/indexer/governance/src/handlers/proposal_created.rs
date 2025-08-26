@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use crate::schema::proposals;
+use crate::ResultOutcome;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
 use alloy::primitives::Bytes;
@@ -71,9 +72,9 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
         "creating proposal"
     );
 
-    // Target SQL:
-    // INSERT INTO proposals (id, proposer, nonce, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time)
-    // VALUES ("<id>", "<proposer>", "<nonce>", "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>");
+    // target sql:
+    // INSERT INTO proposals (id, proposer, nonce, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time, outcome)
+    // VALUES ("<id>", "<proposer>", "<nonce>", "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>", "PENDING");
     diesel::insert_into(proposals::table)
         .values((
             proposals::id.eq(&proposal_id),
@@ -87,6 +88,7 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
             proposals::proposal_end_time.eq(&proposal_deadline),
             proposals::voting_start_time.eq(&vote_activation_timestamp),
             proposals::voting_end_time.eq(&vote_deadline),
+            proposals::outcome.eq(ResultOutcome::Pending),
         ))
         .execute(conn)
         .context("failed to create proposal")?;

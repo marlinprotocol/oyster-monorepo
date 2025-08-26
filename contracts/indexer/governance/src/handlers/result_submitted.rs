@@ -6,40 +6,15 @@ use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
-use diesel::deserialize::FromSqlRow;
-use diesel::expression::AsExpression;
-use diesel::pg::Pg;
-use diesel::serialize::{self, IsNull, Output, ToSql};
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
-use std::io::Write;
 use std::str::FromStr;
-use tracing::warn;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
+use crate::schema::proposals;
 use crate::schema::results;
-
-#[derive(Debug, AsExpression, FromSqlRow)]
-#[diesel(sql_type = crate::schema::sql_types::ResultOutcome)]
-pub enum ResultOutcome {
-    Pending,
-    Passed,
-    Failed,
-    Vetoed,
-}
-
-impl ToSql<crate::schema::sql_types::ResultOutcome, Pg> for ResultOutcome {
-    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        match *self {
-            ResultOutcome::Pending => out.write_all(b"PENDING")?,
-            ResultOutcome::Passed => out.write_all(b"PASSED")?,
-            ResultOutcome::Failed => out.write_all(b"FAILED")?,
-            ResultOutcome::Vetoed => out.write_all(b"VETOED")?,
-        }
-        Ok(IsNull::No)
-    }
-}
+use crate::ResultOutcome;
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
 pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> {
@@ -83,6 +58,29 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
         "creating result"
     );
 
+    // target sql:
+    // UPDATE proposals
+    // SET outcome = "<outcome>"
+    // WHERE id = "<proposal_id>"
+    // AND outcome = "PENDING";
+    let count = diesel::update(proposals::table)
+        .filter(proposals::id.eq(&proposal_id))
+        .filter(proposals::outcome.eq(ResultOutcome::Pending))
+        .set(proposals::outcome.eq(&outcome_enum))
+        .execute(conn)
+        .context("failed to update result")?;
+
+    if count != 1 {
+        // !!! should never happen
+        // we have failed to make any changes
+        // the only real condition is when the proposal does not exist or is no longer pending
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("could not find proposal"));
+    }
+
+    // target sql:
+    // INSERT INTO results (proposal_id, yes, no, abstain, no_with_veto, total_voting_power, tx_hash)
+    // VALUES ("<proposal_id>", "<yes>", "<no>", "<abstain>", "<no_with_veto>", "<total_voting_power>", "<tx_hash>");
     diesel::insert_into(results::table)
         .values((
             results::proposal_id.eq(&proposal_id),
@@ -91,7 +89,6 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
             results::abstain.eq(&abstain),
             results::no_with_veto.eq(&no_with_veto),
             results::total_voting_power.eq(&total_voting_power),
-            results::outcome.eq(&outcome_enum),
             results::tx_hash.eq(&tx_hash),
         ))
         .execute(conn)

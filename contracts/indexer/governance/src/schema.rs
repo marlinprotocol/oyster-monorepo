@@ -7,6 +7,9 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::ResultOutcome;
+
     proposals (id) {
         #[max_length = 66]
         id -> Bpchar,
@@ -22,13 +25,11 @@ diesel::table! {
         proposal_end_time -> Numeric,
         voting_start_time -> Numeric,
         voting_end_time -> Numeric,
+        outcome -> ResultOutcome,
     }
 }
 
 diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::ResultOutcome;
-
     results (proposal_id) {
         #[max_length = 66]
         proposal_id -> Bpchar,
@@ -37,7 +38,6 @@ diesel::table! {
         abstain -> Numeric,
         no_with_veto -> Numeric,
         total_voting_power -> Numeric,
-        outcome -> ResultOutcome,
         #[max_length = 66]
         tx_hash -> Bpchar,
     }

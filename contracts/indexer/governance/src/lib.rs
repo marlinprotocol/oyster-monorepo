@@ -9,9 +9,16 @@ use alloy::rpc::types::eth::Log;
 use alloy::rpc::types::Filter;
 use alloy::transports::http::reqwest::Url;
 use anyhow::{anyhow, Context, Result};
+use diesel::deserialize::FromSqlRow;
+use diesel::expression::AsExpression;
+use diesel::pg::Pg;
 use diesel::prelude::*;
-
+use diesel::serialize::{self, IsNull, Output, ToSql};
+use diesel::ExpressionMethods;
+use diesel::PgConnection;
+use diesel::RunQueryDsl;
 use handlers::handle_log;
+use std::io::Write;
 use tracing::{info, instrument};
 
 pub trait LogsProvider {
@@ -147,4 +154,25 @@ pub fn start_from(conn: &mut PgConnection, start: u64) -> Result<bool> {
         .execute(conn)
         .map(|x| x > 0)
         .context("failed to set start block")
+}
+
+#[derive(Debug, AsExpression, FromSqlRow)]
+#[diesel(sql_type = crate::schema::sql_types::ResultOutcome)]
+pub enum ResultOutcome {
+    Pending,
+    Passed,
+    Failed,
+    Vetoed,
+}
+
+impl ToSql<crate::schema::sql_types::ResultOutcome, Pg> for ResultOutcome {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        match *self {
+            ResultOutcome::Pending => out.write_all(b"PENDING")?,
+            ResultOutcome::Passed => out.write_all(b"PASSED")?,
+            ResultOutcome::Failed => out.write_all(b"FAILED")?,
+            ResultOutcome::Vetoed => out.write_all(b"VETOED")?,
+        }
+        Ok(IsNull::No)
+    }
 }
