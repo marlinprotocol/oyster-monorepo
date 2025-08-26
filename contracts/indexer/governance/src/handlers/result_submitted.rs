@@ -55,7 +55,7 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
         ?no_with_veto,
         ?total_voting_power,
         ?outcome_enum,
-        "creating result"
+        "submitting result"
     );
 
     // target sql:
@@ -94,7 +94,7 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
         .execute(conn)
         .context("failed to insert result")?;
 
-    info!(?proposal_id, ?tx_hash, ?outcome_enum, "result created");
+    info!(?proposal_id, ?tx_hash, ?outcome_enum, "result submitted");
 
     Ok(())
 }

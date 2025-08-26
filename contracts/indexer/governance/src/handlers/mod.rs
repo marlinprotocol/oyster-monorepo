@@ -14,6 +14,9 @@ use proposal_created::handle_proposal_created;
 mod result_submitted;
 use result_submitted::handle_result_submitted;
 
+mod proposal_executed;
+use proposal_executed::handle_proposal_executed;
+
 // proposal logs
 static PROPOSAL_CREATED: [u8; 32] = event!(
     "ProposalCreated(bytes32,address,uint256,address[],uint256[],bytes[],string,string,(uint256,uint256,uint256,uint256))"
@@ -66,6 +69,8 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
         handle_proposal_created(conn, log)
     } else if log_type == RESULT_SUBMITTED {
         handle_result_submitted(conn, log)
+    } else if log_type == PROPOSAL_EXECUTED {
+        handle_proposal_executed(conn, log)
     } else if log_type == UPGRADED
         || log_type == INITIALIZED
         || log_type == TOKEN_LOCK_AMOUNT_SET
