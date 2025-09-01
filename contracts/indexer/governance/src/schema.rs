@@ -7,6 +7,14 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    deposit_token (token_address) {
+        #[max_length = 42]
+        token_address -> Bpchar,
+        amount -> Numeric,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ResultOutcome;
 
@@ -62,6 +70,7 @@ diesel::joinable!(results -> proposals (proposal_id));
 diesel::joinable!(votes -> proposals (proposal_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    deposit_token,
     proposals,
     results,
     sync,

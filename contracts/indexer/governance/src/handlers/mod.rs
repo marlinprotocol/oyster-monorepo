@@ -20,6 +20,9 @@ use proposal_executed::handle_proposal_executed;
 mod vote_submitted;
 use vote_submitted::handle_vote_submitted;
 
+mod token_lock_amount_set;
+use token_lock_amount_set::handle_token_lock_amount_set;
+
 // proposal logs
 static PROPOSAL_CREATED: [u8; 32] = event!(
     "ProposalCreated(bytes32,address,uint256,address[],uint256[],bytes[],string,string,(uint256,uint256,uint256,uint256))"
@@ -38,10 +41,12 @@ static VOTE_SUBMITTED: [u8; 32] = event!("VoteSubmitted(bytes32,uint256,address,
 static RESULT_SUBMITTED: [u8; 32] =
     event!("ResultSubmitted(bytes32,(uint256,uint256,uint256,uint256,uint256),uint8)");
 
+// token logs
+static TOKEN_LOCK_AMOUNT_SET: [u8; 32] = event!("TokenLockAmountSet(address,uint256)");
+
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
 static INITIALIZED: [u8; 32] = event!("Initialized(uint8)");
-static TOKEN_LOCK_AMOUNT_SET: [u8; 32] = event!("TokenLockAmountSet(address,uint256)");
 static NETWORK_CONFIG_SET: [u8; 32] = event!("NetworkConfigSet(uint256,address,string[])");
 static ROLE_GRANTED: [u8; 32] = event!("RoleGranted(bytes32,address,address)");
 static TREASURY_SET: [u8; 32] = event!("TreasurySet(address)");
@@ -76,9 +81,10 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
         handle_proposal_executed(conn, log)
     } else if log_type == VOTE_SUBMITTED {
         handle_vote_submitted(conn, log)
+    } else if log_type == TOKEN_LOCK_AMOUNT_SET {
+        handle_token_lock_amount_set(conn, log)
     } else if log_type == UPGRADED
         || log_type == INITIALIZED
-        || log_type == TOKEN_LOCK_AMOUNT_SET
         || log_type == NETWORK_CONFIG_SET
         || log_type == ROLE_GRANTED
         || log_type == TREASURY_SET

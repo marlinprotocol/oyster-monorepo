@@ -1,0 +1,1 @@
+DROP TABLE deposit_token;
