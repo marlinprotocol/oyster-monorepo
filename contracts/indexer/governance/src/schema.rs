@@ -55,7 +55,6 @@ diesel::table! {
         proposal_id -> Bpchar,
         #[max_length = 42]
         voter -> Bpchar,
-        vote -> Numeric,
     }
 }
 
