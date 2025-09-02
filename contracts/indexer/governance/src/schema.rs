@@ -63,6 +63,8 @@ diesel::table! {
         proposal_id -> Bpchar,
         #[max_length = 42]
         voter -> Bpchar,
+        #[max_length = 66]
+        tx_hash -> Bpchar,
     }
 }
 
