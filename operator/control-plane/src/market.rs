@@ -11,120 +11,20 @@ use alloy::rpc::types::eth::{Filter, Log};
 use alloy::sol_types::SolValue;
 use alloy::transports::ws::{WebSocketConfig, WsConnect};
 use anyhow::{Context, Result};
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::fs;
 use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 use tracing::{error, info, info_span, Instrument};
 
-// IMPORTANT: do not import SystemTime, use a SystemContext
-
-// Trait to encapsulate behaviour that should be simulated in tests
-trait SystemContext {
-    fn now_timestamp(&self) -> Duration;
-}
-
-struct RealSystemContext {}
-
-impl SystemContext for RealSystemContext {
-    fn now_timestamp(&self) -> Duration {
-        use std::time::SystemTime;
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-    }
-}
+use crate::utils::{
+    GBRateCard, InfraProvider, JobEvent, JobId, JobResult, JobState, RealSystemContext,
+    RegionalRates, SystemContext,
+};
 
 // Basic architecture:
 // One future listening to new jobs
 // Each job has its own future managing its lifetime
-
-// Identify jobs not only by the id, but also by the operator, contract and the chain
-// This is needed to cleanly support multiple operators/contracts/chains at the infra level
-#[derive(Clone)]
-pub struct JobId {
-    pub id: String,
-    pub operator: String,
-    pub contract: String,
-    pub chain: String,
-}
-
-pub trait InfraProvider {
-    fn spin_up(
-        &mut self,
-        job: &JobId,
-        instance_type: &str,
-        family: &str,
-        region: &str,
-        req_mem: i64,
-        req_vcpu: i32,
-        bandwidth: u64,
-        image_url: &str,
-        debug: bool,
-        init_params: &[u8],
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    fn spin_down(&mut self, job: &JobId, region: &str) -> impl Future<Output = Result<()>> + Send;
-
-    fn get_job_ip(&self, job: &JobId, region: &str) -> impl Future<Output = Result<String>> + Send;
-
-    fn check_enclave_running(
-        &mut self,
-        job: &JobId,
-        region: &str,
-    ) -> impl Future<Output = Result<bool>> + Send;
-}
-
-impl<'a, T> InfraProvider for &'a mut T
-where
-    T: InfraProvider + Send + Sync,
-{
-    async fn spin_up(
-        &mut self,
-        job: &JobId,
-        instance_type: &str,
-        family: &str,
-        region: &str,
-        req_mem: i64,
-        req_vcpu: i32,
-        bandwidth: u64,
-        image_url: &str,
-        debug: bool,
-        init_params: &[u8],
-    ) -> Result<()> {
-        (**self)
-            .spin_up(
-                job,
-                instance_type,
-                family,
-                region,
-                req_mem,
-                req_vcpu,
-                bandwidth,
-                image_url,
-                debug,
-                init_params,
-            )
-            .await
-    }
-
-    async fn spin_down(&mut self, job: &JobId, region: &str) -> Result<()> {
-        (**self).spin_down(job, region).await
-    }
-
-    async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
-        (**self).get_job_ip(job, region).await
-    }
-
-    async fn check_enclave_running(&mut self, job: &JobId, region: &str) -> Result<bool> {
-        (**self).check_enclave_running(job, region).await
-    }
-}
-
 pub trait LogsProvider {
     fn new_jobs<'a>(
         &'a self,
@@ -159,28 +59,6 @@ impl LogsProvider for EthersProvider {
     ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
         job_logs(client, self.contract, job).await
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct RateCard {
-    pub instance: String,
-    pub min_rate: U256,
-    pub cpu: u32,
-    pub memory: u32,
-    pub arch: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct RegionalRates {
-    pub region: String,
-    pub rate_cards: Vec<RateCard>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct GBRateCard {
-    pub region: String,
-    pub region_code: String,
-    pub rate: U256,
 }
 
 pub async fn run(
@@ -438,233 +316,16 @@ async fn job_manager(
     }
 }
 
-fn whitelist_blacklist_check(
-    log: Log,
-    address_whitelist: &[String],
-    address_blacklist: &[String],
-) -> bool {
-    // check whitelist
-    if !address_whitelist.is_empty() {
-        info!("Checking address whitelist...");
-        if address_whitelist
-            .iter()
-            .any(|s| s == &log.topics()[2].encode_hex_with_prefix())
-        {
-            info!("ADDRESS ALLOWED!");
-        } else {
-            info!("ADDRESS NOT ALLOWED!");
-            return false;
-        }
-    }
-
-    // check blacklist
-    if !address_blacklist.is_empty() {
-        info!("Checking address blacklist...");
-        if address_blacklist
-            .iter()
-            .any(|s| s == &log.topics()[2].encode_hex_with_prefix())
-        {
-            info!("ADDRESS NOT ALLOWED!");
-            return false;
-        } else {
-            info!("ADDRESS ALLOWED!");
-        }
-    }
-
-    true
+trait EthersMarket {
+    fn parse_log(&mut self, log: Option<Log>) -> Result<JobEvent, JobResult>;
 }
 
-struct JobState<'a> {
-    // NOTE: not sure if dyn is a good idea, revisit later
-    context: &'a (dyn SystemContext + Send + Sync),
-
-    job_id: JobId,
-    launch_delay: u64,
-    allowed_regions: &'a [String],
-
-    balance: U256,
-    last_settled: Duration,
-    rate: U256,
-    original_rate: U256,
-    family: String,
-    min_rate: U256,
-    bandwidth: u64,
-    eif_url: String,
-    instance_type: String,
-    region: String,
-    req_vcpus: i32,
-    req_mem: i64,
-    debug: bool,
-    init_params: Box<[u8]>,
-
-    // whether instance should exist or not
-    infra_state: bool,
-    // how long to wait for infra change
-    infra_change_time: Instant,
-    // whether to schedule change
-    infra_change_scheduled: bool,
-}
-
-impl<'a> JobState<'a> {
-    fn new(
-        context: &'a (dyn SystemContext + Send + Sync),
-        job_id: JobId,
-        launch_delay: u64,
-        allowed_regions: &'a [String],
-    ) -> JobState<'a> {
-        // solvency metrics
-        // default of 60s
-        JobState {
-            context,
-            job_id,
-            launch_delay,
-            allowed_regions,
-            balance: U256::from(360),
-            last_settled: context.now_timestamp(),
-            rate: U256::from(1),
-            original_rate: U256::from(1),
-            // salmon is the default for jobs (usually old) without any family specified
-            family: "salmon".to_owned(),
-            min_rate: U256::MAX,
-            bandwidth: 0,
-            eif_url: String::new(),
-            instance_type: "c6a.xlarge".to_string(),
-            region: "ap-south-1".to_string(),
-            req_vcpus: 2,
-            req_mem: 4096,
-            debug: false,
-            init_params: Box::new([0; 0]),
-            infra_state: false,
-            infra_change_time: Instant::now(),
-            infra_change_scheduled: false,
-        }
-    }
-
-    fn insolvency_duration(&self) -> Duration {
-        let now_ts = self.context.now_timestamp();
-
-        if self.rate == U256::ZERO {
-            Duration::from_secs(0)
-        } else {
-            // solvent for balance / rate seconds from last_settled with 300s as margin
-            Duration::from_secs(
-                (self.balance * U256::from(10).pow(U256::from(12)) / self.rate)
-                    .saturating_to::<u64>()
-                    .saturating_sub(300),
-            )
-            .saturating_sub(now_ts.saturating_sub(self.last_settled))
-        }
-    }
-
-    async fn heartbeat_check(&mut self, mut infra_provider: impl InfraProvider) {
-        let Ok(is_enclave_running) = infra_provider
-            .check_enclave_running(&self.job_id, &self.region)
-            .await
-            .inspect_err(|err| error!(?err, "Failed to retrieve enclave state"))
-        else {
-            return;
-        };
-
-        if is_enclave_running {
-            return;
-        }
-
-        info!("Enclave not running, scheduling new launch");
-        self.schedule_launch(0);
-    }
-
-    fn handle_insolvency(&mut self) {
-        info!("INSOLVENCY");
-        self.schedule_termination(0);
-    }
-
-    fn schedule_launch(&mut self, delay: u64) {
-        self.infra_change_scheduled = true;
-        self.infra_change_time = Instant::now()
-            .checked_add(Duration::from_secs(delay))
-            .unwrap();
-        self.infra_state = true;
-        info!("Instance launch scheduled");
-    }
-
-    fn schedule_termination(&mut self, delay: u64) {
-        self.infra_change_scheduled = true;
-        self.infra_change_time = Instant::now()
-            .checked_add(Duration::from_secs(delay))
-            .unwrap();
-        self.infra_state = false;
-        info!("Instance termination scheduled");
-    }
-
-    // exists to implement rescheduling of infra changes on errors
-    async fn change_infra(&mut self, infra_provider: impl InfraProvider) -> bool {
-        let res = self.change_infra_impl(infra_provider).await;
-        if res {
-            // successful
-            self.infra_change_scheduled = false;
-        } else {
-            // failed, reschedule with small delay
-            self.infra_change_time = Instant::now() + Duration::from_secs(2);
-        }
-
-        res
-    }
-
-    // on errors, return false, will be rescheduled after a short delay
-    async fn change_infra_impl(&mut self, mut infra_provider: impl InfraProvider) -> bool {
-        if self.infra_state {
-            // launch mode
-            let res = infra_provider
-                .spin_up(
-                    &self.job_id,
-                    self.instance_type.as_str(),
-                    self.family.as_str(),
-                    &self.region,
-                    self.req_mem,
-                    self.req_vcpus,
-                    self.bandwidth,
-                    &self.eif_url,
-                    self.debug,
-                    &self.init_params,
-                )
-                .await;
-            if let Err(err) = res {
-                error!(?err, "Instance launch failed");
-                return false;
-            }
-
-            true
-        } else {
-            // terminate mode
-            let res = infra_provider.spin_down(&self.job_id, &self.region).await;
-            if let Err(err) = res {
-                error!(?err, "Failed to terminate instance");
-                return false;
-            }
-
-            true
-        }
-    }
-
-    // return
-    // JobResult::Success on successful processing of a log
-    // JobResult::Done on successful processing of a log which ends a job
-    // JobResult::Retry on recoverable errors, usually networking
-    // JobResult::Failed on unrecoverable errors
-    // JobResult::Internal on internal errors, usually bugs
-    fn process_log(
-        &mut self,
-        log: Option<Log>,
-        rates: &[RegionalRates],
-        gb_rates: &[GBRateCard],
-        address_whitelist: &[String],
-        address_blacklist: &[String],
-    ) -> JobResult {
+impl EthersMarket for JobState<'_> {
+    fn parse_log(&mut self, log: Option<Log>) -> Result<JobEvent, JobResult> {
         let Some(log) = log else {
             // error in the stream, can retry with new conn
-            return JobResult::Retry;
+            return Err(JobResult::Retry);
         };
-        info!(topic = ?log.topics()[0], data = ?log.data(), "New log");
 
         // events
         #[allow(non_snake_case)]
@@ -687,176 +348,42 @@ impl<'a> JobState<'a> {
         #[allow(non_snake_case)]
         let METADATA_UPDATED = keccak256("JobMetadataUpdated(bytes32,string)");
 
-        // NOTE: jobs should be killed fully if any individual event would kill it
-        // regardless of future events
-        // helps preserve consistency on restarts where events are procesed all at once
-        // e.g. do not spin up if job goes below min_rate and then goes above min_rate
-
         if log.topics()[0] == JOB_OPENED {
             // decode
-            let Ok((metadata, _rate, _balance, timestamp)) =
+            let Ok((metadata, rate, balance, timestamp)) =
                 <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)
                     .inspect_err(|err| error!(?err, data = ?log.data(), "OPENED: Decode failure"))
             else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                metadata,
-                rate = _rate.to_string(),
-                balance = _balance.to_string(),
-                timestamp = timestamp.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "OPENED",
-            );
-
-            // update solvency metrics
-            self.balance = _balance;
-            self.rate = _rate;
-            self.original_rate = _rate;
-            self.last_settled = Duration::from_secs(timestamp.saturating_to::<u64>());
-
-            let Ok(v) = serde_json::from_str::<Value>(&metadata)
-                .inspect_err(|err| error!(?err, "Error reading metadata"))
-            else {
-                return JobResult::Failed;
-            };
-
-            let Some(t) = v["instance"].as_str() else {
-                error!("Instance type not set");
-                return JobResult::Failed;
-            };
-            self.instance_type = t.to_string();
-            info!(self.instance_type, "Instance type set");
-
-            let Some(t) = v["region"].as_str() else {
-                error!("Job region not set");
-                return JobResult::Failed;
-            };
-            self.region = t.to_string();
-            info!(self.region, "Job region set");
-
-            if !self.allowed_regions.contains(&self.region) {
-                error!(self.region, "Region not suppported, exiting job");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["memory"].as_i64() else {
-                error!("Memory not set");
-                return JobResult::Failed;
-            };
-            self.req_mem = t;
-            info!(self.req_mem, "Required memory");
-
-            let Some(t) = v["vcpu"].as_i64() else {
-                error!("vcpu not set");
-                return JobResult::Failed;
-            };
-            self.req_vcpus = t.try_into().unwrap_or(i32::MAX);
-            info!(self.req_vcpus, "Required vcpu");
-
-            let Some(url) = v["url"].as_str() else {
-                error!("EIF url not found! Exiting job");
-                return JobResult::Failed;
-            };
-            self.eif_url = url.to_string();
-
-            // we leave the default family unchanged if not found for backward compatibility
-            v["family"]
-                .as_str()
-                .inspect(|f| self.family = (*f).to_owned());
-
-            // we leave the default debug mode unchanged if not found for backward compatibility
-            v["debug"].as_bool().inspect(|f| self.debug = *f);
-
-            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
-            else {
-                error!("failed to decode init params");
-                return JobResult::Failed;
-            };
-            self.init_params = init_params.into_boxed_slice();
-
-            // blacklist whitelist check
-            let allowed =
-                whitelist_blacklist_check(log.clone(), address_whitelist, address_blacklist);
-            if !allowed {
-                // blacklisted or not whitelisted address
-                return JobResult::Done;
-            }
-
-            let mut supported = false;
-            for entry in rates {
-                if entry.region == self.region {
-                    for card in &entry.rate_cards {
-                        if card.instance == self.instance_type {
-                            self.min_rate = card.min_rate;
-                            supported = true;
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
-
-            if !supported {
-                error!(self.instance_type, "Instance type not supported",);
-                return JobResult::Failed;
-            }
-
-            info!(
-                self.instance_type,
-                rate = self.min_rate.to_string(),
-                "MIN RATE",
-            );
-
-            // launch only if rate is more than min
-            if self.rate >= self.min_rate {
-                for entry in gb_rates {
-                    if entry.region_code == self.region {
-                        let gb_cost = entry.rate;
-                        let bandwidth_rate = self.rate - self.min_rate;
-
-                        self.bandwidth =
-                            (bandwidth_rate.saturating_mul(U256::from(1024 * 1024 * 8)) / gb_cost)
-                                .saturating_to::<u64>();
-                        break;
-                    }
-                }
-                self.schedule_launch(self.launch_delay);
-                JobResult::Success
-            } else {
-                JobResult::Done
-            }
+            return Ok(JobEvent::Opened {
+                job_id: log.topics()[1].encode_hex(),
+                owner: log.topics()[2].encode_hex_with_prefix(),
+                provider: log.topics()[3].encode_hex_with_prefix(),
+                metadata: metadata,
+                rate: rate,
+                balance: balance,
+                timestamp: timestamp,
+            });
         } else if log.topics()[0] == JOB_SETTLED {
             // decode
             let Ok((amount, timestamp)) =
                 <(U256, U256)>::abi_decode_sequence(&log.data().data, true)
                     .inspect_err(|err| error!(?err, data = ?log.data(), "SETTLED: Decode failure"))
             else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "SETTLED",
-            );
-            // update solvency metrics
-            self.balance -= amount;
-            self.last_settled = Duration::from_secs(timestamp.saturating_to::<u64>());
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "SETTLED",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::Settled {
+                job_id: log.topics()[1].encode_hex(),
+                amount: amount,
+                settled_until_ms: timestamp,
+            });
         } else if log.topics()[0] == JOB_CLOSED {
-            return JobResult::Done;
+            return Ok(JobEvent::Closed {
+                job_id: log.topics()[1].encode_hex(),
+            });
         } else if log.topics()[0] == JOB_DEPOSITED {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
@@ -864,27 +391,14 @@ impl<'a> JobState<'a> {
             let Ok(amount) = U256::abi_decode(&log.data().data, true)
                 .inspect_err(|err| error!(?err, data = ?log.data(), "DEPOSITED: Decode failure"))
             else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "DEPOSITED",
-            );
-            // update solvency metrics
-            self.balance += amount;
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "DEPOSITED",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::Deposited {
+                job_id: log.topics()[1].encode_hex(),
+                from: log.topics()[2].encode_hex(),
+                amount: amount,
+            });
         } else if log.topics()[0] == JOB_WITHDREW {
             // decode
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
@@ -892,189 +406,60 @@ impl<'a> JobState<'a> {
             let Ok(amount) = U256::abi_decode(&log.data().data, true)
                 .inspect_err(|err| error!(?err, data = ?log.data(), "WITHDREW: Decode failure"))
             else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "WITHDREW",
-            );
-            // update solvency metrics
-            self.balance -= amount;
-            info!(
-                amount = amount.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "WITHDREW",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::Withdrew {
+                job_id: log.topics()[1].encode_hex(),
+                to: log.topics()[2].encode_hex(),
+                amount: amount,
+            });
         } else if log.topics()[0] == JOB_REVISE_RATE_INITIATED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
                 |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_INTIATED: Decode failure"),
             ) else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                self.original_rate = self.original_rate.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_INTIATED",
-            );
-            self.original_rate = self.rate;
-            self.rate = new_rate;
-            if self.rate < self.min_rate {
-                info!("Revised job rate below min rate, shut down");
-                return JobResult::Done;
-            }
-            info!(
-                self.original_rate = self.original_rate.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_INTIATED",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::ReviseRateInitiated {
+                job_id: log.topics()[1].encode_hex(),
+                new_rate: new_rate,
+            });
         } else if log.topics()[0] == JOB_REVISE_RATE_CANCELLED {
-            info!(
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_CANCELLED",
-            );
-            self.rate = self.original_rate;
-            info!(
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_CANCELLED",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::ReviseRateCancelled {
+                job_id: log.topics()[1].encode_hex(),
+            });
         } else if log.topics()[0] == JOB_REVISE_RATE_FINALIZED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(new_rate) = U256::abi_decode(&log.data().data, true).inspect_err(
                 |err| error!(?err, data = ?log.data(), "JOB_REVISE_RATE_FINALIZED: Decode failure"),
             ) else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(
-                self.original_rate = self.original_rate.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_FINALIZED",
-            );
-            if self.rate != new_rate {
-                error!("Something went wrong, finalized rate not same as initiated rate");
-                return JobResult::Internal;
-            }
-            self.original_rate = new_rate;
-            info!(
-                self.original_rate = self.original_rate.to_string(),
-                rate = self.rate.to_string(),
-                balance = self.balance.to_string(),
-                last_settled = self.last_settled.as_secs(),
-                "JOB_REVISE_RATE_FINALIZED",
-            );
-
-            return JobResult::Success;
+            return Ok(JobEvent::ReviseRateFinalized {
+                job_id: log.topics()[1].encode_hex(),
+                new_rate: new_rate,
+            });
         } else if log.topics()[0] == METADATA_UPDATED {
             // IMPORTANT: Tuples have to be decoded using abi_decode_sequence
             // if this is changed in the future
             let Ok(metadata) = String::abi_decode(&log.data().data, true).inspect_err(
                 |err| error!(?err, data = ?log.data(), "METADATA_UPDATED: Decode failure"),
             ) else {
-                return JobResult::Internal;
+                return Err(JobResult::Internal);
             };
 
-            info!(metadata, "METADATA_UPDATED");
-
-            let Ok(v) = serde_json::from_str::<Value>(&metadata)
-                .inspect_err(|err| error!(?err, "Error reading metadata"))
-            else {
-                return JobResult::Failed;
-            };
-
-            let Some(t) = v["instance"].as_str() else {
-                error!("Instance type not set");
-                return JobResult::Failed;
-            };
-            if self.instance_type != t {
-                error!("Instance type change not allowed");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["region"].as_str() else {
-                error!("Job region not set");
-                return JobResult::Failed;
-            };
-            if self.region != t {
-                error!("Region change not allowed");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["memory"].as_i64() else {
-                error!("Memory not set");
-                return JobResult::Failed;
-            };
-            if self.req_mem != t {
-                error!("Memory change not allowed");
-                return JobResult::Failed;
-            }
-
-            let Some(t) = v["vcpu"].as_i64() else {
-                error!("vcpu not set");
-                return JobResult::Failed;
-            };
-            if self.req_vcpus != t.try_into().unwrap_or(2) {
-                error!("vcpu change not allowed");
-                return JobResult::Failed;
-            }
-
-            let family = v["family"].as_str();
-            if family.is_some() && self.family != family.unwrap() {
-                error!("Family change not allowed");
-                return JobResult::Failed;
-            }
-
-            let debug = v["debug"].as_bool().unwrap_or(false);
-            self.debug = debug;
-
-            let Some(url) = v["url"].as_str() else {
-                error!("EIF url not found! Exiting job");
-                return JobResult::Failed;
-            };
-
-            self.eif_url = url.to_string();
-
-            let Ok(init_params) = BASE64_STANDARD.decode(v["init_params"].as_str().unwrap_or(""))
-            else {
-                error!("failed to decode init params");
-                return JobResult::Failed;
-            };
-            self.init_params = init_params.into_boxed_slice();
-
-            // schedule change immediately if not already scheduled
-            if !self.infra_change_scheduled {
-                self.schedule_launch(0);
-            }
-
-            return JobResult::Success;
+            return Ok(JobEvent::MetadataUpdated {
+                job_id: log.topics()[1].encode_hex(),
+                metadata: metadata,
+            });
         } else {
             error!(topic = ?log.topics()[0], "Unknown event");
-            return JobResult::Failed;
+            return Err(JobResult::Failed);
         }
     }
 }
@@ -1145,20 +530,6 @@ impl JobRegistry {
     }
 }
 
-#[derive(PartialEq, Debug)]
-enum JobResult {
-    // success
-    Success,
-    // done, should still terminate instance, if any
-    Done,
-    // error, can retry with a new conn
-    Retry,
-    // error, should terminate instance, if any
-    Failed,
-    // error, likely internal bug, exit but do not terminate instance
-    Internal,
-}
-
 // manage the complete lifecycle of a job
 // returns true if "done"
 async fn job_manager_once(
@@ -1211,23 +582,25 @@ async fn job_manager_once(
 
             // keep processing logs till the processing is successful
             log = job_stream.next(), if job_result == JobResult::Success => {
-                use JobResult::*;
-                job_result = state.process_log(log, rates, gb_rates, address_whitelist, address_blacklist);
+                job_result = match state.parse_log(log) {
+                    Ok(event) => state.process_event(event, rates, gb_rates, address_whitelist, address_blacklist),
+                    Err(result) => result
+                };
                 match job_result {
                     // just proceed
-                    Success => {},
+                    JobResult::Success => {},
                     // terminate
-                    Done => {
+                    JobResult::Done => {
                         state.schedule_termination(0);
                     },
                     // break and eventually retry
-                    Retry => break 'event,
+                    JobResult::Retry => break 'event,
                     // terminate
-                    Failed => {
+                    JobResult::Failed => {
                         state.schedule_termination(0);
                     },
                     // break
-                    Internal => break 'event,
+                    JobResult::Internal => break 'event,
                 };
             }
 
@@ -1337,6 +710,7 @@ mod tests {
     use crate::test::{
         self, compute_address_word, compute_instance_id, Action, TestAws, TestAwsOutcome,
     };
+    use crate::utils::{whitelist_blacklist_check, RateCard};
 
     use super::{JobResult, SystemContext};
 
@@ -2268,8 +1642,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2288,8 +1662,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2308,8 +1682,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(!market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(!whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2328,8 +1702,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(!market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(!whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2348,8 +1722,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2371,8 +1745,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(!market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(!whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2394,8 +1768,8 @@ mod tests {
 
         // real owner of the job is compute_address_word("owner")
 
-        assert!(!market::whitelist_blacklist_check(
-            log.clone(),
+        assert!(!whitelist_blacklist_check(
+            log.clone().topics()[2].encode_hex_with_prefix(),
             &address_whitelist,
             &address_blacklist
         ));
@@ -2412,14 +1786,14 @@ mod tests {
             market::RegionalRates {
                 region: "ap-south-1".to_owned(),
                 rate_cards: vec![
-                    market::RateCard {
+                    RateCard {
                         instance: "c6a.48xlarge".to_owned(),
                         min_rate: U256::from_str_radix("2469600000000000000000", 10).unwrap(),
                         cpu: 192,
                         memory: 384,
                         arch: String::from("amd64")
                     },
-                    market::RateCard {
+                    RateCard {
                         instance: "m7g.xlarge".to_owned(),
                         min_rate: U256::from(150000000u64),
                         cpu: 4,

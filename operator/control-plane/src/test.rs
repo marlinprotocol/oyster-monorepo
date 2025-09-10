@@ -10,7 +10,8 @@ use anyhow::{anyhow, Result};
 use tokio::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
-use crate::market::{GBRateCard, InfraProvider, JobId, LogsProvider, RateCard, RegionalRates};
+use crate::market::LogsProvider;
+use crate::utils::{GBRateCard, InfraProvider, JobId, RateCard, RegionalRates};
 
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]

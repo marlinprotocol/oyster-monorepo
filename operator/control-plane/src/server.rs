@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::market::{GBRateCard, InfraProvider, JobId, RegionalRates};
+use crate::utils::{GBRateCard, InfraProvider, JobId, RegionalRates};
 
 enum Error {
     GetIPFail,
@@ -163,8 +163,8 @@ mod tests {
     use anyhow;
     use serde_json::json;
 
-    use crate::market::{GBRateCard, JobId, RateCard, RegionalRates};
     use crate::test::{InstanceMetadata, TestAws};
+    use crate::utils::{GBRateCard, JobId, RateCard, RegionalRates};
 
     #[tokio::test]
     async fn test_get_ip_happy_case() -> anyhow::Result<()> {
