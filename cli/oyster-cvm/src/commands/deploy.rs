@@ -11,11 +11,9 @@ use crate::{
 };
 
 use alloy::{
-    network::Ethereum,
     primitives::{Address, B256 as H256, U256, keccak256},
     providers::{Provider, WalletProvider},
     sol,
-    transports::http::Http,
 };
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -306,7 +304,7 @@ async fn create_new_oyster_job(
     provider_addr: Address,
     rate: U256,
     balance: U256,
-    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider + Clone,
+    provider: impl Provider + WalletProvider + Clone,
 ) -> Result<H256> {
     let market_address = OYSTER_MARKET_ADDRESS.parse::<Address>()?;
 
@@ -587,7 +585,7 @@ async fn calculate_total_cost(
 
 async fn get_operator_cp(
     provider_address: &str,
-    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider,
+    provider: impl Provider + WalletProvider,
 ) -> Result<String> {
     let market_address = Address::from_str(OYSTER_MARKET_ADDRESS)?;
     let provider_address = Address::from_str(provider_address)?;
@@ -596,7 +594,7 @@ async fn get_operator_cp(
     let market = OysterMarket::new(market_address, provider);
 
     // Call providers function to get CP URL
-    let cp_url = market.providers(provider_address).call().await?.cp;
+    let cp_url = market.providers(provider_address).call().await?;
 
     Ok(cp_url)
 }
