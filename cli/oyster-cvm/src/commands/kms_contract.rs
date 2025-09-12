@@ -155,7 +155,7 @@ async fn kms_contract_revoke(args: KmsActionArgs) -> Result<()> {
 
 async fn kms_contract_verify(args: KmsVerifyArgs) -> Result<()> {
     // get the provider
-    let provider = ProviderBuilder::new().with_recommended_fillers().on_http(
+    let provider = ProviderBuilder::new().connect_http(
         ARBITRUM_ONE_RPC_URL
             .parse()
             .context("Failed to parse RPC URL")?,
@@ -168,7 +168,7 @@ async fn kms_contract_verify(args: KmsVerifyArgs) -> Result<()> {
         .oysterKMSVerify(args.image_id.parse::<FixedBytes<32>>()?)
         .call()
         .await?;
-    if resp._0 {
+    if resp {
         info!("Image ID is verified");
     } else {
         info!("Image ID is not verified");
