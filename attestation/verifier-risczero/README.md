@@ -10,7 +10,7 @@ While it produces zero false positives, it does not aim to produce zero false ne
 
 Install the RiscZero tooling before proceeding further.
 
-Note: Requires CUDA by default. It is possible to disable CUDA by disabling the relevant feature in `host/Cargo.toml`, but the proof generation process could take hours on a CPU. 
+Note: Building requires CUDA by default. It is possible to disable CUDA by disabling default features using `--no-default-features`, but the proof generation process could take hours on a CPU. 
 
 ```bash
 cargo build --release
@@ -18,15 +18,19 @@ cargo build --release
 
 ### Reproducible builds
 
-Reproducible builds are enabled for the guest to produce a consistent GUEST_ID.
+Reproducible builds are NOT enabled by default for the guest. Set `RISC0_USE_DOCKER=1` while building as an env var to produce a consistent GUEST_ID.
 
-Expected GUEST_ID: 0x803390f9dccc071585d2f6b259f741e24c077cdb1a778fcff3e27d8ecb4a8ccb
+```bash
+RUSTFLAGS="-C target-cpu=native" RISC0_USE_DOCKER=1 cargo build --release
+```
+
+Expected GUEST_ID: 0x2bda5b8351181a4cfac4cab43439369ade055e546dd5af2026306985be64cad5
 
 ## Usage
 
 ```bash
 $ ./target/release/host --help
-GUEST: 0x803390f9dccc071585d2f6b259f741e24c077cdb1a778fcff3e27d8ecb4a8ccb
+GUEST: 0x2bda5b8351181a4cfac4cab43439369ade055e546dd5af2026306985be64cad5
 Usage: host --url <URL>
 
 Options:
@@ -54,12 +58,12 @@ The journal contains bytes in the following order:
 project_name
 ├── Cargo.toml
 ├── host
-│   ├── Cargo.toml                     <-- [Disable CUDA here]
+│   ├── Cargo.toml                     <-- [Feature to disable CUDA here]
 │   └── src
 │       └── main.rs                    <-- [Host code goes here]
 └── methods
     ├── Cargo.toml
-    ├── build.rs                       <-- [Reproducible guest builds stuff here]
+    ├── build.rs
     ├── guest
     │   ├── Cargo.toml
     │   └── src
