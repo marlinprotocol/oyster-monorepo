@@ -8,6 +8,7 @@ use diesel_migrations::EmbeddedMigrations;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 
+use oyster_indexer::constants::{set_contract_upgrade_block, set_usdc_address};
 use oyster_indexer::event_loop;
 use oyster_indexer::start_from;
 use oyster_indexer::AlloyProvider;
@@ -27,6 +28,10 @@ struct Args {
     #[arg(short, long)]
     contract: String,
 
+    /// USDC Token contract
+    #[arg(short, long)]
+    usdc_contract: String,
+
     /// Start block for log parsing
     #[arg(short, long)]
     start_block: u64,
@@ -34,6 +39,10 @@ struct Args {
     /// Size of block range for fetching logs
     #[arg(long, default_value = "2000")]
     range_size: u64,
+
+    /// Block number at which contract was upgraded to v2. If not provided, only v1 contract handling will be used.
+    #[arg(long)]
+    contract_upgrade_block: Option<u64>,
 }
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
@@ -44,6 +53,15 @@ fn run() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let mut conn = PgConnection::establish(&database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url));
+
+    // Set the USDC address from command line argument
+    let usdc_address = args.usdc_contract.parse()?;
+    set_usdc_address(usdc_address);
+
+    // Set the upgrade block if provided
+    if let Some(contract_upgrade_block) = args.contract_upgrade_block {
+        set_contract_upgrade_block(contract_upgrade_block);
+    }
 
     // apply pending migrations
     info!("Applying pending migrations");
