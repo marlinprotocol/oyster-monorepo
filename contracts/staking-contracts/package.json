@@ -1,0 +1,58 @@
+{
+  "name": "@marlinprotocol/contracts",
+  "version": "2.0.0",
+  "description": "Contracts pertaining to Marlin",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "npx hardhat test",
+    "benchmark": "npx hardhat test benchmarks/*.ts",
+    "solhint": "solhint -f table contracts/**/*.sol",
+    "compile": "npx hardhat compile",
+    "coverage": "npx hardhat coverage",
+    "clean": "npx hardhat clean && rm -rf coverage && rm -rf artifacts && npx hardhat typechain",
+    "prettify:contracts": "npx prettier --write contracts/**/*.sol",
+    "prettify:test": "npx prettier --write test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marlinprotocol/contracts.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/marlinprotocol/contracts/issues"
+  },
+  "homepage": "https://github.com/marlinprotocol/contracts",
+  "dependencies": {
+    "@openzeppelin/contracts": "4.9.2",
+    "@openzeppelin/contracts-upgradeable": "4.9.2"
+  },
+  "devDependencies": {
+    "@ethereum-waffle/mock-contract": "^3.4.4",
+    "@nomicfoundation/hardhat-chai-matchers": "^1.0.6",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.8",
+    "@nomicfoundation/hardhat-verify": "^1.1.1",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@nomiclabs/hardhat-etherscan": "^3.1.8",
+    "@openzeppelin/hardhat-upgrades": "^1.28.0",
+    "@openzeppelin/upgrades-core": "^1.42.1",
+    "@tenderly/hardhat-tenderly": "^2.5.2",
+    "@typechain/ethers-v5": "^11.0.0",
+    "@typechain/hardhat": "^7.0.0",
+    "@types/chai": "^4.3.5",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.3.1",
+    "chai": "^4.3.7",
+    "dotenv": "^16.3.0",
+    "ethereum-waffle": "^4.0.10",
+    "ethers": "^5.7.2",
+    "hardhat": "^2.22.0",
+    "hardhat-gas-reporter": "^1.0.9",
+    "hardhat-tracer": "^3.1.0",
+    "solidity-coverage": "^0.8.2",
+    "ts-node": "^10.9.1",
+    "typechain": "^8.2.0",
+    "typescript": "^5.1.3"
+  }
+}
