@@ -8,18 +8,26 @@ use alloy::transports::ws::WsConnect;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use sui_sdk::SuiClientBuilder;
+use tonic::transport::Channel;
 use tracing::Instrument;
 use tracing::{error, info, info_span};
 use tracing_subscriber::EnvFilter;
 
 use cp::aws;
 use cp::market;
+use cp::market_sui;
 use cp::server;
+use cp::utils;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 /// Control plane for Oyster
 struct Cli {
+    /// Sui network flag
+    #[clap(long, value_parser)]
+    sui_network: bool,
+
     /// AWS profile
     #[clap(long, value_parser)]
     profile: String,
@@ -56,6 +64,10 @@ struct Cli {
     #[clap(long, value_parser)]
     provider: String,
 
+    /// DB url
+    #[clap(long, value_parser, requires_if("true", "sui_network"))]
+    db_url: Option<String>,
+
     /// Blacklist location
     #[clap(long, value_parser, default_value = "")]
     blacklist: String,
@@ -88,25 +100,25 @@ async fn parse_file(filepath: String) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-async fn parse_compute_rates_file(filepath: String) -> Result<Vec<market::RegionalRates>> {
+async fn parse_compute_rates_file(filepath: String) -> Result<Vec<utils::RegionalRates>> {
     if filepath.is_empty() {
         return Ok(Vec::new());
     }
 
     let contents = fs::read_to_string(filepath).context("Error reading file")?;
-    let rates: Vec<market::RegionalRates> =
+    let rates: Vec<utils::RegionalRates> =
         serde_json::from_str(&contents).context("failed to parse rates file")?;
 
     Ok(rates)
 }
 
-async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRateCard>> {
+async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<utils::GBRateCard>> {
     if filepath.is_empty() {
         return Ok(Vec::new());
     }
 
     let contents = fs::read_to_string(filepath).context("Error reading file")?;
-    let rates: Vec<market::GBRateCard> =
+    let rates: Vec<utils::GBRateCard> =
         serde_json::from_str(&contents).context("failed to parse rates file")?;
 
     Ok(rates)
@@ -123,6 +135,23 @@ async fn get_chain_id_from_rpc_url(url: String) -> Result<String> {
         .context("failed to fetch chain id")?;
 
     Ok(chain_id.to_string())
+}
+
+async fn get_sui_chain_id_from_rpc_url(url: String) -> Result<String> {
+    // Build the client
+    let client = SuiClientBuilder::default()
+        .build(url)
+        .await
+        .context("failed to connect to the rpc url")?;
+
+    // Fetch the chain identifier
+    let chain_id = client
+        .read_api()
+        .get_chain_identifier()
+        .await
+        .context("failed to fetch chain id")?;
+
+    Ok(chain_id)
 }
 
 async fn run() -> Result<()> {
@@ -206,70 +235,122 @@ async fn run() -> Result<()> {
     // leak memory to get static references
     // will be cleaned up once program exits
     // alternative to OnceCell equivalents
-    let compute_rates: &'static [market::RegionalRates] =
+    let compute_rates: &'static [utils::RegionalRates] =
         Box::leak(compute_rates.into_boxed_slice());
-    let bandwidth_rates: &'static [market::GBRateCard] =
+    let bandwidth_rates: &'static [utils::GBRateCard] =
         Box::leak(bandwidth_rates.into_boxed_slice());
     let address_whitelist: &'static [String] = Box::leak(address_whitelist_vec.into_boxed_slice());
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
-    let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
-        .await
-        .context("Failed to fetch chain_id")?;
 
-    // Initialize job registry for terminated jobs
-    let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
+    if cli.sui_network {
+        let chain = get_sui_chain_id_from_rpc_url(cli.rpc.clone())
+            .await
+            .context("Failed to fetch chain_id")?;
 
-    // Start periodic job registry persistence task
-    let registry_clone = job_registry.clone();
-    tokio::spawn(async move {
-        registry_clone.run_periodic_save(10).await; // Save every 10 seconds
-    });
+        // Initialize job registry for terminated jobs
+        let job_registry = market_sui::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
 
-    let job_id = market::JobId {
-        id: B256::ZERO.encode_hex_with_prefix(),
-        operator: cli.provider.clone(),
-        contract: cli.contract.clone(),
-        chain,
-    };
+        // Start periodic job registry persistence task
+        let registry_clone = job_registry.clone();
+        tokio::spawn(async move {
+            registry_clone.run_periodic_save(10).await; // Save every 10 seconds
+        });
 
-    tokio::spawn(
-        server::serve(
-            aws.clone(),
+        let job_id = utils::JobId {
+            id: B256::ZERO.encode_hex_with_prefix(),
+            operator: cli.provider.clone(),
+            contract: cli.contract.clone(),
+            chain,
+        };
+
+        let endpoint = Channel::from_shared(cli.rpc).context("invalid rpc endpoint")?;
+
+        tokio::spawn(
+            server::serve(
+                aws.clone(),
+                regions,
+                compute_rates,
+                bandwidth_rates,
+                SocketAddr::from(([0, 0, 0, 0], cli.port)),
+                job_id.clone(),
+            )
+            .instrument(info_span!("server")),
+        );
+
+        market_sui::run(
+            aws,
+            endpoint,
+            cli.db_url.unwrap(),
             regions,
             compute_rates,
             bandwidth_rates,
-            SocketAddr::from(([0, 0, 0, 0], cli.port)),
-            job_id.clone(),
+            address_whitelist,
+            address_blacklist,
+            job_id,
+            job_registry,
         )
-        .instrument(info_span!("server")),
-    );
+        .instrument(info_span!("main"))
+        .await;
+    } else {
+        let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
+            .await
+            .context("Failed to fetch chain_id")?;
 
-    let ethers = market::EthersProvider {
-        contract: cli
-            .contract
-            .parse::<Address>()
-            .context("failed to parse contract address")?,
-        provider: cli
-            .provider
-            .parse::<Address>()
-            .context("failed to parse provider address")?,
-    };
+        // Initialize job registry for terminated jobs
+        let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
 
-    market::run(
-        aws,
-        ethers,
-        cli.rpc,
-        regions,
-        compute_rates,
-        bandwidth_rates,
-        address_whitelist,
-        address_blacklist,
-        job_id,
-        job_registry,
-    )
-    .instrument(info_span!("main"))
-    .await;
+        // Start periodic job registry persistence task
+        let registry_clone = job_registry.clone();
+        tokio::spawn(async move {
+            registry_clone.run_periodic_save(10).await; // Save every 10 seconds
+        });
+
+        let job_id = utils::JobId {
+            id: B256::ZERO.encode_hex_with_prefix(),
+            operator: cli.provider.clone(),
+            contract: cli.contract.clone(),
+            chain,
+        };
+
+        tokio::spawn(
+            server::serve(
+                aws.clone(),
+                regions,
+                compute_rates,
+                bandwidth_rates,
+                SocketAddr::from(([0, 0, 0, 0], cli.port)),
+                job_id.clone(),
+            )
+            .instrument(info_span!("server")),
+        );
+
+        let ethers = market::EthersProvider {
+            contract: cli
+                .contract
+                .parse::<Address>()
+                .context("failed to parse contract address")?,
+            provider: cli
+                .provider
+                .parse::<Address>()
+                .context("failed to parse provider address")?,
+        };
+
+        market::run(
+            aws,
+            ethers,
+            cli.rpc,
+            regions,
+            compute_rates,
+            bandwidth_rates,
+            address_whitelist,
+            address_blacklist,
+            job_id,
+            job_registry,
+        )
+        .instrument(info_span!("main"))
+        .await;
+    }
 
     Ok(())
 }

@@ -17,7 +17,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 use whoami::username;
 
-use crate::market::{InfraProvider, JobId};
+use crate::utils::{InfraProvider, JobId};
 
 #[derive(Clone)]
 pub struct Aws {
