@@ -27,11 +27,30 @@ diesel::table! {
 }
 
 diesel::table! {
+    rate_revisions (job_id, block) {
+        #[max_length = 66]
+        job_id -> Bpchar,
+        value -> Numeric,
+        block -> Int8,
+    }
+}
+
+diesel::table! {
     revise_rate_requests (id) {
         #[max_length = 66]
         id -> Bpchar,
         value -> Numeric,
         updates_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    settlement_history (id, block) {
+        #[max_length = 66]
+        id -> Bpchar,
+        amount -> Numeric,
+        timestamp -> Numeric,
+        block -> Int8,
     }
 }
 
@@ -54,13 +73,17 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(rate_revisions -> jobs (job_id));
 diesel::joinable!(revise_rate_requests -> jobs (id));
+diesel::joinable!(settlement_history -> jobs (id));
 diesel::joinable!(transactions -> jobs (job));
 
 diesel::allow_tables_to_appear_in_same_query!(
     jobs,
     providers,
+    rate_revisions,
     revise_rate_requests,
+    settlement_history,
     sync,
     transactions,
 );
