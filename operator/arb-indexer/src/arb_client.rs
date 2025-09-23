@@ -16,7 +16,9 @@ use sqlx::types::chrono::{DateTime, Utc};
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
+use crate::events::*;
 use crate::schema::JobEventRecord;
+use crate::SaturatingConvert;
 
 sol!(
     #[allow(missing_docs)]
@@ -25,6 +27,93 @@ sol!(
     MarketV1Contract,
     "./abi/MarketV1min.json"
 );
+
+impl FromEvent<MarketV1Contract::JobOpened> for JobOpened {
+    fn from_event(log: MarketV1Contract::JobOpened) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            owner: log.owner.encode_hex_with_prefix(),
+            provider: log.provider.encode_hex_with_prefix(),
+            metadata: log.metadata,
+            rate: log.rate,
+            balance: log.balance,
+            timestamp: log.timestamp.saturating_to(),
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobClosed> for JobClosed {
+    fn from_event(log: MarketV1Contract::JobClosed) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobDeposited> for JobDeposited {
+    fn from_event(log: MarketV1Contract::JobDeposited) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            from: log.from.encode_hex_with_prefix(),
+            amount: log.amount,
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobSettled> for JobSettled {
+    fn from_event(log: MarketV1Contract::JobSettled) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            amount: log.amount,
+            timestamp: log.timestamp.saturating_to(),
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobMetadataUpdated> for JobMetadataUpdated {
+    fn from_event(log: MarketV1Contract::JobMetadataUpdated) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            new_metadata: log.metadata,
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobWithdrew> for JobWithdrew {
+    fn from_event(log: MarketV1Contract::JobWithdrew) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            to: log.to.encode_hex_with_prefix(),
+            amount: log.amount,
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobReviseRateInitiated> for JobReviseRateInitiated {
+    fn from_event(log: MarketV1Contract::JobReviseRateInitiated) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            new_rate: log.newRate,
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobReviseRateCancelled> for JobReviseRateCancelled {
+    fn from_event(log: MarketV1Contract::JobReviseRateCancelled) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+        }
+    }
+}
+
+impl FromEvent<MarketV1Contract::JobReviseRateFinalized> for JobReviseRateFinalized {
+    fn from_event(log: MarketV1Contract::JobReviseRateFinalized) -> Self {
+        Self {
+            job_id: log.job.encode_hex_with_prefix(),
+            new_rate: log.newRate,
+        }
+    }
+}
 
 pub trait ArbHandler {
     async fn latest_block_with_retries(&mut self) -> Result<u64>;
@@ -124,7 +213,11 @@ impl ArbHandler for RpcProvider {
                     }
                     let job_id = decoded.job.encode_hex_with_prefix();
                     active_jobs.insert(job_id.clone());
-                    (job_id, "JobOpened", serde_json::to_value(decoded.data)?)
+                    (
+                        job_id,
+                        "JobOpened",
+                        serde_json::to_value(JobOpened::from_event(decoded.data))?,
+                    )
                 }
                 Some(&MarketV1Contract::JobClosed::SIGNATURE_HASH) => {
                     let job_id = log.topics()[1].encode_hex_with_prefix();
@@ -133,7 +226,11 @@ impl ArbHandler for RpcProvider {
                     }
                     let decoded = MarketV1Contract::JobClosed::decode_log(&log.inner)?;
                     active_jobs.remove(&job_id);
-                    (job_id, "JobClosed", serde_json::to_value(decoded.data)?)
+                    (
+                        job_id,
+                        "JobClosed",
+                        serde_json::to_value(JobClosed::from_event(decoded.data))?,
+                    )
                 }
                 Some(&MarketV1Contract::JobSettled::SIGNATURE_HASH) => {
                     let job_id = log.topics()[1].encode_hex_with_prefix();
@@ -141,7 +238,11 @@ impl ArbHandler for RpcProvider {
                         continue;
                     }
                     let decoded = MarketV1Contract::JobSettled::decode_log(&log.inner)?;
-                    (job_id, "JobSettled", serde_json::to_value(decoded.data)?)
+                    (
+                        job_id,
+                        "JobSettled",
+                        serde_json::to_value(JobSettled::from_event(decoded.data))?,
+                    )
                 }
                 Some(&MarketV1Contract::JobDeposited::SIGNATURE_HASH) => {
                     let job_id = log.topics()[1].encode_hex_with_prefix();
@@ -149,7 +250,11 @@ impl ArbHandler for RpcProvider {
                         continue;
                     }
                     let decoded = MarketV1Contract::JobDeposited::decode_log(&log.inner)?;
-                    (job_id, "JobDeposited", serde_json::to_value(decoded.data)?)
+                    (
+                        job_id,
+                        "JobDeposited",
+                        serde_json::to_value(JobDeposited::from_event(decoded.data))?,
+                    )
                 }
                 Some(&MarketV1Contract::JobWithdrew::SIGNATURE_HASH) => {
                     let job_id = log.topics()[1].encode_hex_with_prefix();
@@ -157,7 +262,11 @@ impl ArbHandler for RpcProvider {
                         continue;
                     }
                     let decoded = MarketV1Contract::JobWithdrew::decode_log(&log.inner)?;
-                    (job_id, "JobWithdrew", serde_json::to_value(decoded.data)?)
+                    (
+                        job_id,
+                        "JobWithdrew",
+                        serde_json::to_value(JobWithdrew::from_event(decoded.data))?,
+                    )
                 }
                 Some(&MarketV1Contract::JobReviseRateInitiated::SIGNATURE_HASH) => {
                     let job_id = log.topics()[1].encode_hex_with_prefix();
@@ -168,7 +277,7 @@ impl ArbHandler for RpcProvider {
                     (
                         job_id,
                         "JobReviseRateInitiated",
-                        serde_json::to_value(decoded.data)?,
+                        serde_json::to_value(JobReviseRateInitiated::from_event(decoded.data))?,
                     )
                 }
                 Some(&MarketV1Contract::JobReviseRateCancelled::SIGNATURE_HASH) => {
@@ -180,7 +289,7 @@ impl ArbHandler for RpcProvider {
                     (
                         job_id,
                         "JobReviseRateCancelled",
-                        serde_json::to_value(decoded.data)?,
+                        serde_json::to_value(JobReviseRateCancelled::from_event(decoded.data))?,
                     )
                 }
                 Some(&MarketV1Contract::JobReviseRateFinalized::SIGNATURE_HASH) => {
@@ -192,7 +301,7 @@ impl ArbHandler for RpcProvider {
                     (
                         job_id,
                         "JobReviseRateFinalized",
-                        serde_json::to_value(decoded.data)?,
+                        serde_json::to_value(JobReviseRateFinalized::from_event(decoded.data))?,
                     )
                 }
                 Some(&MarketV1Contract::JobMetadataUpdated::SIGNATURE_HASH) => {
@@ -204,7 +313,7 @@ impl ArbHandler for RpcProvider {
                     (
                         job_id,
                         "JobMetadataUpdated",
-                        serde_json::to_value(decoded.data)?,
+                        serde_json::to_value(JobMetadataUpdated::from_event(decoded.data))?,
                     )
                 }
                 _ => continue, // unknown event, skip
@@ -212,18 +321,18 @@ impl ArbHandler for RpcProvider {
 
             let block_timestamp: DateTime<Utc> = log
                 .block_timestamp
-                .map(|ts| DateTime::from_timestamp_secs(ts as i64))
+                .map(|ts| DateTime::from_timestamp_secs(ts.saturating_to()))
                 .flatten()
                 .unwrap_or_else(|| Utc::now());
 
             // Build JobEventRecord
             let record = JobEventRecord {
-                block_id: block_number as i64,
+                block_id: block_number.saturating_to(),
                 tx_hash: log
                     .transaction_hash
                     .unwrap_or_default()
                     .encode_hex_with_prefix(),
-                event_seq: seq as i64,
+                event_seq: seq.saturating_to(),
                 block_timestamp: block_timestamp,
                 sender: log.address().encode_hex_with_prefix(),
                 event_name: event_name.to_string(),

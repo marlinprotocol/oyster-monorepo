@@ -9,6 +9,7 @@ use tracing::{debug, info, instrument};
 
 use crate::arb_client::ArbHandler;
 use crate::repository::Repository;
+use crate::SaturatingConvert;
 
 #[instrument(level = "info", skip_all, parent = None)]
 pub async fn run(repo: Repository, mut rpc_client: impl ArbHandler, range_size: u64) -> Result<()> {
@@ -38,7 +39,7 @@ pub async fn run(repo: Repository, mut rpc_client: impl ArbHandler, range_size: 
             .latest_block_with_retries()
             .await
             .context("Failed to fetch latest block from the rpc")?;
-        let latest_block_i64 = latest_block as i64;
+        let latest_block_i64: i64 = latest_block.saturating_to();
 
         info!(block = latest_block, "latest block");
 
@@ -57,7 +58,7 @@ pub async fn run(repo: Repository, mut rpc_client: impl ArbHandler, range_size: 
         }
 
         // start from the next block to what has already been processed
-        let start_block = (last_processed_block_id + 1) as u64;
+        let start_block: u64 = (last_processed_block_id + 1).saturating_to();
         // cap block range using range_size
         // might need some babysitting during initial sync
         let end_block = min(start_block + range_size - 1, latest_block);
@@ -88,7 +89,9 @@ pub async fn run(repo: Repository, mut rpc_client: impl ArbHandler, range_size: 
                 let mut tx = repo.pool.begin().await?;
                 let inserted_batch = repo.insert_events(&mut tx, records.clone()).await?;
                 debug!(block_number, inserted_batch, "batch of block logs inserted");
-                let updated = repo.update_state(&mut tx, *block_number as i64).await?;
+                let updated = repo
+                    .update_state(&mut tx, (*block_number).saturating_to())
+                    .await?;
                 debug!("is_last_set: {}", updated == 1);
                 tx.commit().await?;
                 Ok::<(), anyhow::Error>(())
@@ -97,6 +100,6 @@ pub async fn run(repo: Repository, mut rpc_client: impl ArbHandler, range_size: 
             .context("Failed to batch insert logs for a block in the DB")?;
         }
 
-        last_processed_block_id = end_block as i64;
+        last_processed_block_id = end_block.saturating_to();
     }
 }

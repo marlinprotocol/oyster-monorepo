@@ -1,4 +1,5 @@
 mod arb_client;
+mod events;
 mod indexer;
 mod repository;
 mod schema;
@@ -15,6 +16,44 @@ use tracing_subscriber::EnvFilter;
 
 use crate::arb_client::RpcProvider;
 use crate::repository::Repository;
+
+// Define generic trait for safe integer conversions
+pub trait SaturatingConvert<T> {
+    fn saturating_to(self) -> T;
+}
+
+// usize -> i64
+impl SaturatingConvert<i64> for usize {
+    fn saturating_to(self) -> i64 {
+        if self > i64::MAX as usize {
+            i64::MAX
+        } else {
+            self as i64
+        }
+    }
+}
+
+// u64 -> i64
+impl SaturatingConvert<i64> for u64 {
+    fn saturating_to(self) -> i64 {
+        if self > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            self as i64
+        }
+    }
+}
+
+// i64 -> u64
+impl SaturatingConvert<u64> for i64 {
+    fn saturating_to(self) -> u64 {
+        if self < 0 {
+            0
+        } else {
+            self as u64
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

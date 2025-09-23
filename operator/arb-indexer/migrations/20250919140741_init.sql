@@ -4,7 +4,7 @@
 CREATE TABLE job_events (
     id BIGSERIAL PRIMARY KEY,
     block_id BIGINT NOT NULL, -- Sui: checkpoint_sequence_number; Eth/Arbitrum: block_number; Solana: slot_index
-    tx_hash VARCHAR(88) NOT NULL,
+    tx_hash VARCHAR(100) NOT NULL,
     event_seq BIGINT NOT NULL,
     block_timestamp TIMESTAMPTZ NOT NULL,
     sender VARCHAR(66) NOT NULL,
