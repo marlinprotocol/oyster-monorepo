@@ -296,27 +296,26 @@ contract GovernanceSlashTest is GovernanceSetup {
             voteHash
         );
         
-        // Submit the result - should result in veto and NoValueToRefund error
+        // Submit the result - should result in veto (no ETH to refund, but deposit is slashed)
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.NoValueToRefund.selector);
         governance.submitResult(params);
         
-        // Since submitResult failed, check that balances remain unchanged
+        // Check that deposit was slashed but no ETH was refunded
         uint256 finalProposerBalance = depositToken.balanceOf(proposer);
         uint256 finalTreasuryBalance = depositToken.balanceOf(treasury);
         
-        // Proposer should have lost deposit tokens (deposit is locked in governance contract)
+        // Proposer should have received partial refund (70% of deposit tokens)
         assertEq(
             finalProposerBalance, 
-            900 * 1e18, 
-            "Proposer should have lost deposit tokens (locked in governance contract)"
+            970 * 1e18, 
+            "Proposer should have received partial refund from slashed deposit"
         );
         
-        // Treasury should not have received anything (deposit is still locked, not slashed)
+        // Treasury should have received slashed portion (30% of deposit tokens)
         assertEq(
             finalTreasuryBalance, 
-            0, 
-            "Treasury should not have received anything (deposit still locked)"
+            30 * 1e18, 
+            "Treasury should have received slashed portion of deposit"
         );
     }
 

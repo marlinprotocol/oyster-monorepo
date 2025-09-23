@@ -630,14 +630,21 @@ contract Governance is
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
         VoteOutcome proposalVoteOutcome = proposals[_proposalId].voteOutcome;
 
+        require(proposalVoteOutcome == VoteOutcome.Pending, NotRefundableProposal());
         require(
             block.timestamp >= proposalTimeInfo.proposalDeadlineTimestamp && proposalVoteOutcome == VoteOutcome.Pending,
             NotRefundableProposal()
         );
 
+        // Set voteOutcome to Failed to prevent multiple refunds
+        proposals[_proposalId].voteOutcome = VoteOutcome.Failed;
+
         uint256 valueSum = _getValueSum(_proposalId);
         require(valueSum > 0, NoValueToRefund());
         _refundValue(_proposalId, valueSum);
+        
+        // Clear the values array to prevent multiple refunds
+        delete proposals[_proposalId].proposalInfo.values;
 
         emit ExpiredProposalRefunded(_proposalId);
     }
