@@ -1,3 +1,4 @@
+mod constants;
 mod handlers;
 mod schema;
 
@@ -17,6 +18,7 @@ use tracing::{info, instrument};
 pub trait LogsProvider {
     fn latest_block(&mut self) -> Result<u64>;
     fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>>;
+    fn block_timestamp(&self, block_number: u64) -> Result<u64>;
 }
 
 #[derive(Clone)]
@@ -52,12 +54,27 @@ impl LogsProvider for AlloyProvider {
                 ),
         )?)
     }
+
+    fn block_timestamp(&self, block_number: u64) -> Result<u64> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(rt
+            .block_on(
+                alloy::providers::ProviderBuilder::new()
+                    .on_http(self.url.clone())
+                    .get_block_by_number(block_number.into(), false),
+            )?
+            .map(|b| b.header.timestamp)
+            .unwrap_or(0)
+            .into())
+    }
 }
 
 #[instrument(level = "info", skip_all, parent = None)]
 pub fn event_loop(
     conn: &mut PgConnection,
-    mut provider: impl LogsProvider,
+    provider: &mut impl LogsProvider,
     range_size: u64,
 ) -> Result<()> {
     // fetch last updated block from the db
@@ -110,9 +127,9 @@ pub fn event_loop(
         // NOTE: diesel transactions are synchronous, async is not allowed inside
         // might be limiting for certain things like making rpc queries while processing logs
         // using a temporary tokio runtime is a possibility
-        conn.transaction(move |conn| {
+        conn.transaction(|conn| {
             for log in logs {
-                handle_log(conn, log).context("failed to handle log")?;
+                handle_log(conn, log, provider).context("failed to handle log")?;
             }
             diesel::update(schema::sync::table)
                 .set(schema::sync::block.eq(end_block as i64))

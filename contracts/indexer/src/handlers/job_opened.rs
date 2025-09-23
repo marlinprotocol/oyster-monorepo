@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use crate::constants::RATE_SCALING_FACTOR;
 use crate::schema::jobs;
 use crate::schema::rate_revisions;
 use crate::schema::transactions;
@@ -28,12 +29,21 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     let (metadata, rate, balance, timestamp) =
         // parse rate and balance as B256 since the integer representation is not used
         <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
-    let (rate, balance, timestamp) = (
+    let (rate, balance, timestamp, timestamp_epoch) = (
         BigDecimal::from_str(&rate.to_string())?,
         BigDecimal::from_str(&balance.to_string())?,
         std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
+        BigDecimal::from_str(&timestamp.to_string())?,
     );
+
+    let mut run_duration = BigDecimal::from(0);
+    let mut end_epoch = timestamp_epoch.clone();
+
+    if &rate != &BigDecimal::from(0) {
+        run_duration = ((&balance * RATE_SCALING_FACTOR) / &rate).round(0);
+        end_epoch = &timestamp_epoch + &run_duration;
+    }
 
     let block = log
         .block_number
@@ -55,13 +65,16 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?timestamp_epoch,
         ?block,
+        run_duration = run_duration.to_string(),
+        end_epoch = end_epoch.to_string(),
         "creating job"
     );
 
     // target sql:
-    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed)
-    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false);
+    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed, end_epoch)
+    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false, "<end_epoch>");
     diesel::insert_into(jobs::table)
         .values((
             jobs::id.eq(&id),
@@ -73,6 +86,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::last_settled.eq(&timestamp),
             jobs::created.eq(&timestamp),
             jobs::is_closed.eq(false),
+            jobs::end_epoch.eq(&end_epoch),
         ))
         .execute(conn)
         .context("failed to create job")?;
@@ -93,13 +107,14 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .context("failed to create deposit")?;
 
     // target sql:
-    // INSERT INTO rate_revisions (job_id, value, block)
-    // VALUES ("<id>", "<rate>", "<block>");
+    // INSERT INTO rate_revisions (job_id, value, block, timestamp)
+    // VALUES ("<id>", "<rate>", "<block>", "<timestamp>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
             rate_revisions::value.eq(&rate),
             rate_revisions::block.eq(block as i64),
+            rate_revisions::timestamp.eq(&timestamp_epoch),
         ))
         .execute(conn)
         .context("failed to insert rate revision")?;
@@ -113,6 +128,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?balance,
         ?timestamp,
         ?block,
+        run_duration = run_duration.to_string(),
+        end_epoch = end_epoch.to_string(),
         "created job"
     );
 
@@ -127,7 +144,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::test_utils::TestDb;
 
     use super::*;
 
@@ -178,8 +196,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
@@ -195,6 +214,7 @@ mod tests {
                 now,
                 now,
                 false,
+                BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR)),
             ))
         );
 
@@ -222,6 +242,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             ))
         );
 
@@ -253,6 +274,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -284,6 +308,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             ))
         );
 
@@ -339,8 +364,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
@@ -360,6 +386,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -371,6 +398,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -411,12 +439,109 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             )])
         );
 
         Ok(())
     }
 
+    #[test]
+    fn test_create_new_job_when_rate_is_0() -> Result<()> {
+        // setup
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
+        let log = Log {
+            block_hash: Some(keccak256!("some block").into()),
+            block_number: Some(42),
+            block_timestamp: None,
+            log_index: Some(69),
+            transaction_hash: Some(keccak256!("some tx").into()),
+            transaction_index: Some(420),
+            removed: false,
+            inner: alloy::primitives::Log {
+                address: contract,
+                data: LogData::new(
+                    vec![
+                        event!("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)")
+                            .into(),
+                        "0x3333333333333333333333333333333333333333333333333333333333333333"
+                            .parse()?,
+                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+                            .parse::<Address>()?
+                            .into_word(),
+                        "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+                            .parse::<Address>()?
+                            .into_word(),
+                    ],
+                    ("some metadata", 0, 2, timestamp)
+                        .abi_encode_sequence()
+                        .into(),
+                )
+                .unwrap(),
+            },
+        };
+
+        let provider = MockProvider::new(timestamp);
+        // use handle_log instead of concrete handler to test dispatch
+        handle_log(conn, log, &provider)?;
+
+        // checks
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table.select(jobs::all_columns).first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                "some metadata".to_owned(),
+                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+                BigDecimal::from(0),
+                BigDecimal::from(2),
+                now,
+                now,
+                false,
+                BigDecimal::from(timestamp),
+            ))
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                42i64,
+                69i64,
+                keccak256!("some tx").encode_hex_with_prefix(),
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(2),
+                true,
+            ))
+        );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(0),
+                42i64,
+                BigDecimal::from(timestamp)
+            ))
+        );
+
+        Ok(())
+    }
     #[test]
     fn test_create_new_job_when_it_already_exists() -> Result<()> {
         // setup
@@ -442,6 +567,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -461,6 +589,7 @@ mod tests {
                 jobs::last_settled.eq(&now),
                 jobs::created.eq(&now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR))),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -485,6 +614,7 @@ mod tests {
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 rate_revisions::value.eq(BigDecimal::from(1)),
                 rate_revisions::block.eq(42i64),
+                rate_revisions::timestamp.eq(BigDecimal::from(timestamp)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -506,6 +636,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -517,6 +648,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -545,6 +677,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp)
             )])
         );
 
@@ -580,8 +713,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(
@@ -605,6 +739,7 @@ mod tests {
                     now,
                     now,
                     false,
+                    BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -616,6 +751,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -644,6 +780,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(1),
                 42i64,
+                BigDecimal::from(timestamp),
             )])
         );
 

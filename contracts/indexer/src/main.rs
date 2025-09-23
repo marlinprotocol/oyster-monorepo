@@ -52,13 +52,13 @@ fn run() -> Result<()> {
         .expect("failed to apply migrations");
     info!("Applied pending migrations");
 
-    let provider = AlloyProvider {
+    let mut provider = AlloyProvider {
         url: args.rpc.parse()?,
         contract: args.contract.parse()?,
     };
     let is_start_set = start_from(&mut conn, args.start_block)?;
     debug!("is_start_set: {}", is_start_set);
-    event_loop(&mut conn, provider, args.range_size)
+    event_loop(&mut conn, &mut provider, args.range_size)
 }
 
 fn main() -> Result<()> {

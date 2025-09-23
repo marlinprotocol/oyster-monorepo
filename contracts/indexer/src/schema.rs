@@ -14,6 +14,7 @@ diesel::table! {
         last_settled -> Timestamp,
         created -> Timestamp,
         is_closed -> Bool,
+        end_epoch -> Numeric,
     }
 }
 
@@ -32,6 +33,7 @@ diesel::table! {
         job_id -> Bpchar,
         value -> Numeric,
         block -> Int8,
+        timestamp -> Numeric,
     }
 }
 

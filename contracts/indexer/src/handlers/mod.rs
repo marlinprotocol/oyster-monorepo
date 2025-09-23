@@ -6,6 +6,8 @@ use ethp::event;
 use tracing::warn;
 use tracing::{info, instrument};
 
+use crate::LogsProvider;
+
 mod provider_added;
 use provider_added::handle_provider_added;
 
@@ -89,7 +91,7 @@ static INITIALIZED: [u8; 32] = event!("Initialized(uint8)");
     parent = None,
     fields(block = log.block_number, idx = log.log_index, tx = ?log.transaction_hash)
 )]
-pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvider) -> Result<()> {
     info!(?log, "processing");
 
     let log_type = log
@@ -107,7 +109,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
     } else if log_type == JOB_SETTLED {
         handle_job_settled(conn, log)
     } else if log_type == JOB_CLOSED {
-        handle_job_closed(conn, log)
+        handle_job_closed(conn, log, provider)
     } else if log_type == JOB_DEPOSITED {
         handle_job_deposited(conn, log)
     } else if log_type == JOB_WITHDREW {
@@ -117,7 +119,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
     } else if log_type == JOB_REVISE_RATE_CANCELLED {
         handle_job_revise_rate_cancelled(conn, log)
     } else if log_type == JOB_REVISE_RATE_FINALIZED {
-        handle_job_revise_rate_finalized(conn, log)
+        handle_job_revise_rate_finalized(conn, log, provider)
     } else if log_type == JOB_METADATA_UPDATED {
         handle_job_metadata_updated(conn, log)
     } else if log_type == LOCK_CREATED {
@@ -139,4 +141,10 @@ pub fn handle_log(conn: &mut PgConnection, log: Log) -> Result<()> {
 }
 
 #[cfg(test)]
-mod test_db;
+mod test_utils {
+    mod test_db;
+    mod test_provider;
+
+    pub use test_db::TestDb;
+    pub use test_provider::MockProvider;
+}

@@ -7,7 +7,8 @@ CREATE TABLE jobs (
   balance NUMERIC NOT NULL,
   last_settled TIMESTAMP NOT NULL,
   created TIMESTAMP NOT NULL,
-  is_closed BOOLEAN NOT NULL
+  is_closed BOOLEAN NOT NULL,
+  end_epoch NUMERIC NOT NULL
 );
 
 CREATE INDEX jobs_owner_idx ON jobs (owner);
