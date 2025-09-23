@@ -40,4 +40,5 @@ interface IGovernanceErrors {
     error ZeroProposalTimeConfig();
     error InvalidMinQuorumThreshold();
     error InvalidAddress();
+    error InvalidDelegatorChainId();
 }

@@ -61,7 +61,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         vm.warp(block.timestamp + voteActivationDelay + 1);
 
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Verify vote was recorded
         (address voter, bytes memory storedVote) = governance.getVoteInfo(proposalId, 0);
@@ -82,15 +82,15 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // First voter
         vm.prank(voter1);
-        governance.vote(proposalId, vote1);
+        governance.vote(proposalId, vote1, address(0), 0);
 
         // Second voter
         vm.prank(voter2);
-        governance.vote(proposalId, vote2);
+        governance.vote(proposalId, vote2, address(0), 0);
 
         // Third voter
         vm.prank(voter3);
-        governance.vote(proposalId, vote3);
+        governance.vote(proposalId, vote3, address(0), 0);
 
         // Verify all votes were recorded
         (address voter1_, bytes memory storedVote1) = governance.getVoteInfo(proposalId, 0);
@@ -116,14 +116,14 @@ contract GovernanceVoteTest is GovernanceSetup {
         
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.ProposalDoesNotExist.selector);
-        governance.vote(nonExistentProposalId, voteEncrypted);
+        governance.vote(nonExistentProposalId, voteEncrypted, address(0), 0);
     }
 
     function test_vote_revert_when_VotingNotActive_BeforeActivation() public {
         // Try to vote before voting period starts
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
     }
 
     function test_vote_revert_when_VotingNotActive_AfterDeadline() public {
@@ -132,7 +132,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
     }
 
     function test_vote_revert_when_VotingNotActive_ExactlyAtDeadline() public {
@@ -141,7 +141,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
     }
 
     // ========== Vote Hash Tests ==========
@@ -153,7 +153,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         bytes32 initialVoteHash = governance.getVoteHash(proposalId);
 
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         bytes32 updatedVoteHash = governance.getVoteHash(proposalId);
         
@@ -169,12 +169,12 @@ contract GovernanceVoteTest is GovernanceSetup {
         bytes memory vote2 = abi.encode("vote2");
 
         vm.prank(voter1);
-        governance.vote(proposalId, vote1);
+        governance.vote(proposalId, vote1, address(0), 0);
 
         bytes32 voteHash1 = governance.getVoteHash(proposalId);
 
         vm.prank(voter2);
-        governance.vote(proposalId, vote2);
+        governance.vote(proposalId, vote2, address(0), 0);
 
         bytes32 voteHash2 = governance.getVoteHash(proposalId);
 
@@ -189,7 +189,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         vm.warp(block.timestamp + voteActivationDelay);
 
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Should succeed
         assertEq(governance.getVoteCount(proposalId), 1, "Vote should succeed at activation timestamp");
@@ -200,7 +200,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         vm.warp(block.timestamp + voteActivationDelay + voteDuration - 1);
 
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Should succeed
         assertEq(governance.getVoteCount(proposalId), 1, "Vote should succeed just before deadline");
@@ -215,7 +215,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         bytes memory emptyVote = "";
 
         vm.prank(voter1);
-        governance.vote(proposalId, emptyVote);
+        governance.vote(proposalId, emptyVote, address(0), 0);
 
         // Should succeed with empty vote data
         (address voter, bytes memory storedVote) = governance.getVoteInfo(proposalId, 0);
@@ -234,7 +234,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         }
 
         vm.prank(voter1);
-        governance.vote(proposalId, largeVote);
+        governance.vote(proposalId, largeVote, address(0), 0);
 
         // Should succeed with large vote data
         (address voter, bytes memory storedVote) = governance.getVoteInfo(proposalId, 0);
@@ -254,15 +254,15 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // First vote should be at index 0
         vm.prank(voter1);
-        governance.vote(proposalId, vote1);
+        governance.vote(proposalId, vote1, address(0), 0);
 
         // Second vote should be at index 1
         vm.prank(voter2);
-        governance.vote(proposalId, vote2);
+        governance.vote(proposalId, vote2, address(0), 0);
 
         // Third vote should be at index 2
         vm.prank(voter3);
-        governance.vote(proposalId, vote3);
+        governance.vote(proposalId, vote3, address(0), 0);
 
         // Verify vote indices
         (address voter1_, bytes memory storedVote1) = governance.getVoteInfo(proposalId, 0);
@@ -290,7 +290,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // Vote should succeed even when paused (vote function doesn't have whenNotPaused modifier)
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Verify vote was recorded
         assertEq(governance.getVoteCount(proposalId), 1, "Vote should succeed even when paused");
@@ -304,7 +304,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         assertFalse(governance.paused(), "Contract should not be paused initially");
 
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Should succeed when not paused
         assertEq(governance.getVoteCount(proposalId), 1, "Vote should succeed when not paused");
@@ -322,13 +322,13 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // Same voter votes multiple times
         vm.prank(voter1);
-        governance.vote(proposalId, vote1);
+        governance.vote(proposalId, vote1, address(0), 0);
 
         vm.prank(voter1);
-        governance.vote(proposalId, vote2);
+        governance.vote(proposalId, vote2, address(0), 0);
 
         vm.prank(voter1);
-        governance.vote(proposalId, vote3);
+        governance.vote(proposalId, vote3, address(0), 0);
 
         // All votes should be recorded
         assertEq(governance.getVoteCount(proposalId), 3, "All votes should be counted");
@@ -361,13 +361,13 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // First vote
         vm.prank(voter1);
-        governance.vote(proposalId, vote1);
+        governance.vote(proposalId, vote1, address(0), 0);
 
         bytes32 hashAfterVote1 = governance.getVoteHash(proposalId);
 
         // Second vote
         vm.prank(voter2);
-        governance.vote(proposalId, vote2);
+        governance.vote(proposalId, vote2, address(0), 0);
 
         bytes32 hashAfterVote2 = governance.getVoteHash(proposalId);
 
@@ -385,7 +385,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
         // This should work (zero address can vote)
         vm.prank(address(0));
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Verify vote was recorded
         (address voter, bytes memory storedVote) = governance.getVoteInfo(proposalId, 0);
@@ -401,7 +401,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         address contractVoter = address(0x1234567890123456789012345678901234567890);
 
         vm.prank(contractVoter);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Verify vote was recorded
         (address voter, bytes memory storedVote) = governance.getVoteInfo(proposalId, 0);
@@ -415,18 +415,18 @@ contract GovernanceVoteTest is GovernanceSetup {
         // Create a proposal and immediately try to vote (should fail)
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Fast forward to just before activation (should still fail)
         vm.warp(block.timestamp + voteActivationDelay - 1);
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Fast forward to activation time (should succeed)
         vm.warp(block.timestamp + 1);
         vm.prank(voter1);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
 
         // Verify vote was recorded
         assertEq(governance.getVoteCount(proposalId), 1, "Vote should succeed at activation time");
@@ -435,6 +435,6 @@ contract GovernanceVoteTest is GovernanceSetup {
         vm.warp(block.timestamp + voteDuration);
         vm.prank(voter2);
         vm.expectRevert(IGovernanceErrors.VotingNotActive.selector);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
     }
 }

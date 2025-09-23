@@ -20,7 +20,7 @@ contract GovernanceInteractionVoter is GovernanceInteraction {
         // Submit Tx
         uint256 voterPrivateKey = vm.envUint(voter);
         vm.startBroadcast(voterPrivateKey);
-        governance.vote(proposalId, voteEncrypted);
+        governance.vote(proposalId, voteEncrypted, address(0), 0);
         vm.stopBroadcast();
 
         console.log("Vote submitted successfully!\n");

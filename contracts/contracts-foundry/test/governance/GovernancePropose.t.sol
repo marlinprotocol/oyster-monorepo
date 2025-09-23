@@ -696,10 +696,10 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         // Add some votes
         vm.prank(voter1);
-        governance.vote(proposalId, "encrypted_vote_1");
+        governance.vote(proposalId, "encrypted_vote_1", address(0), 0);
         
         vm.prank(voter2);
-        governance.vote(proposalId, "encrypted_vote_2");
+        governance.vote(proposalId, "encrypted_vote_2", address(0), 0);
 
         // Test getAllVoteInfo
         (
@@ -773,7 +773,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         // Add a vote
         vm.prank(voter1);
-        governance.vote(proposalId, "encrypted_vote_1");
+        governance.vote(proposalId, "encrypted_vote_1", address(0), 0);
 
         // Test getVoteInfo
         (address voteVoter, bytes memory voteEncrypted) = governance.getVoteInfo(proposalId, 0);

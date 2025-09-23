@@ -56,9 +56,11 @@ interface IGovernanceEvents is IGovernanceTypes {
 
     event VoteSubmitted(
         bytes32 indexed proposalId,
-        uint256 indexed voteIdx,
         address indexed voter,
-        bytes voteEncryped
+        // address indexed delegator,
+        uint256 delegatorChainId,
+        uint256 voteIdx,
+        bytes voteEncrypted
     );
 
     event ResultSubmitted(

@@ -254,22 +254,18 @@ contract Governance is
 
     function _setProposalTimingConfig(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration) internal {
         require(_voteActivationDelay + _voteDuration + _proposalDuration > 0, ZeroProposalTimeConfig());
-
-        if(_voteActivationDelay > 0) {
-            _setVoteActivationDelay(_voteActivationDelay);
-        }
-        if(_voteDuration > 0) {
-            _setVoteDuration(_voteDuration);
-        }
-        if(_proposalDuration > 0) {
-            _setProposalDuration(_proposalDuration);
-        }
-
+        _updateTimingConfigs(_voteActivationDelay, _voteDuration, _proposalDuration);
         require(
             proposalTimingConfig.voteActivationDelay + proposalTimingConfig.voteDuration
                 < proposalTimingConfig.proposalDuration,
             InvalidProposalTimeConfig()
         );
+    }
+
+    function _updateTimingConfigs(uint256 _voteActivationDelay, uint256 _voteDuration, uint256 _proposalDuration) internal {
+        if(_voteActivationDelay > 0) _setVoteActivationDelay(_voteActivationDelay);
+        if(_voteDuration > 0) _setVoteDuration(_voteDuration);
+        if(_proposalDuration > 0) _setProposalDuration(_proposalDuration);
     }
 
     function _setVoteActivationDelay(uint256 _voteActivationDelay) internal {
@@ -326,14 +322,7 @@ contract Governance is
             return;
         }
 
-        // Check if the chainId is already set for the chainId
-        bool chainIdExists = false;
-        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-            if (supportedChainIds[i] == _chainId) {
-                chainIdExists = true;
-                break;
-            }
-        }
+        bool chainIdExists = _isChainIdSupported(_chainId);
 
         // If the chainId is not supported, add it to the supportedChainIds
         if (!chainIdExists) {
@@ -360,6 +349,13 @@ contract Governance is
         return sha256(chainHashEncoded);
     }
 
+    function _isChainIdSupported(uint256 _chainId) internal view returns (bool) {
+        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
+            if (supportedChainIds[i] == _chainId) return true;
+        }
+        return false;
+    }
+
     /// @notice Remove a chainId from the supportedChainIds array
     /// @dev This function removes the specified chainId from the supportedChainIds array
     /// @param _chainId The chain ID to remove from supported chain IDs
@@ -382,15 +378,7 @@ contract Governance is
         require(_rpcUrls.length > 0, InvalidRpcUrl());
         require(_rpcUrls.length <= maxRPCUrlsPerChain, MaxRpcUrlsPerChainReached());
 
-        // Check if the chainId exists in supportedChainIds
-        bool chainIdExists = false;
-        for (uint256 i = 0; i < supportedChainIds.length; ++i) {
-            if (supportedChainIds[i] == _chainId) {
-                chainIdExists = true;
-                break;
-            }
-        }
-        require(chainIdExists, InvalidChainId());
+        require(_isChainIdSupported(_chainId), InvalidChainId());
 
         // Update the rpcUrls and recalculate chainHash
         bytes32 chainHash = sha256(abi.encode(_chainId, _rpcUrls));
@@ -468,7 +456,29 @@ contract Governance is
     /// @param _params The proposal parameters including targets, values, calldatas, title, description, and deposit token
     /// @return proposalId The unique identifier of the created proposal
     function propose(ProposeInputParams calldata _params) external payable whenNotPaused returns (bytes32) {
-        // Validate input
+        _validateProposalInput(_params);
+        bytes32 proposalId = _createProposalId(_params);
+        require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
+        
+        _depositTokenAndLock(proposalId, _params.depositToken, proposalDepositAmounts[_params.depositToken]);
+        _storeProposal(proposalId, _params.targets, _params.values, _params.calldatas, _params.title, _params.description);
+
+        emit ProposalCreated(
+            proposalId,
+            proposerNonce[msg.sender],
+            _params.targets,
+            _params.values,
+            _params.calldatas,
+            _params.title,
+            _params.description,
+            proposals[proposalId].proposalTimeInfo
+        );
+
+        proposerNonce[msg.sender] += 1;
+        return proposalId;
+    }
+
+    function _validateProposalInput(ProposeInputParams calldata _params) internal view {
         require(
             _params.targets.length == _params.values.length && _params.targets.length == _params.calldatas.length,
             InvalidInputLength()
@@ -484,33 +494,13 @@ contract Governance is
         require(valueSum == msg.value, InvalidMsgValue());
         require(proposalDepositAmounts[_params.depositToken] > 0, TokenNotSupported());
         require(supportedChainIds.length > 0, NoSupportedChainConfigured());
+    }
 
-        // Calculate proposalId
+    function _createProposalId(ProposeInputParams calldata _params) internal view returns (bytes32) {
         bytes32 descriptionHash = sha256(abi.encode(_params.title, _params.description));
-        bytes32 proposalId = _generateProposalId(
+        return _generateProposalId(
             _params.targets, _params.values, _params.calldatas, descriptionHash, msg.sender, proposerNonce[msg.sender]
         );
-        require(proposals[proposalId].proposalInfo.proposer == address(0), ProposalAlreadyExists());
-
-        // Deposit and store
-        _depositTokenAndLock(proposalId, _params.depositToken, proposalDepositAmounts[_params.depositToken]);
-        _storeProposal(
-            proposalId, _params.targets, _params.values, _params.calldatas, _params.title, _params.description
-        );
-
-        emit ProposalCreated(
-            proposalId,
-            proposerNonce[msg.sender],
-            _params.targets,
-            _params.values,
-            _params.calldatas,
-            _params.title,
-            _params.description,
-            proposals[proposalId].proposalTimeInfo
-        );
-
-        proposerNonce[msg.sender] += 1;
-        return proposalId;
     }
 
     function _storeProposal(
@@ -553,7 +543,9 @@ contract Governance is
     /// @dev The vote is encrypted and stored along with the voter's address
     /// @param _proposalId The unique identifier of the proposal to vote on
     /// @param _voteEncrypted The encrypted vote data
-    function vote(bytes32 _proposalId, bytes calldata _voteEncrypted) external {
+    /// @param _delegator The address of the delegator, address(0) if not delegated
+    /// @param _delegatorChainId The chain ID to vote on
+    function vote(bytes32 _proposalId, bytes calldata _voteEncrypted, address _delegator, uint256 _delegatorChainId) external {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), ProposalDoesNotExist());
         ProposalTimeInfo storage proposalTimeInfo = proposals[_proposalId].proposalTimeInfo;
         require(
@@ -561,18 +553,23 @@ contract Governance is
                 && block.timestamp < proposalTimeInfo.voteDeadlineTimestamp,
             VotingNotActive()
         );
+        
+        // Validate delegator and chainId combination
+        require(
+            (_delegator == address(0) && _delegatorChainId == 0) || 
+            (_delegator != address(0) && _delegatorChainId != 0),
+            InvalidDelegatorChainId()
+        );
 
         ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
         uint256 voteIdx = proposalVoteInfo.voteCount;
         proposalVoteInfo.votes[voteIdx] = Vote({voter: msg.sender, voteEncrypted: _voteEncrypted});
         proposalVoteInfo.voteCount++;
 
-        bytes32 voteEncryptedHash = sha256(_voteEncrypted);
-        bytes32 voteHashOld = proposalVoteInfo.voteHash;
-        bytes32 voteHashUpdated = sha256(abi.encode(voteHashOld, voteEncryptedHash));
-        proposalVoteInfo.voteHash = voteHashUpdated;
+        proposalVoteInfo.voteHash = sha256(abi.encode(proposalVoteInfo.voteHash, sha256(_voteEncrypted)));
 
-        emit VoteSubmitted(_proposalId, voteIdx, msg.sender, _voteEncrypted);
+        // emit VoteSubmitted(_proposalId, msg.sender, _delegator, _delegatorChainId, voteIdx, _voteEncrypted);
+        emit VoteSubmitted(_proposalId, _delegator, _delegatorChainId, voteIdx, _voteEncrypted);
     }
 
     //-------------------------------- Vote end --------------------------------//
