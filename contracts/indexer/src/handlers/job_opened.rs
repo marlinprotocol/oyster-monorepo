@@ -447,6 +447,102 @@ mod tests {
     }
 
     #[test]
+    fn test_create_new_job_when_rate_is_0() -> Result<()> {
+        // setup
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
+        let log = Log {
+            block_hash: Some(keccak256!("some block").into()),
+            block_number: Some(42),
+            block_timestamp: None,
+            log_index: Some(69),
+            transaction_hash: Some(keccak256!("some tx").into()),
+            transaction_index: Some(420),
+            removed: false,
+            inner: alloy::primitives::Log {
+                address: contract,
+                data: LogData::new(
+                    vec![
+                        event!("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)")
+                            .into(),
+                        "0x3333333333333333333333333333333333333333333333333333333333333333"
+                            .parse()?,
+                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+                            .parse::<Address>()?
+                            .into_word(),
+                        "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+                            .parse::<Address>()?
+                            .into_word(),
+                    ],
+                    ("some metadata", 0, 2, timestamp)
+                        .abi_encode_sequence()
+                        .into(),
+                )
+                .unwrap(),
+            },
+        };
+
+        let provider = MockProvider::new(timestamp);
+        // use handle_log instead of concrete handler to test dispatch
+        handle_log(conn, log, &provider)?;
+
+        // checks
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table.select(jobs::all_columns).first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                "some metadata".to_owned(),
+                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+                BigDecimal::from(0),
+                BigDecimal::from(2),
+                now,
+                now,
+                false,
+                BigDecimal::from(timestamp),
+            ))
+        );
+
+        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            transactions::table
+                .select(transactions::all_columns)
+                .first(conn),
+            Ok((
+                42i64,
+                69i64,
+                keccak256!("some tx").encode_hex_with_prefix(),
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(2),
+                true,
+            ))
+        );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(0),
+                42i64,
+                BigDecimal::from(timestamp)
+            ))
+        );
+
+        Ok(())
+    }
+    #[test]
     fn test_create_new_job_when_it_already_exists() -> Result<()> {
         // setup
         let mut db = TestDb::new();

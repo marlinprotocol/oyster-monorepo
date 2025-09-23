@@ -329,6 +329,135 @@ mod tests {
     }
 
     #[test]
+    fn test_revise_rate_finalized_when_rate_is_0() -> Result<()> {
+        // setup
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+        diesel::insert_into(providers::table)
+            .values((
+                providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
+                providers::cp.eq("some cp"),
+                providers::is_active.eq(true),
+            ))
+            .execute(conn)?;
+
+        let original_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let original_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
+                jobs::owner.eq("0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"),
+                jobs::provider.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
+                jobs::metadata.eq("some other metadata"),
+                jobs::rate.eq(BigDecimal::from(0)),
+                jobs::balance.eq(BigDecimal::from(21)),
+                jobs::last_settled.eq(&original_now),
+                jobs::created.eq(&original_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        assert_eq!(providers::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            providers::table.select(providers::all_columns).first(conn),
+            Ok((
+                "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+                "some cp".to_owned(),
+                true
+            ))
+        );
+
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table.select(jobs::all_columns).first(conn),
+            Ok((
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                "some other metadata".to_owned(),
+                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+                BigDecimal::from(0),
+                BigDecimal::from(21),
+                original_now,
+                original_now,
+                false,
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
+            ))
+        );
+
+        // emit finalize with new rate = 0 at block 42, provider supplies timestamp
+        let log = Log {
+            block_hash: Some(keccak256!("some block").into()),
+            block_number: Some(42),
+            block_timestamp: None,
+            log_index: Some(69),
+            transaction_hash: Some(keccak256!("some tx").into()),
+            transaction_index: Some(420),
+            removed: false,
+            inner: alloy::primitives::Log {
+                address: contract,
+                data: LogData::new(
+                    vec![
+                        event!("JobReviseRateFinalized(bytes32,uint256)").into(),
+                        "0x4444444444444444444444444444444444444444444444444444444444444444"
+                            .parse()?,
+                    ],
+                    0.abi_encode().into(),
+                )
+                .unwrap(),
+            },
+        };
+
+        // the provider returns the block timestamp to use in new_end_epoch
+        let provider = MockProvider::new(original_timestamp);
+        handle_log(conn, log, &provider)?;
+
+        // the rate is 0 so the end_epoch time is the block timestamp returned by the mock provider
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table.select(jobs::all_columns).first(conn),
+            Ok((
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                "some other metadata".to_owned(),
+                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+                BigDecimal::from(0),
+                BigDecimal::from(21),
+                original_now,
+                original_now,
+                false,
+                BigDecimal::from(original_timestamp + 4),
+            ))
+        );
+
+        // the rate is 0 so the end_epoch time is the block timestamp returned by the mock provider
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .first(conn),
+            Ok((
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(0),
+                42i64,
+                BigDecimal::from(original_timestamp + 4),
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_revise_rate_finalized_for_non_existent_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
