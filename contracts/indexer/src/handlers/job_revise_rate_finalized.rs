@@ -70,8 +70,11 @@ pub fn handle_job_revise_rate_finalized(
     }
 
     let job_balance = job_balance.unwrap();
-    let new_end_epoch = &BigDecimal::from(block_timestamp)
-        + ((&job_balance * RATE_SCALING_FACTOR) / &rate).round(0);
+    let mut new_end_epoch = BigDecimal::from(block_timestamp);
+
+    if &rate != &BigDecimal::from(0) {
+        new_end_epoch = new_end_epoch + ((&job_balance * RATE_SCALING_FACTOR) / &rate).round(0);
+    }
 
     info!(id, ?job_balance, ?new_end_epoch, "calculated new end epoch");
 

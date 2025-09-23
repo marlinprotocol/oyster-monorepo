@@ -36,8 +36,14 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
         BigDecimal::from_str(&timestamp.to_string())?,
     );
-    let run_duration = ((&balance * RATE_SCALING_FACTOR) / &rate).round(0);
-    let end_epoch = &timestamp_epoch + &run_duration;
+
+    let mut run_duration = BigDecimal::from(0);
+    let mut end_epoch = timestamp_epoch.clone();
+
+    if &rate != &BigDecimal::from(0) {
+        run_duration = ((&balance * RATE_SCALING_FACTOR) / &rate).round(0);
+        end_epoch = &timestamp_epoch + &run_duration;
+    }
 
     let block = log
         .block_number
