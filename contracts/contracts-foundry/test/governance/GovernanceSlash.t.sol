@@ -462,9 +462,9 @@ contract GovernanceSlashTest is GovernanceSetup {
         vm.prank(proposer);
         governance.refund(proposalId);
         
-        // Second refund should fail due to NoValueToRefund
+        // Second refund should fail due to NotRefundableProposal
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.NoValueToRefund.selector);
+        vm.expectRevert(IGovernanceErrors.NotRefundableProposal.selector);
         governance.refund(proposalId);
     }
 }
