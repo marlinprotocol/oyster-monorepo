@@ -1,10 +1,8 @@
 use std::fs;
 use std::net::SocketAddr;
 
-use alloy::hex::ToHexExt;
-use alloy::primitives::{Address, B256};
-use alloy::providers::{Provider, ProviderBuilder};
-use alloy::transports::ws::WsConnect;
+use alloy_primitives::hex::ToHexExt;
+use alloy_primitives::B256;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
@@ -36,9 +34,9 @@ struct Cli {
     )]
     regions: String,
 
-    /// RPC url
+    /// Market DB url
     #[clap(long, value_parser)]
-    rpc: String,
+    db_url: String,
 
     /// Rates location
     #[clap(long, value_parser)]
@@ -47,6 +45,10 @@ struct Cli {
     /// Bandwidth Rates location
     #[clap(long, value_parser)]
     bandwidth: String,
+
+    /// Chain ID
+    #[clap(long, value_parser)]
+    chain: String,
 
     /// Contract address
     #[clap(long, value_parser)]
@@ -112,27 +114,15 @@ async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRa
     Ok(rates)
 }
 
-async fn get_chain_id_from_rpc_url(url: String) -> Result<String> {
-    let provider = ProviderBuilder::new()
-        .on_ws(WsConnect::new(url))
-        .await
-        .context("failed to create websocket provider")?;
-    let chain_id = provider
-        .get_chain_id()
-        .await
-        .context("failed to fetch chain id")?;
-
-    Ok(chain_id.to_string())
-}
-
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     info!(?cli.profile);
     info!(?cli.key_name);
-    info!(?cli.rpc);
+    info!(?cli.db_url);
     info!(?cli.rates);
     info!(?cli.bandwidth);
+    info!(?cli.chain);
     info!(?cli.contract);
     info!(?cli.provider);
     info!(?cli.blacklist);
@@ -213,9 +203,6 @@ async fn run() -> Result<()> {
     let address_whitelist: &'static [String] = Box::leak(address_whitelist_vec.into_boxed_slice());
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
-    let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
-        .await
-        .context("Failed to fetch chain_id")?;
 
     // Initialize job registry for terminated jobs
     let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
@@ -230,7 +217,7 @@ async fn run() -> Result<()> {
         id: B256::ZERO.encode_hex_with_prefix(),
         operator: cli.provider.clone(),
         contract: cli.contract.clone(),
-        chain,
+        chain: cli.chain,
     };
 
     tokio::spawn(
@@ -245,21 +232,9 @@ async fn run() -> Result<()> {
         .instrument(info_span!("server")),
     );
 
-    let ethers = market::EthersProvider {
-        contract: cli
-            .contract
-            .parse::<Address>()
-            .context("failed to parse contract address")?,
-        provider: cli
-            .provider
-            .parse::<Address>()
-            .context("failed to parse provider address")?,
-    };
-
     market::run(
         aws,
-        ethers,
-        cli.rpc,
+        cli.db_url,
         regions,
         compute_rates,
         bandwidth_rates,
