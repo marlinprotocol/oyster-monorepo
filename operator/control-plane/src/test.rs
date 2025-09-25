@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
-use std::str::FromStr;
 
-use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, LogData, B256, U256};
-use alloy::providers::Provider;
-use alloy::pubsub::PubSubFrontend;
-use alloy::rpc::types::eth::Log;
+use alloy_primitives::hex::ToHexExt;
+#[cfg(test)]
+use alloy_primitives::B256;
+use alloy_primitives::{FixedBytes, U256};
 use anyhow::{anyhow, Result};
-use tokio::time::{Duration, Instant};
-use tokio_stream::StreamExt;
+#[cfg(test)]
+use serde_json::Value;
+use tokio::time::Instant;
 
-use crate::market::{GBRateCard, InfraProvider, JobId, LogsProvider, RateCard, RegionalRates};
+use crate::market::{GBRateCard, InfraProvider, JobId, RateCard, RegionalRates};
 
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
@@ -70,14 +70,14 @@ pub fn compute_instance_ip(counter: u64) -> String {
         .unwrap()
 }
 
-pub fn compute_address_word(salt: &str) -> FixedBytes<32> {
+pub fn compute_address_word(salt: &str) -> String {
     let mut hasher = DefaultHasher::new();
     hasher.write_u8(2);
     hasher.write(salt.as_bytes());
 
     let hash = hasher.finish();
 
-    FixedBytes::<32>::from_slice(hash.to_le_bytes().repeat(4).as_slice())
+    FixedBytes::<32>::from_slice(hash.to_le_bytes().repeat(4).as_slice()).encode_hex_with_prefix()
 }
 
 #[cfg(test)]
@@ -201,50 +201,16 @@ impl InfraProvider for TestAws {
 
 #[cfg(test)]
 #[derive(Clone)]
-pub struct TestLogger {}
-
-#[cfg(test)]
-impl LogsProvider for TestLogger {
-    async fn new_jobs<'a>(
-        &'a self,
-        _client: &'a impl Provider<PubSubFrontend>,
-    ) -> Result<impl StreamExt<Item = (B256, bool)> + 'a> {
-        let logs: Vec<Log> = Vec::new();
-        Ok(tokio_stream::iter(
-            logs.iter()
-                .map(|job| (job.topics()[1], false))
-                .collect::<Vec<_>>(),
-        )
-        .throttle(Duration::from_secs(2)))
-    }
-
-    async fn job_logs<'a>(
-        &'a self,
-        _client: &'a impl Provider<PubSubFrontend>,
-        job: B256,
-    ) -> Result<impl StreamExt<Item = Log> + Send + 'a> {
-        let logs: Vec<Log> = Vec::new();
-        Ok(tokio_stream::iter(
-            logs.into_iter()
-                .filter(|log| log.topics()[1] == job)
-                .collect::<Vec<_>>(),
-        )
-        .throttle(Duration::from_secs(2)))
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone)]
 pub enum Action {
-    Open,
+    Open(String, u64, u64, i64),
     Close,
-    Settle,
-    Deposit,
-    Withdraw,
-    ReviseRateInitiated,
+    Settle(u64, i64),
+    Deposit(u64),
+    Withdraw(u64),
+    ReviseRateInitiated(u64),
     ReviseRateCancelled,
-    ReviseRateFinalized,
-    MetadataUpdated,
+    ReviseRateFinalized(u64),
+    MetadataUpdated(String),
 }
 
 #[cfg(test)]
@@ -271,81 +237,78 @@ pub fn get_gb_rates() -> Vec<GBRateCard> {
 }
 
 #[cfg(test)]
-pub fn get_log(topic: Action, data: Bytes, idx: B256) -> Log {
-    let mut log = Log {
-        inner: alloy::primitives::Log {
-            address: Address::from_str("0x000000000000000000000000000000000000dead").unwrap(),
-            data: LogData::new_unchecked(vec![], Bytes::new()),
-        },
-        ..Default::default()
-    };
-    match topic {
-        Action::Open => {
-            log.inner.data = LogData::new_unchecked(
-                vec![
-                    keccak256("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)"),
-                    idx,
-                    compute_address_word("owner"),
-                    compute_address_word("provider"),
-                ],
-                data,
-            );
-        }
-        Action::Close => {
-            log.inner.data =
-                LogData::new_unchecked(vec![keccak256("JobClosed(bytes32)"), idx], data);
-        }
-        Action::Settle => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobSettled(bytes32,uint256,uint256)"), idx],
-                data,
-            );
-        }
-        Action::Deposit => {
-            log.inner.data = LogData::new_unchecked(
-                vec![
-                    keccak256("JobDeposited(bytes32,address,uint256)"),
-                    idx,
-                    compute_address_word("depositor"),
-                ],
-                data,
-            );
-        }
-        Action::Withdraw => {
-            log.inner.data = LogData::new_unchecked(
-                vec![
-                    keccak256("JobWithdrew(bytes32,address,uint256)"),
-                    idx,
-                    compute_address_word("withdrawer"),
-                ],
-                data,
-            );
-        }
-        Action::ReviseRateInitiated => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateInitiated(bytes32,uint256)"), idx],
-                data,
-            );
-        }
-        Action::ReviseRateCancelled => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateCancelled(bytes32)"), idx],
-                data,
-            );
-        }
-        Action::ReviseRateFinalized => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobReviseRateFinalized(bytes32,uint256)"), idx],
-                data,
-            );
-        }
-        Action::MetadataUpdated => {
-            log.inner.data = LogData::new_unchecked(
-                vec![keccak256("JobMetadataUpdated(bytes32,string)"), idx],
-                data,
-            );
-        }
-    }
+pub fn get_event(topic: Action, idx: B256) -> (String, Value) {
+    use alloy_primitives::hex::ToHexExt;
 
-    log
+    match topic {
+        Action::Open(metadata, rate, balance, timestamp) => (
+            "JobOpened".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "owner": compute_address_word("owner"),
+                "provider": compute_address_word("provider"),
+                "metadata": metadata,
+                "rate": rate,
+                "balance": balance,
+                "timestamp": timestamp,
+            }),
+        ),
+        Action::Close => (
+            "JobClosed".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+            }),
+        ),
+        Action::Settle(amount, timestamp) => (
+            "JobSettled".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "amount": amount,
+                "timestamp": timestamp,
+            }),
+        ),
+        Action::Deposit(amount) => (
+            "JobDeposited".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "from": compute_address_word("depositor"),
+                "amount": amount,
+            }),
+        ),
+        Action::Withdraw(amount) => (
+            "JobWithdrew".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "to": compute_address_word("withdrawer"),
+                "amount": amount,
+            }),
+        ),
+        Action::ReviseRateInitiated(rate) => (
+            "JobReviseRateInitiated".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "new_rate": rate,
+            }),
+        ),
+        Action::ReviseRateCancelled => (
+            "JobReviseRateCancelled".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+            }),
+        ),
+        Action::ReviseRateFinalized(rate) => (
+            "JobReviseRateFinalized".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "new_rate": rate,
+            }),
+        ),
+        Action::MetadataUpdated(metadata) => (
+            "JobMetadataUpdated".to_owned(),
+            serde_json::json!({
+                "job_id": idx.encode_hex_with_prefix(),
+                "new_metadata": metadata,
+            }),
+        ),
+    }
 }
