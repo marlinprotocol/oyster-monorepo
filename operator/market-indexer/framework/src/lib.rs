@@ -53,6 +53,8 @@ impl SaturatingConvert<u64> for i64 {
     }
 }
 
+const BATCH_THRESHOLD: usize = 100;
+
 // TODO: add custom errors
 #[instrument(level = "info", skip_all, parent = None)]
 pub async fn run(
@@ -72,6 +74,10 @@ pub async fn run(
             .context("Failed to update start_block in the DB")?;
 
         debug!("Start block Updated: {}", updated == 1);
+    }
+
+    if range_size == 0 {
+        return Err(anyhow!("Range size must not be zero"));
     }
 
     let retry_strategy = ExponentialBackoff::from_millis(500)
@@ -125,32 +131,63 @@ pub async fn run(
             .context("Failed to fetch logs from RPC")?;
         info!(start_block, end_block, "Processing block range");
 
-        for (block_number, logs) in block_logs.iter() {
+        let mut end_block_num = last_processed_block_id;
+        let mut batch_records = Vec::new();
+
+        for block_number in start_block..=end_block {
+            let empty = Vec::new();
+
+            let records = rpc_client
+                .process_logs_in_block(
+                    block_number,
+                    block_logs.get(&block_number).unwrap_or(&empty),
+                    &mut active_job_ids,
+                )
+                .context("Failed to process logs in block")?;
+
             debug!(
                 block_number,
-                logs_count = logs.len(),
+                events_count = records.len(),
                 "Processing block logs"
             );
 
-            let records = rpc_client
-                .process_logs_in_block(*block_number, logs, &mut active_job_ids)
-                .context("Failed to process logs in block")?;
+            end_block_num = block_number.saturating_to();
+            batch_records.extend(records);
 
+            if batch_records.len() >= BATCH_THRESHOLD {
+                Retry::spawn(retry_strategy.clone(), || async {
+                    let (inserted_batch, updated) = repo
+                        .insert_batch(batch_records.clone(), end_block_num)
+                        .await?;
+
+                    debug!(end_block_num, inserted_batch, "Inserted block logs");
+                    trace!("Last processed block updated: {}", updated == 1);
+
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await
+                .context("DB insert failed for block batch")?;
+
+                batch_records.clear();
+                last_processed_block_id = end_block_num;
+            }
+        }
+
+        if end_block_num > last_processed_block_id {
             Retry::spawn(retry_strategy.clone(), || async {
-                let mut tx = repo.pool.begin().await?;
-                let inserted_batch = repo.insert_events(&mut tx, records.clone()).await?;
-                debug!(block_number, inserted_batch, "Inserted block logs");
-                let updated = repo
-                    .update_state(&mut tx, (*block_number).saturating_to())
+                let (inserted_batch, updated) = repo
+                    .insert_batch(batch_records.clone(), end_block_num)
                     .await?;
+
+                debug!(end_block_num, inserted_batch, "Inserted block logs");
                 trace!("Last processed block updated: {}", updated == 1);
-                tx.commit().await?;
+
                 Ok::<(), anyhow::Error>(())
             })
             .await
             .context("DB insert failed for block batch")?;
         }
 
-        last_processed_block_id = end_block.saturating_to();
+        last_processed_block_id = end_block_num;
     }
 }

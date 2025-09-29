@@ -69,7 +69,19 @@ impl Repository {
         Ok(row.get::<i64, _>("last_processed_block"))
     }
 
-    pub async fn insert_events(
+    pub async fn insert_batch(
+        &self,
+        records: Vec<JobEventRecord>,
+        block: i64,
+    ) -> Result<(u64, u64)> {
+        let mut tx = self.pool.begin().await?;
+        let inserted_batch = self.insert_events(&mut tx, records.clone()).await?;
+        let updated = self.update_state(&mut tx, block).await?;
+        tx.commit().await?;
+        Ok((inserted_batch, updated))
+    }
+
+    async fn insert_events(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         records: Vec<JobEventRecord>,
@@ -126,11 +138,7 @@ impl Repository {
         Ok(result.rows_affected())
     }
 
-    pub async fn update_state(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        block: i64,
-    ) -> Result<u64> {
+    async fn update_state(&self, tx: &mut Transaction<'_, Postgres>, block: i64) -> Result<u64> {
         let result = sqlx::query(
             r#"
             UPDATE indexer_state
