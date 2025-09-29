@@ -1,9 +1,14 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::{Context, Result};
+use sqlx::migrate::Migrator;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::schema::JobEventRecord;
+
+const MIGRATION_PATH: &str = "../framework/migrations";
 
 #[derive(Clone, Debug)]
 pub struct Repository {
@@ -11,11 +16,27 @@ pub struct Repository {
 }
 
 impl Repository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub async fn new(db_url: String) -> Result<Self> {
+        // Create an async connection pool
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&db_url)
+            .await
+            .context("Failed to connect to the DATABASE_URL")?;
+
+        Ok(Self { pool })
     }
 
-    /// Fetches active job IDs for a specific provider using a single query
+    pub async fn apply_migrations(&self) -> Result<()> {
+        let migrator = Migrator::new(Path::new(MIGRATION_PATH))
+            .await
+            .context("Failed to initialize the migrator")?;
+        migrator
+            .run(&self.pool)
+            .await
+            .context("Failed to apply migrations to the database")
+    }
+
     pub async fn get_active_jobs(&self) -> Result<HashSet<String>> {
         let active_jobs: Vec<String> = sqlx::query_scalar(
             r#"
@@ -119,6 +140,22 @@ impl Repository {
         )
         .bind(block)
         .execute(&mut **tx)
+        .await
+        .context("Failed to update indexer state")?;
+
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_state_atomic(&self, block: i64) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE indexer_state
+            SET last_processed_block = $1, updated_at = now()
+            WHERE id = 1
+            "#,
+        )
+        .bind(block)
+        .execute(&self.pool)
         .await
         .context("Failed to update indexer state")?;
 

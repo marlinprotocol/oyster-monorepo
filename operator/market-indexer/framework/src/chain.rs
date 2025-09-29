@@ -1,6 +1,7 @@
-use anyhow::Result;
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
+
+use anyhow::Result;
 
 use crate::events::JobEvent;
 use crate::schema::JobEventRecord;

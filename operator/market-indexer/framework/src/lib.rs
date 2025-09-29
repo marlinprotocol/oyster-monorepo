@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
-use tracing::{debug, info, instrument}; // TODO: keep or replace with custom errors
+use tracing::{debug, info, instrument, trace};
 
 use chain::ChainHandler;
 use repository::Repository;
@@ -55,89 +55,100 @@ impl SaturatingConvert<u64> for i64 {
 
 // TODO: add custom errors
 #[instrument(level = "info", skip_all, parent = None)]
-pub async fn run(repo: Repository, rpc_client: impl ChainHandler, range_size: u64) -> Result<()> {
+pub async fn run(
+    repo: Repository,
+    rpc_client: impl ChainHandler,
+    start_block: Option<i64>,
+    range_size: u64,
+) -> Result<()> {
+    info!("Applying pending migrations");
+    repo.apply_migrations().await?;
+    info!("Migrations applied");
+
+    if let Some(start_block) = start_block {
+        let updated = repo
+            .update_state_atomic(start_block)
+            .await
+            .context("Failed to update start_block in the DB")?;
+
+        debug!("Start block Updated: {}", updated == 1);
+    }
+
     let retry_strategy = ExponentialBackoff::from_millis(500)
         .max_delay(Duration::from_secs(10))
         .map(jitter);
 
-    // fetch last updated block from the db
     let mut last_processed_block_id = Retry::spawn(retry_strategy.clone(), || async {
         repo.get_last_processed_block().await
     })
     .await
-    .context(
-        "No last processed block found, should never happen unless the database is corrupted",
-    )?;
+    .context("Missing last processed block (possible DB corruption)")?;
 
-    info!(block = last_processed_block_id, "last processed");
+    info!(
+        last_processed_block_id,
+        "Resuming from last processed block"
+    );
 
     let mut active_job_ids = Retry::spawn(retry_strategy.clone(), || async {
         repo.get_active_jobs().await
     })
-    .await?;
+    .await
+    .context("Failed to fetch active job IDs")?;
 
     loop {
         let latest_block = rpc_client
             .fetch_latest_block()
             .await
-            .context("Failed to fetch latest block from the rpc")?;
+            .context("RPC latest block fetch failed")?;
         let latest_block_i64: i64 = latest_block.saturating_to();
 
-        info!(block = latest_block, "latest block");
+        debug!(latest_block, "Fetched latest block from RPC");
 
-        // should not really ever be true
-        // effectively means the rpc was rolled back
         if latest_block_i64 < last_processed_block_id {
-            return Err(anyhow!(
-                "rpc is behind the db, should never happen unless the rpc was rolled back"
-            ));
+            // warn!(db_block = last_processed_block_id, rpc_block = latest_block_i64, "RPC is behind DB (possible rollback)");
+            return Err(anyhow!("RPC is behind DB (possible rollback)"));
         }
 
         if latest_block_i64 == last_processed_block_id {
-            // we are up to date, simply sleep for a bit
+            trace!("Up-to-date with RPC, sleeping 5s");
             sleep(Duration::from_secs(5)).await;
             continue;
         }
 
-        // start from the next block to what has already been processed
         let start_block: u64 = (last_processed_block_id + 1).saturating_to();
-        // cap block range using range_size
-        // might need some babysitting during initial sync
         let end_block = min(start_block + range_size - 1, latest_block);
-
-        info!(start_block, end_block, "fetching range");
+        info!(start_block, end_block, "Fetching new block range");
 
         let block_logs = rpc_client
             .fetch_logs_and_group_by_block(start_block, end_block)
             .await
-            .context("Failed to fetch logs from the rpc")?;
-
-        info!(start_block, end_block, "processing range");
+            .context("Failed to fetch logs from RPC")?;
+        info!(start_block, end_block, "Processing block range");
 
         for (block_number, logs) in block_logs.iter() {
-            info!(
+            debug!(
                 block_number,
                 logs_count = logs.len(),
-                "processing block logs"
+                "Processing block logs"
             );
 
             let records = rpc_client
                 .process_logs_in_block(*block_number, logs, &mut active_job_ids)
-                .context("Failed to process logs in a block")?;
+                .context("Failed to process logs in block")?;
 
             Retry::spawn(retry_strategy.clone(), || async {
                 let mut tx = repo.pool.begin().await?;
                 let inserted_batch = repo.insert_events(&mut tx, records.clone()).await?;
-                debug!(block_number, inserted_batch, "batch of block logs inserted");
+                debug!(block_number, inserted_batch, "Inserted block logs");
                 let updated = repo
                     .update_state(&mut tx, (*block_number).saturating_to())
                     .await?;
-                debug!("is_last_set: {}", updated == 1);
+                trace!("Last processed block updated: {}", updated == 1);
                 tx.commit().await?;
                 Ok::<(), anyhow::Error>(())
             })
             .await
-            .context("Failed to batch insert logs for a block in the DB")?;
+            .context("DB insert failed for block batch")?;
         }
 
         last_processed_block_id = end_block.saturating_to();
