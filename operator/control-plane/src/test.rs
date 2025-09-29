@@ -7,9 +7,10 @@ use alloy_primitives::B256;
 use alloy_primitives::{FixedBytes, U256};
 use anyhow::{anyhow, Result};
 #[cfg(test)]
-use serde_json::Value;
 use tokio::time::Instant;
 
+#[cfg(test)]
+use crate::market::JobLog;
 use crate::market::{GBRateCard, InfraProvider, JobId, RateCard, RegionalRates};
 
 #[cfg(test)]
@@ -237,13 +238,15 @@ pub fn get_gb_rates() -> Vec<GBRateCard> {
 }
 
 #[cfg(test)]
-pub fn get_event(topic: Action, idx: B256) -> (String, Value) {
+pub fn get_event(topic: Action, order: (i64, i64), idx: B256) -> JobLog {
     use alloy_primitives::hex::ToHexExt;
 
     match topic {
-        Action::Open(metadata, rate, balance, timestamp) => (
-            "JobOpened".to_owned(),
-            serde_json::json!({
+        Action::Open(metadata, rate, balance, timestamp) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobOpened".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "owner": compute_address_word("owner"),
                 "provider": compute_address_word("provider"),
@@ -252,63 +255,79 @@ pub fn get_event(topic: Action, idx: B256) -> (String, Value) {
                 "balance": balance,
                 "timestamp": timestamp,
             }),
-        ),
-        Action::Close => (
-            "JobClosed".to_owned(),
-            serde_json::json!({
+        },
+        Action::Close => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobClosed".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
             }),
-        ),
-        Action::Settle(amount, timestamp) => (
-            "JobSettled".to_owned(),
-            serde_json::json!({
+        },
+        Action::Settle(amount, timestamp) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobSettled".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "amount": amount,
                 "timestamp": timestamp,
             }),
-        ),
-        Action::Deposit(amount) => (
-            "JobDeposited".to_owned(),
-            serde_json::json!({
+        },
+        Action::Deposit(amount) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobDeposited".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "from": compute_address_word("depositor"),
                 "amount": amount,
             }),
-        ),
-        Action::Withdraw(amount) => (
-            "JobWithdrew".to_owned(),
-            serde_json::json!({
+        },
+        Action::Withdraw(amount) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobWithdrew".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "to": compute_address_word("withdrawer"),
                 "amount": amount,
             }),
-        ),
-        Action::ReviseRateInitiated(rate) => (
-            "JobReviseRateInitiated".to_owned(),
-            serde_json::json!({
+        },
+        Action::ReviseRateInitiated(rate) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobReviseRateInitiated".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "new_rate": rate,
             }),
-        ),
-        Action::ReviseRateCancelled => (
-            "JobReviseRateCancelled".to_owned(),
-            serde_json::json!({
+        },
+        Action::ReviseRateCancelled => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobReviseRateCancelled".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
             }),
-        ),
-        Action::ReviseRateFinalized(rate) => (
-            "JobReviseRateFinalized".to_owned(),
-            serde_json::json!({
+        },
+        Action::ReviseRateFinalized(rate) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobReviseRateFinalized".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "new_rate": rate,
             }),
-        ),
-        Action::MetadataUpdated(metadata) => (
-            "JobMetadataUpdated".to_owned(),
-            serde_json::json!({
+        },
+        Action::MetadataUpdated(metadata) => JobLog {
+            block_id: order.0,
+            event_seq: order.1,
+            event_name: "JobMetadataUpdated".to_owned(),
+            event_data: serde_json::json!({
                 "job_id": idx.encode_hex_with_prefix(),
                 "new_metadata": metadata,
             }),
-        ),
+        },
     }
 }

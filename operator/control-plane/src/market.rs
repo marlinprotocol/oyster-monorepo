@@ -7,6 +7,7 @@ use alloy_primitives::U256;
 use anyhow::{anyhow, Context, Result};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use chrono::TimeDelta;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
@@ -146,10 +147,20 @@ pub struct GBRateCard {
 
 #[derive(Debug, FromRow)]
 struct JobEvent {
-    pub job_id: String,
+    pub block_id: i64,
+    pub event_seq: i64,
     pub event_name: String,
     pub event_data: Value,
+    pub job_id: String,
     pub indexer_process_time: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+pub struct JobLog {
+    pub block_id: i64,
+    pub event_seq: i64,
+    pub event_name: String,
+    pub event_data: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,8 +242,6 @@ enum JobResult {
     Success,
     // done, should still terminate instance, if any
     Done,
-    // error, can retry with a new conn
-    Retry,
     // error, should terminate instance, if any
     Failed,
     // error, likely internal bug, exit but do not terminate instance
@@ -297,8 +306,9 @@ pub async fn run(
                         break;
                     }
                     Err(err) => {
+                        error!(?err, "DB fetch error");
+
                         if attempts == 0 {
-                            error!(?err, "DB error");
                             break 'run;
                         }
 
@@ -336,7 +346,7 @@ pub async fn run(
                             continue;
                         }
 
-                        let (tx, rx) = mpsc::channel::<(String, Value)>(100);
+                        let (tx, rx) = mpsc::channel::<JobLog>(100);
                         job_registry
                             .active_jobs
                             .lock()
@@ -369,7 +379,18 @@ pub async fn run(
                 };
 
                 if let Some(sender) = sender {
-                    if let Err(err) = sender.send((event.event_name, event.event_data)).await {
+                    if let Err(err) = sender
+                        .send(JobLog {
+                            block_id: event.block_id,
+                            event_seq: event.event_seq,
+                            event_name: event.event_name,
+                            event_data: event.event_data,
+                        })
+                        .await
+                    {
+                        // should not happen in reality
+                        // just in case something like this happens so have added
+                        // (block_id, event_seq) based condition in job_manager to handle repetitive logs
                         error!(?err, "Channel sender error");
                         break 'run;
                     }
@@ -379,7 +400,7 @@ pub async fn run(
             }
 
             last_seen = last_seen
-                .checked_add_signed(chrono::TimeDelta::microseconds(1))
+                .checked_add_signed(TimeDelta::microseconds(1))
                 .unwrap_or(last_seen)
         }
     }
@@ -391,7 +412,7 @@ async fn fetch_job_events(
 ) -> Result<Vec<JobEvent>, sqlx::Error> {
     let events = sqlx::query_as::<_, JobEvent>(
         r#"
-        SELECT job_id, event_name, event_data, indexer_process_time
+        SELECT block_id, event_seq, event_name, event_data, job_id, indexer_process_time
         FROM job_events
         WHERE indexer_process_time >= $1
         ORDER BY block_id ASC, event_seq ASC
@@ -407,7 +428,7 @@ async fn fetch_job_events(
 // manage the complete lifecycle of a job
 async fn job_manager(
     context: impl SystemContext + Send + Sync,
-    mut events_stream: mpsc::Receiver<(String, Value)>,
+    mut events_stream: mpsc::Receiver<JobLog>,
     mut infra_provider: impl InfraProvider + Send + Sync,
     job_id: JobId,
     allowed_regions: &[String],
@@ -427,6 +448,9 @@ async fn job_manager(
 
     // usually tracks the result of the last log processed
     let mut job_result = JobResult::Success;
+
+    let mut cur_block_id: i64 = -1;
+    let mut cur_event_seq: i64 = -1;
 
     // The processing loop follows this:
     // Keep processing events till you hit an unsuccessful processing
@@ -461,10 +485,27 @@ async fn job_manager(
 
             // keep processing logs till the processing is successful
             log = events_stream.recv(), if job_result == JobResult::Success => {
-                job_result = match parse_event(log) {
-                    Ok(event) => state.process_event(event, rates, gb_rates, address_whitelist, address_blacklist),
-                    Err(result) => result
+                job_result = match log {
+                    Some(log) => {
+                        if log.block_id < cur_block_id {
+                            return JobResult::Success;
+                        }
+
+                        if log.block_id == cur_block_id && log.event_seq <= cur_event_seq {
+                            return JobResult::Success;
+                        }
+
+                        cur_block_id = log.block_id;
+                        cur_event_seq = log.event_seq;
+
+                        match parse_event(log.event_name, log.event_data) {
+                            Ok(event) => state.process_event(event, rates, gb_rates, address_whitelist, address_blacklist),
+                            Err(result) => result
+                        }
+                    }
+                    None => JobResult::Internal,
                 };
+
                 match job_result {
                     // just proceed
                     JobResult::Success => {},
@@ -472,8 +513,6 @@ async fn job_manager(
                     JobResult::Done => {
                         state.schedule_termination(0);
                     },
-                    // break and eventually retry
-                    JobResult::Retry => break 'event,
                     // terminate
                     JobResult::Failed => {
                         state.schedule_termination(0);
@@ -517,24 +556,19 @@ async fn job_manager(
     job_result
 }
 
-fn parse_event(event: Option<(String, Value)>) -> Result<DecodedJobEvent, JobResult> {
-    let Some(event) = event else {
-        // error in the stream, can retry with new conn
-        return Err(JobResult::Retry);
-    };
-
-    match event.0.as_str() {
-        "JobOpened" => Ok(DecodedJobEvent::Opened(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "OPENED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobClosed" => Ok(DecodedJobEvent::Closed(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "CLOSED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobDeposited" => Ok(DecodedJobEvent::Deposited(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "DEPOSITED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobSettled" => Ok(DecodedJobEvent::Settled(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "SETTLED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobMetadataUpdated" => Ok(DecodedJobEvent::MetadataUpdated(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "METADATA_UPDATED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobWithdrew" => Ok(DecodedJobEvent::Withdrew(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "WITHDREW: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobReviseRateInitiated" => Ok(DecodedJobEvent::ReviseRateInitiated(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "JOB_REVISE_RATE_INITIATED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobReviseRateCancelled" => Ok(DecodedJobEvent::ReviseRateCancelled(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "JOB_REVISE_RATE_CANCELLED: Decode failure")).map_err(|_| JobResult::Internal)?)),
-        "JobReviseRateFinalized" => Ok(DecodedJobEvent::ReviseRateFinalized(serde_json::from_value(event.1.clone()).inspect_err(|err| error!(?err, data = ?event.1, "JOB_REVISE_RATE_FINALIZED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+fn parse_event(event_name: String, event_data: Value) -> Result<DecodedJobEvent, JobResult> {
+    match event_name.as_str() {
+        "JobOpened" => Ok(DecodedJobEvent::Opened(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "OPENED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobClosed" => Ok(DecodedJobEvent::Closed(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "CLOSED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobDeposited" => Ok(DecodedJobEvent::Deposited(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "DEPOSITED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobSettled" => Ok(DecodedJobEvent::Settled(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "SETTLED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobMetadataUpdated" => Ok(DecodedJobEvent::MetadataUpdated(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "METADATA_UPDATED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobWithdrew" => Ok(DecodedJobEvent::Withdrew(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "WITHDREW: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobReviseRateInitiated" => Ok(DecodedJobEvent::ReviseRateInitiated(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_INITIATED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobReviseRateCancelled" => Ok(DecodedJobEvent::ReviseRateCancelled(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_CANCELLED: Decode failure")).map_err(|_| JobResult::Internal)?)),
+        "JobReviseRateFinalized" => Ok(DecodedJobEvent::ReviseRateFinalized(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_FINALIZED: Decode failure")).map_err(|_| JobResult::Internal)?)),
         _ => {
-            error!(topic = ?event.0, "Unknown event");
+            error!(topic = ?event_name, "Unknown event");
             return Err(JobResult::Failed);
         },
     }
@@ -1097,7 +1131,7 @@ impl<'a> JobState<'a> {
 // Registry to track jobs
 #[derive(Clone)]
 pub struct JobRegistry {
-    active_jobs: Arc<Mutex<HashMap<String, Sender<(String, Value)>>>>,
+    active_jobs: Arc<Mutex<HashMap<String, Sender<JobLog>>>>,
     terminated_jobs: Arc<Mutex<HashSet<String>>>,
     save_path: String,
 }
@@ -1174,11 +1208,10 @@ impl JobRegistry {
 mod tests {
     use alloy_primitives::hex::FromHex;
     use alloy_primitives::{B256, U256};
-    use serde_json::Value;
     use tokio::sync::mpsc;
     use tokio::time::{sleep, Duration, Instant};
 
-    use crate::market;
+    use crate::market::{self, JobLog};
     use crate::test::{
         self, compute_address_word, compute_instance_id, Action, TestAws, TestAwsOutcome,
     };
@@ -1216,12 +1249,13 @@ mod tests {
         let context = TestSystemContext { start: start_time };
 
         let job_num = B256::from_hex(&job_manager_params.job_id.id).unwrap();
-        let job_logs: Vec<(u64, (String, Value))> = logs
+        let job_logs: Vec<(u64, JobLog)> = logs
             .into_iter()
-            .map(|x| (x.0, test::get_event(x.1, job_num)))
+            .enumerate()
+            .map(|x| (x.1 .0, test::get_event(x.1 .1, (x.0 as i64, 0), job_num)))
             .collect();
 
-        let (tx, rx) = mpsc::channel::<(String, Value)>(10);
+        let (tx, rx) = mpsc::channel::<JobLog>(10);
         let mut aws: TestAws = Default::default();
         let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string())
             .await
