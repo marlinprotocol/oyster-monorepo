@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use alloy::hex::ToHexExt;
@@ -10,11 +11,13 @@ use alloy::rpc::types::Filter;
 use alloy::sol;
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::reqwest::Url;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::schema::JobEventRecord;
 use indexer_framework::{events::*, SaturatingConvert};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
@@ -24,6 +27,8 @@ sol!(
     MarketV1Contract,
     "./abi/MarketV1min.json"
 );
+
+const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct ArbLog(pub Log);
@@ -151,7 +156,7 @@ impl ChainHandler for ArbProvider {
         start_block: u64,
         end_block: u64,
     ) -> Result<BTreeMap<u64, Vec<ArbLog>>> {
-        let provider = RootProvider::<Ethereum>::new_http(self.rpc_url.clone());
+        let provider = Arc::new(RootProvider::<Ethereum>::new_http(self.rpc_url.clone()));
         let logs = Retry::spawn(
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
@@ -180,10 +185,45 @@ impl ChainHandler for ArbProvider {
         )
         .await?;
 
-        let mut block_logs: BTreeMap<u64, Vec<ArbLog>> = BTreeMap::new();
+        let block_nums: HashSet<u64> = logs.iter().filter_map(|log| log.block_number).collect();
+        let mut block_timestamp_map = HashMap::new();
+        let semaphore = Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY));
+        let mut set: JoinSet<Result<(u64, u64)>> = JoinSet::new();
 
-        for log in logs {
+        for block in block_nums {
+            let client = provider.clone();
+            let Ok(permit) = semaphore.clone().acquire_owned().await else {
+                continue;
+            };
+
+            set.spawn(async move {
+                let _permit = permit;
+
+                let block_data = Retry::spawn(
+                    ExponentialBackoff::from_millis(500)
+                        .max_delay(Duration::from_secs(10))
+                        .map(jitter),
+                    || async { client.get_block_by_number(block.into()).await },
+                )
+                .await?
+                .ok_or(anyhow!("Block data is empty!"))?;
+
+                return Ok((block, block_data.header.timestamp));
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            let Ok(Ok(result)) = res else {
+                continue;
+            };
+
+            block_timestamp_map.insert(result.0, result.1);
+        }
+
+        let mut block_logs: BTreeMap<u64, Vec<ArbLog>> = BTreeMap::new();
+        for mut log in logs {
             if let Some(block_number) = log.block_number {
+                log.block_timestamp = block_timestamp_map.get(&block_number).cloned();
                 block_logs
                     .entry(block_number)
                     .or_insert_with(Vec::new)
