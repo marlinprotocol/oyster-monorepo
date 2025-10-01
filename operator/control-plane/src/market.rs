@@ -7,11 +7,9 @@ use alloy_primitives::U256;
 use anyhow::{anyhow, Context, Result};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::TimeDelta;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::types::chrono::{DateTime, TimeZone, Utc};
 use sqlx::{FromRow, PgPool};
 use tokio::fs;
 use tokio::sync::mpsc::{self, Sender};
@@ -21,7 +19,7 @@ use tracing::{error, info, info_span, Instrument};
 
 // IMPORTANT: do not import SystemTime, use a SystemContext
 
-// Trait to encapsulate behaviour that should be simulated in tests
+// Trait to encapsulate behavior that should be simulated in tests
 trait SystemContext {
     fn now_timestamp(&self) -> Duration;
 }
@@ -77,7 +75,7 @@ pub trait InfraProvider {
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
-impl<'a, T> InfraProvider for &'a mut T
+impl<T> InfraProvider for &mut T
 where
     T: InfraProvider + Send + Sync,
 {
@@ -146,19 +144,9 @@ pub struct GBRateCard {
 }
 
 #[derive(Debug, FromRow)]
-struct JobEvent {
-    pub block_id: i64,
-    pub event_seq: i64,
-    pub event_name: String,
-    pub event_data: Value,
+pub struct JobEvent {
+    pub id: i64,
     pub job_id: String,
-    pub indexer_process_time: DateTime<Utc>,
-}
-
-#[derive(Debug)]
-pub struct JobLog {
-    pub block_id: i64,
-    pub event_seq: i64,
     pub event_name: String,
     pub event_data: Value,
 }
@@ -266,10 +254,7 @@ pub async fn run(
     // start from scratch in case of connection errors
     // trying to implicitly resume connections can cause issues
 
-    let mut last_seen: DateTime<Utc> = Utc
-        .timestamp_opt(0, 0)
-        .single()
-        .expect("Timestamp 0 should always be a valid DateTime<Utc>");
+    let mut last_processed_id: i64 = -1;
     loop {
         info!("Connecting to DB endpoint...");
         let db_pool = match PgPoolOptions::new()
@@ -300,7 +285,7 @@ pub async fn run(
             let job_events;
 
             loop {
-                match fetch_job_events(&db_pool, last_seen).await {
+                match fetch_job_events(&db_pool, last_processed_id).await {
                     Ok(events) => {
                         job_events = events;
                         break;
@@ -331,7 +316,7 @@ pub async fn run(
                         // Skip if this job has already been terminated
                         if job_registry.is_job_terminated(&job_id.id) {
                             info!("Skipping already terminated job: {}", job_id.id);
-                            last_seen = event.indexer_process_time;
+                            last_processed_id = event.id;
                             continue;
                         }
 
@@ -342,11 +327,11 @@ pub async fn run(
                             .contains_key(&job_id.id)
                         {
                             info!("Skipping already running job: {}", job_id.id);
-                            last_seen = event.indexer_process_time;
+                            last_processed_id = event.id;
                             continue;
                         }
 
-                        let (tx, rx) = mpsc::channel::<JobLog>(100);
+                        let (tx, rx) = mpsc::channel::<JobEvent>(100);
                         job_registry
                             .active_jobs
                             .lock()
@@ -378,47 +363,35 @@ pub async fn run(
                     }
                 };
 
+                let event_id = event.id;
+
                 if let Some(sender) = sender {
-                    if let Err(err) = sender
-                        .send(JobLog {
-                            block_id: event.block_id,
-                            event_seq: event.event_seq,
-                            event_name: event.event_name,
-                            event_data: event.event_data,
-                        })
-                        .await
-                    {
+                    if let Err(err) = sender.send(event).await {
                         // should not happen in reality
-                        // just in case something like this happens so have added
-                        // (block_id, event_seq) based condition in job_manager to handle repetitive logs
                         error!(?err, "Channel sender error");
                         break 'run;
                     }
                 }
 
-                last_seen = event.indexer_process_time;
+                last_processed_id = event_id;
             }
-
-            last_seen = last_seen
-                .checked_add_signed(TimeDelta::microseconds(1))
-                .unwrap_or(last_seen)
         }
     }
 }
 
 async fn fetch_job_events(
     pool: &PgPool,
-    last_seen: DateTime<Utc>,
+    last_processed_id: i64,
 ) -> Result<Vec<JobEvent>, sqlx::Error> {
     let events = sqlx::query_as::<_, JobEvent>(
         r#"
-        SELECT block_id, event_seq, event_name, event_data, job_id, indexer_process_time
+        SELECT id, job_id, event_name, event_data
         FROM job_events
-        WHERE indexer_process_time >= $1
-        ORDER BY block_id ASC, event_seq ASC
+        WHERE id > $1
+        ORDER BY id ASC
         "#,
     )
-    .bind(last_seen)
+    .bind(last_processed_id)
     .fetch_all(pool)
     .await?;
 
@@ -428,7 +401,7 @@ async fn fetch_job_events(
 // manage the complete lifecycle of a job
 async fn job_manager(
     context: impl SystemContext + Send + Sync,
-    mut events_stream: mpsc::Receiver<JobLog>,
+    mut events_stream: mpsc::Receiver<JobEvent>,
     mut infra_provider: impl InfraProvider + Send + Sync,
     job_id: JobId,
     allowed_regions: &[String],
@@ -449,8 +422,7 @@ async fn job_manager(
     // usually tracks the result of the last log processed
     let mut job_result = JobResult::Success;
 
-    let mut cur_block_id: i64 = -1;
-    let mut cur_event_seq: i64 = -1;
+    let mut cur_id: i64 = -1;
 
     // The processing loop follows this:
     // Keep processing events till you hit an unsuccessful processing
@@ -487,16 +459,11 @@ async fn job_manager(
             log = events_stream.recv(), if job_result == JobResult::Success => {
                 job_result = match log {
                     Some(log) => {
-                        if log.block_id < cur_block_id {
+                        if log.id <= cur_id {
                             return JobResult::Success;
                         }
 
-                        if log.block_id == cur_block_id && log.event_seq <= cur_event_seq {
-                            return JobResult::Success;
-                        }
-
-                        cur_block_id = log.block_id;
-                        cur_event_seq = log.event_seq;
+                        cur_id = log.id;
 
                         match parse_event(log.event_name, log.event_data) {
                             Ok(event) => state.process_event(event, rates, gb_rates, address_whitelist, address_blacklist),
@@ -569,7 +536,7 @@ fn parse_event(event_name: String, event_data: Value) -> Result<DecodedJobEvent,
         "JobReviseRateFinalized" => Ok(DecodedJobEvent::ReviseRateFinalized(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_FINALIZED: Decode failure")).map_err(|_| JobResult::Internal)?)),
         _ => {
             error!(topic = ?event_name, "Unknown event");
-            return Err(JobResult::Failed);
+            Err(JobResult::Failed)
         },
     }
 }
@@ -914,11 +881,9 @@ impl<'a> JobState<'a> {
                     "SETTLED",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
-            DecodedJobEvent::Closed(_) => {
-                return JobResult::Done;
-            }
+            DecodedJobEvent::Closed(_) => JobResult::Done,
             DecodedJobEvent::Deposited(event) => {
                 info!(
                     id = event.job_id,
@@ -939,7 +904,7 @@ impl<'a> JobState<'a> {
                     "DEPOSITED",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
             DecodedJobEvent::Withdrew(event) => {
                 info!(
@@ -961,7 +926,7 @@ impl<'a> JobState<'a> {
                     "WITHDREW",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
             DecodedJobEvent::ReviseRateInitiated(event) => {
                 info!(
@@ -990,7 +955,7 @@ impl<'a> JobState<'a> {
                     "JOB_REVISE_RATE_INITIATED",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
             DecodedJobEvent::ReviseRateCancelled(event) => {
                 info!(
@@ -1009,7 +974,7 @@ impl<'a> JobState<'a> {
                     "JOB_REVISE_RATE_CANCELLED",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
             DecodedJobEvent::ReviseRateFinalized(event) => {
                 info!(
@@ -1037,7 +1002,7 @@ impl<'a> JobState<'a> {
                     "JOB_REVISE_RATE_FINALIZED",
                 );
 
-                return JobResult::Success;
+                JobResult::Success
             }
             DecodedJobEvent::MetadataUpdated(event) => {
                 info!(id = event.job_id, event.new_metadata, "METADATA_UPDATED");
@@ -1052,7 +1017,7 @@ impl<'a> JobState<'a> {
                     self.schedule_launch(0);
                 }
 
-                return JobResult::Success;
+                JobResult::Success
             }
         }
     }
@@ -1131,7 +1096,7 @@ impl<'a> JobState<'a> {
 // Registry to track jobs
 #[derive(Clone)]
 pub struct JobRegistry {
-    active_jobs: Arc<Mutex<HashMap<String, Sender<JobLog>>>>,
+    active_jobs: Arc<Mutex<HashMap<String, Sender<JobEvent>>>>,
     terminated_jobs: Arc<Mutex<HashSet<String>>>,
     save_path: String,
 }
@@ -1211,7 +1176,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::{sleep, Duration, Instant};
 
-    use crate::market::{self, JobLog};
+    use crate::market::{self, JobEvent};
     use crate::test::{
         self, compute_address_word, compute_instance_id, Action, TestAws, TestAwsOutcome,
     };
@@ -1249,13 +1214,13 @@ mod tests {
         let context = TestSystemContext { start: start_time };
 
         let job_num = B256::from_hex(&job_manager_params.job_id.id).unwrap();
-        let job_logs: Vec<(u64, JobLog)> = logs
+        let job_logs: Vec<(u64, JobEvent)> = logs
             .into_iter()
             .enumerate()
-            .map(|x| (x.1 .0, test::get_event(x.1 .1, (x.0 as i64, 0), job_num)))
+            .map(|x| (x.1 .0, test::get_event(x.1 .1, x.0 as i64, job_num)))
             .collect();
 
-        let (tx, rx) = mpsc::channel::<JobLog>(10);
+        let (tx, rx) = mpsc::channel::<JobEvent>(10);
         let mut aws: TestAws = Default::default();
         let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string())
             .await
