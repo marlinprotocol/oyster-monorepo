@@ -53,7 +53,7 @@ impl Repository {
         )
         .fetch_all(&self.pool)
         .await
-        .context("Failed to fetch the active job ids")?;
+        .context("Failed to query the active job ids from 'job_events' table")?;
 
         let mut active_jobs_set = HashSet::with_capacity(5000);
         active_jobs_set.extend(active_jobs);
@@ -65,8 +65,26 @@ impl Repository {
         let row = sqlx::query("SELECT last_processed_block FROM indexer_state WHERE id = 1")
             .fetch_one(&self.pool)
             .await
-            .context("Failed to fetch 'last_processed_block'")?;
+            .context("Failed to query last processed block from 'indexer_state' table")?;
         Ok(row.get::<i64, _>("last_processed_block"))
+    }
+
+    pub async fn update_state_atomic(&self, block: i64) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE indexer_state
+            SET last_processed_block = $1, updated_at = now()
+            WHERE id = 1
+            "#,
+        )
+        .bind(block)
+        .execute(&self.pool)
+        .await
+        .context(
+            "Failed to execute update query for last processed block in 'indexer state' table",
+        )?;
+
+        Ok(result.rows_affected())
     }
 
     pub async fn insert_batch(
@@ -74,10 +92,21 @@ impl Repository {
         records: Vec<JobEventRecord>,
         block: i64,
     ) -> Result<(u64, u64)> {
-        let mut tx = self.pool.begin().await?;
-        let inserted_batch = self.insert_events(&mut tx, records.clone()).await?;
-        let updated = self.update_state(&mut tx, block).await?;
-        tx.commit().await?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("Failed to begin transaction for batch inserting events")?;
+        let inserted_batch = self
+            .insert_events(&mut tx, records.clone())
+            .await
+            .context("Transaction failed for batch inserting records into 'job_events' table")?;
+        let updated = self.update_state(&mut tx, block).await.context(
+            "Transaction failed for updating last processed block in 'indexer state' table",
+        )?;
+        tx.commit()
+            .await
+            .context("Failed to commit the batch insert transaction")?;
         Ok((inserted_batch, updated))
     }
 
@@ -90,50 +119,32 @@ impl Repository {
             return Ok(0);
         }
 
-        let mut block_ids = Vec::with_capacity(records.len());
-        let mut tx_hashes = Vec::with_capacity(records.len());
-        let mut event_seqs = Vec::with_capacity(records.len());
-        let mut block_timestamps = Vec::with_capacity(records.len());
-        let mut senders = Vec::with_capacity(records.len());
+        let mut job_ids = Vec::with_capacity(records.len());
         let mut event_names = Vec::with_capacity(records.len());
         let mut event_datas = Vec::with_capacity(records.len());
-        let mut job_ids = Vec::with_capacity(records.len());
 
         for record in records {
-            block_ids.push(record.block_id);
-            tx_hashes.push(record.tx_hash);
-            event_seqs.push(record.event_seq);
-            block_timestamps.push(record.block_timestamp);
-            senders.push(record.sender);
+            job_ids.push(record.job_id);
             event_names.push(record.event_name);
             event_datas.push(record.event_data);
-            job_ids.push(record.job_id);
         }
 
         let result = sqlx::query(
             r#"
             INSERT INTO job_events (
-                block_id, tx_hash, event_seq,
-                block_timestamp, sender, event_name,
-                event_data, job_id
+                job_id, event_name, event_data
             )
             SELECT * FROM UNNEST(
-                $1::BIGINT[], $2::VARCHAR[], $3::BIGINT[], $4::TIMESTAMPTZ[], $5::VARCHAR[],
-                $6::VARCHAR[], $7::JSONB[], $8::VARCHAR[]
+                $1::VARCHAR[], $2::VARCHAR[], $3::JSONB[]
             )
             "#,
         )
-        .bind(&block_ids)
-        .bind(&tx_hashes)
-        .bind(&event_seqs)
-        .bind(&block_timestamps)
-        .bind(&senders)
+        .bind(&job_ids)
         .bind(&event_names)
         .bind(&event_datas)
-        .bind(&job_ids)
         .execute(&mut **tx)
         .await
-        .context("Failed to batch insert job events")?;
+        .context("Failed to execute batch insert query for job event records")?;
 
         Ok(result.rows_affected())
     }
@@ -149,23 +160,7 @@ impl Repository {
         .bind(block)
         .execute(&mut **tx)
         .await
-        .context("Failed to update indexer state")?;
-
-        Ok(result.rows_affected())
-    }
-
-    pub async fn update_state_atomic(&self, block: i64) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE indexer_state
-            SET last_processed_block = $1, updated_at = now()
-            WHERE id = 1
-            "#,
-        )
-        .bind(block)
-        .execute(&self.pool)
-        .await
-        .context("Failed to update indexer state")?;
+        .context("Failed to execute update query for last processed block")?;
 
         Ok(result.rows_affected())
     }

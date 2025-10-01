@@ -30,12 +30,18 @@ use async_trait::async_trait;
 use indexer_framework::chain::ChainHandler;
 use indexer_framework::events::JobEvent;
 
+pub trait FromLog: Sized {
+    fn from_log(&self) -> Result<Option<JobEvent>>;
+}
+
 pub struct MyChainHandler {
     // e.g., RPC client here
 }
 
 #[async_trait]
 impl ChainHandler for MyChainHandler {
+    type RawLog: FromLog;
+
     async fn fetch_latest_block(&self) -> anyhow::Result<u64> {
         // Call your RPC endpoint
         Ok(12345)
@@ -45,19 +51,9 @@ impl ChainHandler for MyChainHandler {
         &self,
         start_block: u64,
         end_block: u64,
-    ) -> anyhow::Result<std::collections::BTreeMap<u64, Vec<JobEvent>>> {
+    ) -> anyhow::Result<std::collections::BTreeMap<u64, Vec<Self::RawLog>>> {
         // Query logs/events, group them by block
         Ok(std::collections::BTreeMap::new())
-    }
-
-    fn process_logs_in_block(
-        &self,
-        block_number: u64,
-        logs: &[JobEvent],
-        active_job_ids: &mut Vec<String>,
-    ) -> anyhow::Result<Vec<JobEvent>> {
-        // Turn raw logs into JobEvent records
-        Ok(Vec::new())
     }
 }
 ```

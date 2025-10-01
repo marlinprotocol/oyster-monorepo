@@ -1,7 +1,7 @@
 pub mod chain;
 pub mod events;
-pub mod repository;
-pub mod schema;
+pub(crate) mod repository;
+pub(crate) mod schema;
 
 use std::cmp::min;
 use std::time::Duration;
@@ -58,22 +58,29 @@ const BATCH_THRESHOLD: usize = 100;
 // TODO: add custom errors
 #[instrument(level = "info", skip_all, parent = None)]
 pub async fn run(
-    repo: Repository,
+    db_url: String,
     rpc_client: impl ChainHandler,
+    provider: String,
     start_block: Option<i64>,
     range_size: u64,
 ) -> Result<()> {
+    let repo = Repository::new(db_url)
+        .await
+        .context("Failed to initialize the Repository from the provided URL")?;
+
     info!("Applying pending migrations");
-    repo.apply_migrations().await?;
+    repo.apply_migrations()
+        .await
+        .context("Failed to apply pending migrations to the DB")?;
     info!("Migrations applied");
 
     if let Some(start_block) = start_block {
         let updated = repo
             .update_state_atomic(start_block)
             .await
-            .context("Failed to update start_block in the DB")?;
+            .context("Failed to update start block in the DB")?;
 
-        debug!("Start block Updated: {}", updated == 1);
+        debug!("Start block updated: {}", updated == 1);
     }
 
     if range_size == 0 {
@@ -99,7 +106,7 @@ pub async fn run(
         repo.get_active_jobs().await
     })
     .await
-    .context("Failed to fetch active job IDs")?;
+    .context("Failed to fetch active job IDs from the DB")?;
 
     loop {
         let latest_block = rpc_client
@@ -112,7 +119,11 @@ pub async fn run(
 
         if latest_block_i64 < last_processed_block_id {
             // warn!(db_block = last_processed_block_id, rpc_block = latest_block_i64, "RPC is behind DB (possible rollback)");
-            return Err(anyhow!("RPC is behind DB (possible rollback)"));
+            return Err(anyhow!(
+                "RPC {} is behind DB {} (possible rollback)",
+                latest_block_i64,
+                last_processed_block_id
+            ));
         }
 
         if latest_block_i64 == last_processed_block_id {
@@ -128,7 +139,7 @@ pub async fn run(
         let block_logs = rpc_client
             .fetch_logs_and_group_by_block(start_block, end_block)
             .await
-            .context("Failed to fetch logs from RPC")?;
+            .context("Failed to fetch logs from the chain")?;
         info!(start_block, end_block, "Processing block range");
 
         let mut end_block_num = last_processed_block_id;
@@ -138,12 +149,12 @@ pub async fn run(
             let empty = Vec::new();
 
             let records = rpc_client
-                .process_logs_in_block(
-                    block_number,
+                .transform_block_logs_into_records(
+                    &provider,
                     block_logs.get(&block_number).unwrap_or(&empty),
                     &mut active_job_ids,
                 )
-                .context("Failed to process logs in block")?;
+                .context("Failed to transform block logs into DB records")?;
 
             debug!(
                 block_number,

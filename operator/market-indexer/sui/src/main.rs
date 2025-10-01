@@ -3,10 +3,10 @@ mod sui;
 use anyhow::{Context, Result};
 use clap::{command, Parser};
 use dotenvy::dotenv;
-use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 use crate::sui::SuiProvider;
-use indexer_framework::repository::Repository;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -44,37 +44,41 @@ struct Args {
     range_size: u64,
 }
 
-async fn run() -> Result<()> {
-    let args = Args::parse();
-
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-
-    let provider = SuiProvider {
-        remote_checkpoint_url: args.remote_checkpoint_url,
-        grpc_url: args.grpc_url,
-        rpc_username: args.grpc_username,
-        rpc_password: args.grpc_password,
-        provider: args.provider,
-        package_id: args.package_id,
-    };
-
-    let repository = Repository::new(database_url).await?;
-
-    indexer_framework::run(repository, provider, args.start_block, args.range_size).await
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
 
     let mut filter = EnvFilter::new("info");
     if let Ok(var) = std::env::var("RUST_LOG") {
-        filter = filter.add_directive(var.parse()?);
+        filter = filter.add_directive(
+            var.parse()
+                .context("Failed to parse the RUST_LOG value set in environment")?,
+        );
     }
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .with_env_filter(filter)
         .init();
 
-    run().await.context("run error")
+    let args = Args::parse();
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let rpc_client = SuiProvider {
+        remote_checkpoint_url: args.remote_checkpoint_url,
+        grpc_url: args.grpc_url,
+        rpc_username: args.grpc_username,
+        rpc_password: args.grpc_password,
+        package_id: args.package_id,
+    };
+
+    indexer_framework::run(
+        database_url,
+        rpc_client,
+        args.provider,
+        args.start_block,
+        args.range_size,
+    )
+    .await
+    .context("Indexer run error")
 }

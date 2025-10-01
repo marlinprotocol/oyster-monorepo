@@ -3,7 +3,6 @@ mod arb;
 use anyhow::{Context, Result};
 use clap::{command, Parser};
 use dotenvy::dotenv;
-use indexer_framework::repository::Repository;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -33,34 +32,44 @@ struct Args {
     range_size: u64,
 }
 
-async fn run() -> Result<()> {
-    let args = Args::parse();
-
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-
-    let provider = ArbProvider {
-        rpc_url: args.rpc.parse()?,
-        contract: args.contract.parse()?,
-        provider: args.provider.parse()?,
-    };
-
-    let repository = Repository::new(database_url).await?;
-
-    indexer_framework::run(repository, provider, args.start_block, args.range_size).await
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
 
     let mut filter = EnvFilter::new("info");
     if let Ok(var) = std::env::var("RUST_LOG") {
-        filter = filter.add_directive(var.parse()?);
+        filter = filter.add_directive(
+            var.parse()
+                .context("Failed to parse the RUST_LOG value set in environment")?,
+        );
     }
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
         .with_env_filter(filter)
         .init();
 
-    run().await.context("run error")
+    let args = Args::parse();
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    let rpc_client = ArbProvider {
+        rpc_url: args
+            .rpc
+            .parse()
+            .context("Failed to parse provided RPC URL")?,
+        contract: args
+            .contract
+            .parse()
+            .context("Failed to parse contract into ethereum address")?,
+    };
+
+    indexer_framework::run(
+        database_url,
+        rpc_client,
+        args.provider,
+        args.start_block,
+        args.range_size,
+    )
+    .await
+    .context("Indexer run error")
 }

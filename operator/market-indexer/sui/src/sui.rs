@@ -1,10 +1,12 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::U256;
-use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use anyhow::{anyhow, Context, Result};
+use indexer_framework::chain::{ChainHandler, FromLog};
+use indexer_framework::events::{self, JobEvent};
+use indexer_framework::SaturatingConvert;
 use serde::Deserialize;
 use sui_rpc_api::client::AuthInterceptor;
 use sui_rpc_api::Client;
@@ -17,15 +19,10 @@ use tokio::time::timeout;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
-use indexer_framework::chain::{ChainHandler, FromLog};
-use indexer_framework::events::{self, JobEvent};
-use indexer_framework::schema::JobEventRecord;
-use indexer_framework::SaturatingConvert;
-
 const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Sui market program logs
+/// Sui oyster market program events
 #[derive(Debug, Deserialize)]
 struct JobOpened {
     job_id: u128,
@@ -86,25 +83,23 @@ struct JobReviseRateFinalized {
     new_rate: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SuiLog {
-    pub transaction_digest: String,
-    pub checkpoint_timestamp_ms: i64,
-    pub sender: String,
     pub type_: String,
     pub contents: Vec<u8>,
 }
 
 impl FromLog for SuiLog {
-    fn from_log(&self) -> Result<Option<JobEvent>> {
+    fn to_job_event(&self) -> Result<Option<JobEvent>> {
         let Some(event_name) = self.type_.split("::").last() else {
             // Invalid event type, skip
             return Ok(None);
         };
 
-        return match event_name {
+        match event_name {
             "JobOpened" => {
-                let decoded_data: JobOpened = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobOpened = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobOpened event data")?;
 
                 Ok(Some(JobEvent::Opened(events::JobOpened {
                     job_id: decoded_data.job_id.to_string(),
@@ -117,14 +112,16 @@ impl FromLog for SuiLog {
                 })))
             }
             "JobClosed" => {
-                let decoded_data: JobClosed = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobClosed = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobClosed event data")?;
 
                 Ok(Some(JobEvent::Closed(events::JobClosed {
                     job_id: decoded_data.job_id.to_string(),
                 })))
             }
             "JobDeposited" => {
-                let decoded_data: JobDeposited = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobDeposited = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobDeposited event data")?;
 
                 Ok(Some(JobEvent::Deposited(events::JobDeposited {
                     job_id: decoded_data.job_id.to_string(),
@@ -133,7 +130,8 @@ impl FromLog for SuiLog {
                 })))
             }
             "JobSettled" => {
-                let decoded_data: JobSettled = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobSettled = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobSettled event data")?;
 
                 Ok(Some(JobEvent::Settled(events::JobSettled {
                     job_id: decoded_data.job_id.to_string(),
@@ -142,7 +140,8 @@ impl FromLog for SuiLog {
                 })))
             }
             "JobMetadataUpdated" => {
-                let decoded_data: JobMetadataUpdated = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobMetadataUpdated = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobMetadataUpdated event data")?;
 
                 Ok(Some(JobEvent::MetadataUpdated(
                     events::JobMetadataUpdated {
@@ -152,7 +151,8 @@ impl FromLog for SuiLog {
                 )))
             }
             "JobWithdrew" => {
-                let decoded_data: JobWithdrew = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobWithdrew = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobWithdrew event data")?;
 
                 Ok(Some(JobEvent::Withdrew(events::JobWithdrew {
                     job_id: decoded_data.job_id.to_string(),
@@ -161,7 +161,8 @@ impl FromLog for SuiLog {
                 })))
             }
             "JobReviseRateInitiated" => {
-                let decoded_data: JobReviseRateInitiated = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobReviseRateInitiated = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobReviseRateInitiated event data")?;
 
                 Ok(Some(JobEvent::ReviseRateInitiated(
                     events::JobReviseRateInitiated {
@@ -171,7 +172,8 @@ impl FromLog for SuiLog {
                 )))
             }
             "JobReviseRateCancelled" => {
-                let decoded_data: JobReviseRateCancelled = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobReviseRateCancelled = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobReviseRateCancelled event data")?;
 
                 Ok(Some(JobEvent::ReviseRateCancelled(
                     events::JobReviseRateCancelled {
@@ -180,7 +182,8 @@ impl FromLog for SuiLog {
                 )))
             }
             "JobReviseRateFinalized" => {
-                let decoded_data: JobReviseRateFinalized = bcs::from_bytes(&self.contents)?;
+                let decoded_data: JobReviseRateFinalized = bcs::from_bytes(&self.contents)
+                    .context("Failed to bcs decode JobReviseRateFinalized event data")?;
 
                 Ok(Some(JobEvent::ReviseRateFinalized(
                     events::JobReviseRateFinalized {
@@ -189,8 +192,8 @@ impl FromLog for SuiLog {
                     },
                 )))
             }
-            _ => return Ok(None),
-        };
+            _ => Ok(None),
+        }
     }
 }
 
@@ -201,7 +204,6 @@ pub struct SuiProvider {
     pub rpc_username: Option<String>,
     pub rpc_password: Option<String>,
     pub package_id: String,
-    pub provider: String,
 }
 
 impl SuiProvider {
@@ -213,49 +215,24 @@ impl SuiProvider {
             Ok(Client::new(&self.grpc_url)?)
         }
     }
-
-    fn checkpoint_data_to_sui_logs(&self, checkpoint: CheckpointData) -> Vec<SuiLog> {
-        let mut logs = Vec::new();
-
-        for tx in checkpoint.transactions {
-            let Some(events) = tx.events else {
-                continue;
-            };
-
-            for event in events.data {
-                if event.package_id.to_string() != self.package_id {
-                    continue;
-                }
-
-                logs.push(SuiLog {
-                    transaction_digest: tx.transaction.digest().base58_encode(),
-                    checkpoint_timestamp_ms: checkpoint
-                        .checkpoint_summary
-                        .timestamp_ms
-                        .saturating_to(),
-                    sender: event.sender.to_string(),
-                    type_: event.type_.to_string(),
-                    contents: event.contents,
-                });
-            }
-        }
-
-        logs
-    }
 }
 
 impl ChainHandler for SuiProvider {
     type RawLog = SuiLog;
 
     async fn fetch_latest_block(&self) -> Result<u64> {
-        let provider = self.get_client()?;
+        let provider = self
+            .get_client()
+            .context("Failed to initialize gRPC client from the provided url and credentials")?;
         let current_checkpoint = Retry::spawn(
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
                 .map(jitter),
             || async { timeout(DEFAULT_REQUEST_TIMEOUT, provider.get_latest_checkpoint()).await },
         )
-        .await??;
+        .await
+        .context("Request timed out for fetching latest checkpoint")?
+        .context("Request failed for fetching latest checkpoint")?;
 
         Ok(current_checkpoint.sequence_number)
     }
@@ -265,14 +242,18 @@ impl ChainHandler for SuiProvider {
         start_block: u64,
         end_block: u64,
     ) -> Result<BTreeMap<u64, Vec<Self::RawLog>>> {
-        let provider = Arc::new(self.get_client()?);
+        let provider =
+            Arc::new(self.get_client().context(
+                "Failed to initialize gRPC client from the provided url and credentials",
+            )?);
         let semaphore = Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY));
-        let mut set: JoinSet<Result<(u64, CheckpointData)>> = JoinSet::new();
+        let mut set: JoinSet<Result<(u64, Vec<SuiLog>)>> = JoinSet::new();
 
         for seq_num in start_block..=end_block {
             let remote_checkpoint_url = self.remote_checkpoint_url.clone();
             let client = provider.clone();
-            let permit = semaphore.clone().acquire_owned().await?;
+            let package_id = self.package_id.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
 
             set.spawn(async move {
                 let _permit = permit;
@@ -288,7 +269,7 @@ impl ChainHandler for SuiProvider {
                 )
                 .await
                 {
-                    Ok(checkpoint) => Ok((seq_num, checkpoint?)),
+                    Ok(checkpoint) => Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint.context(format!("gRPC request failed for fetching checkpoint data at sequence {}", seq_num))?))),
                     Err(_) => {
                         let checkpoint = Retry::spawn(
                             ExponentialBackoff::from_millis(500)
@@ -297,24 +278,25 @@ impl ChainHandler for SuiProvider {
                             || async {
                                 let remote_client = reqwest::Client::builder()
                                     .timeout(DEFAULT_REQUEST_TIMEOUT)
-                                    .build()?;
+                                    .build().context("Failed to initialize reqwest client for remote call")?;
                                 let checkpoint_url =
                                     format!("{}/{}.chk", remote_checkpoint_url, seq_num);
 
-                                let response = remote_client.get(&checkpoint_url).send().await?;
+                                let response = remote_client.get(&checkpoint_url).send().await.context(format!("Failed to send checkpoint data request for sequence {} using remote url", seq_num))?;
                                 if response.status().is_success() {
-                                    Ok(response.bytes().await?)
+                                    Ok(response.bytes().await.context(format!("Failed to get response bytes for checkpoint data at sequence {} from remote call", seq_num))?)
                                 } else {
                                     Err(anyhow!(
-                                        "Checkpoint call failed with status: {}",
-                                        response.status()
+                                        "Remote checkpoint call for sequence {} failed with status: {}",
+                                        seq_num, response.status()
                                     ))
                                 }
                             },
                         )
-                        .await?;
+                        .await
+                        .context(format!("Failed to get checkpoint data for sequence {} using remote url", seq_num))?;
 
-                        Ok((seq_num, Blob::from_bytes(&checkpoint)?))
+                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, Blob::from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
                     }
                 }
             });
@@ -322,149 +304,35 @@ impl ChainHandler for SuiProvider {
 
         let mut block_logs: BTreeMap<u64, Vec<SuiLog>> = BTreeMap::new();
         while let Some(res) = set.join_next().await {
-            let result = res??;
-            block_logs.insert(result.0, self.checkpoint_data_to_sui_logs(result.1));
+            let result = res
+                .context("Failed to join task for fetching checkpoint data")?
+                .context("Failed to fetch checkpoint data using gRPC and remote storage")?;
+            block_logs.insert(result.0, result.1);
         }
 
         Ok(block_logs)
     }
+}
 
-    fn process_logs_in_block(
-        &self,
-        block_number: u64,
-        logs: &Vec<SuiLog>,
-        active_jobs: &mut HashSet<String>,
-    ) -> Result<Vec<JobEventRecord>> {
-        let mut job_event_records = vec![];
+fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> Vec<SuiLog> {
+    let mut logs = Vec::new();
 
-        for (seq, log) in logs.iter().enumerate() {
-            let Some(job_event) = log.from_log()? else {
+    for tx in checkpoint.transactions {
+        let Some(events) = tx.events else {
+            continue;
+        };
+
+        for event in events.data {
+            if event.package_id.to_string() != package_id {
                 continue;
-            };
+            }
 
-            // Match event signature and decode
-            let (job_id, event_name, event_data) = match job_event {
-                JobEvent::Opened(event) => {
-                    // Check if provider matches the target
-                    if event.provider != self.provider {
-                        continue;
-                    }
-
-                    active_jobs.insert(event.job_id.clone());
-                    (
-                        event.job_id.clone(),
-                        "JobOpened",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::Closed(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    active_jobs.remove(&event.job_id);
-
-                    (
-                        event.job_id.clone(),
-                        "JobClosed",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::Settled(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobSettled",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::Deposited(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobDeposited",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::Withdrew(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobWithdrew",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::ReviseRateInitiated(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobReviseRateInitiated",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::ReviseRateCancelled(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobReviseRateCancelled",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::ReviseRateFinalized(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobReviseRateFinalized",
-                        serde_json::to_value(event)?,
-                    )
-                }
-                JobEvent::MetadataUpdated(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
-
-                    (
-                        event.job_id.clone(),
-                        "JobMetadataUpdated",
-                        serde_json::to_value(event)?,
-                    )
-                }
-            };
-
-            // Build JobEventRecord
-            let record = JobEventRecord {
-                block_id: block_number.saturating_to(),
-                tx_hash: log.transaction_digest.clone(),
-                event_seq: seq.saturating_to(),
-                block_timestamp: DateTime::from_timestamp_millis(log.checkpoint_timestamp_ms)
-                    .unwrap_or(Utc::now()),
-                sender: log.sender.clone(),
-                event_name: event_name.to_string(),
-                event_data,
-                job_id: job_id,
-            };
-
-            job_event_records.push(record);
+            logs.push(SuiLog {
+                type_: event.type_.to_string(),
+                contents: event.contents,
+            });
         }
-
-        Ok(job_event_records)
     }
+
+    logs
 }
