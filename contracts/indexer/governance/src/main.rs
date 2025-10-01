@@ -8,6 +8,7 @@ use diesel_migrations::EmbeddedMigrations;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 
+use governance_indexer::constants::{set_governance_contract, set_market_contract};
 use governance_indexer::event_loop;
 use governance_indexer::start_from;
 use governance_indexer::AlloyProvider;
@@ -23,9 +24,13 @@ struct Args {
     #[arg(short, long)]
     rpc: String,
 
+    /// Governance contract
+    #[arg(short, long)]
+    governance_contract: String,
+
     /// Market contract
     #[arg(short, long)]
-    contract: String,
+    market_contract: String,
 
     /// Start block for log parsing
     #[arg(short, long)]
@@ -52,13 +57,20 @@ fn run() -> Result<()> {
         .expect("failed to apply migrations");
     info!("Applied pending migrations");
 
-    let mut provider = AlloyProvider {
+    let governance_contract = args.governance_contract.parse()?;
+    let market_contract = args.market_contract.parse()?;
+
+    set_governance_contract(governance_contract);
+    set_market_contract(market_contract);
+
+    let contracts = vec![governance_contract, market_contract];
+    let provider = AlloyProvider {
         url: args.rpc.parse()?,
-        contract: args.contract.parse()?,
+        contracts,
     };
     let is_start_set = start_from(&mut conn, args.start_block)?;
     debug!("is_start_set: {}", is_start_set);
-    event_loop(&mut conn, &mut provider, args.range_size)
+    event_loop(&mut conn, provider, args.range_size)
 }
 
 fn main() -> Result<()> {

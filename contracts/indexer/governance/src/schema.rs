@@ -21,6 +21,8 @@ diesel::table! {
     proposals (id) {
         #[max_length = 66]
         id -> Bpchar,
+        #[max_length = 66]
+        job_id -> Nullable<Bpchar>,
         #[max_length = 42]
         proposer -> Bpchar,
         nonce -> Numeric,

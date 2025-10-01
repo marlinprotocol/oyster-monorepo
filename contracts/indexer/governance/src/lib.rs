@@ -1,3 +1,4 @@
+pub mod constants;
 mod handlers;
 mod schema;
 
@@ -30,7 +31,7 @@ pub trait LogsProvider {
 #[derive(Clone)]
 pub struct AlloyProvider {
     pub url: Url,
-    pub contract: Address,
+    pub contracts: Vec<Address>,
 }
 
 impl LogsProvider for AlloyProvider {
@@ -49,6 +50,7 @@ impl LogsProvider for AlloyProvider {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
+        let addresses = self.contracts.clone();
         Ok(rt.block_on(
             alloy::providers::ProviderBuilder::new()
                 .on_http(self.url.clone())
@@ -56,7 +58,7 @@ impl LogsProvider for AlloyProvider {
                     &Filter::new()
                         .from_block(start_block)
                         .to_block(end_block)
-                        .address(self.contract),
+                        .address(addresses),
                 ),
         )?)
     }
@@ -80,7 +82,7 @@ impl LogsProvider for AlloyProvider {
 #[instrument(level = "info", skip_all, parent = None)]
 pub fn event_loop(
     conn: &mut PgConnection,
-    provider: &mut impl LogsProvider,
+    mut provider: impl LogsProvider,
     range_size: u64,
 ) -> Result<()> {
     // fetch last updated block from the db
@@ -135,7 +137,7 @@ pub fn event_loop(
         // using a temporary tokio runtime is a possibility
         conn.transaction(|conn| {
             for log in logs {
-                handle_log(conn, log, provider).context("failed to handle log")?;
+                handle_log(conn, log).context("failed to handle log")?;
             }
             diesel::update(schema::sync::table)
                 .set(schema::sync::block.eq(end_block as i64))

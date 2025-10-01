@@ -1709,6 +1709,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "base64",
  "bigdecimal",
  "clap",
  "diesel",
@@ -1716,6 +1717,7 @@ dependencies = [
  "dotenvy",
  "ethp",
  "openssl",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

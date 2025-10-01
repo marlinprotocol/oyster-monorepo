@@ -73,11 +73,12 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
     );
 
     // target sql:
-    // INSERT INTO proposals (id, proposer, nonce, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time, outcome)
-    // VALUES ("<id>", "<proposer>", "<nonce>", "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>", "PENDING");
+    // INSERT INTO proposals (id, job_id, proposer, nonce, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time, outcome)
+    // VALUES ("<id>", NULL, "<proposer>", "<nonce>", "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>", "PENDING");
     diesel::insert_into(proposals::table)
         .values((
             proposals::id.eq(&proposal_id),
+            proposals::job_id.eq(None::<String>),
             proposals::proposer.eq(&proposer),
             proposals::nonce.eq(&nonce),
             proposals::title.eq(&title),
