@@ -10,7 +10,7 @@ anyhow = "1.0.95"
 bcs = "0.1.6"
 clap = { version = "4.5.23", features = ["derive"] }
 dotenvy = "0.15.7"
-indexer-framework = { version = "0.1.0", path = "../framework" }
+indexer-framework = { git = "https://github.com/marlinprotocol/oyster-monorepo.git", branch = "master", package = "indexer-framework" }
 reqwest = "0.12.23"
 serde = { version = "1.0.217", features = ["derive"] }
 sui_types = { git = "https://github.com/mystenlabs/sui/", package = "sui-types", rev = "mainnet-v1.56.2"}

@@ -148,6 +148,12 @@
       networking.tcp-proxy = import ./networking/tcp-proxy {
         inherit nixpkgs systemConfig fenix naersk;
       };
+      operator.arb-indexer = import ./operator/market-indexer/arb {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
+      operator.sui-indexer = import ./operator/market-indexer/sui {
+        inherit nixpkgs systemConfig fenix naersk;
+      };
       operator.control-plane = import ./operator/control-plane {
         inherit nixpkgs systemConfig fenix naersk;
       };
