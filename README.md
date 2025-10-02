@@ -40,6 +40,9 @@ The repository is organized into projects:
 - [networking/iperf3-enclave](./networking/iperf3-enclave/): Enclave image that packages iperf3 for benchmarking purposes.
 - [operator/control-plane](./operator/control-plane/): Control plane that manages deployments on behalf of Oyster operators.
 - [operator/quota-monitor-aws](./operator/quota-monitor-aws/): Quota monitor to help Oyster operators manage AWS quotas and resource limits.
+- [operator/market-indexer/arb](./operator/market-indexer/arb/): Oyster market events indexer for ARB ONE chain.
+- [operator/market-indexer/sui](./operator/market-indexer/sui/): Oyster market events indexer for Sui chain.
+- [operator/market-indexer/framework](./operator/market-indexer/framework/): Generic oyster market events indexer framework with support for Postgres Database storage.
 - [operator/setup-aws](./operator/setup-aws/): Setup repository that helps operators prepare their AWS account for participating in Oyster.
 - [sdks/rs](./sdks/rs/): Oyster SDK written in Rust.
 - [sdks/ts](./sdks/ts/): Oyster SDK written in Typescript.
