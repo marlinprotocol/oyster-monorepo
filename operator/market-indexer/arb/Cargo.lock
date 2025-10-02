@@ -2377,6 +2377,7 @@ dependencies = [
 [[package]]
 name = "indexer-framework"
 version = "0.1.0"
+source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#8ca16c80793ac4d86cffd629a68e3c2fbf49ed3e"
 dependencies = [
  "alloy-primitives",
  "anyhow",
