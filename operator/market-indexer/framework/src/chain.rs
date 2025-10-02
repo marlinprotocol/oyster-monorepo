@@ -4,7 +4,7 @@ use std::future::Future;
 use anyhow::{Context, Result};
 
 use crate::events::JobEvent;
-use crate::schema::JobEventRecord;
+use crate::schema::{JobEventName, JobEventRecord};
 
 // Define trait for conversion from raw log to structured JobEvent
 pub trait FromLog: Sized {
@@ -24,142 +24,138 @@ pub trait ChainHandler {
         start_block: u64,
         end_block: u64,
     ) -> impl Future<Output = Result<BTreeMap<u64, Vec<Self::RawLog>>>> + Send;
+}
 
-    // Transform raw logs from a block into suitable DB records
-    fn transform_block_logs_into_records(
-        &self,
-        provider: &str,
-        logs: &[Self::RawLog],
-        active_jobs: &mut HashSet<String>,
-    ) -> Result<Vec<JobEventRecord>> {
-        let mut job_event_records = vec![];
+// Transform raw logs from a block into suitable DB records
+pub(crate) fn transform_block_logs_into_records(
+    provider: &str,
+    logs: &[impl FromLog],
+    active_jobs: &mut HashSet<String>,
+) -> Result<Vec<JobEventRecord>> {
+    let mut job_event_records = vec![];
 
-        for log in logs.iter() {
-            let Some(job_event) = log
-                .to_job_event()
-                .context("Failed to parse log into event structure")?
-            else {
-                continue;
-            };
+    for log in logs.iter() {
+        let Some(job_event) = log
+            .to_job_event()
+            .context("Failed to parse log into event structure")?
+        else {
+            continue;
+        };
 
-            match job_event {
-                JobEvent::Opened(event) => {
-                    // Check if provider matches the target
-                    if event.provider != provider {
-                        continue;
-                    }
-
-                    active_jobs.insert(event.job_id.clone());
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobOpened".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobOpened event data")?,
-                    });
+        match job_event {
+            JobEvent::Opened(event) => {
+                // Check if provider matches the target
+                if event.provider != provider {
+                    continue;
                 }
-                JobEvent::Closed(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    active_jobs.remove(&event.job_id);
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobClosed".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobClosed event data")?,
-                    });
+                active_jobs.insert(event.job_id.clone());
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::Opened,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobOpened event data")?,
+                });
+            }
+            JobEvent::Closed(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::Settled(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobSettled".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobSettled event data")?,
-                    });
+                active_jobs.remove(&event.job_id);
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::Closed,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobClosed event data")?,
+                });
+            }
+            JobEvent::Settled(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::Deposited(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobDeposited".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobDeposited event data")?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::Settled,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobSettled event data")?,
+                });
+            }
+            JobEvent::Deposited(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::Withdrew(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobWithdrew".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobWithdrew event data")?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::Deposited,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobDeposited event data")?,
+                });
+            }
+            JobEvent::Withdrew(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::ReviseRateInitiated(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobReviseRateInitiated".to_string(),
-                        event_data: serde_json::to_value(event).context(
-                            "Failed to JSON serialize JobReviseRateInitiated event data",
-                        )?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::Withdrew,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobWithdrew event data")?,
+                });
+            }
+            JobEvent::ReviseRateInitiated(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::ReviseRateCancelled(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobReviseRateCancelled".to_string(),
-                        event_data: serde_json::to_value(event).context(
-                            "Failed to JSON serialize JobReviseRateCancelled event data",
-                        )?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::ReviseRateInitiated,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobReviseRateInitiated event data")?,
+                });
+            }
+            JobEvent::ReviseRateCancelled(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::ReviseRateFinalized(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobReviseRateFinalized".to_string(),
-                        event_data: serde_json::to_value(event).context(
-                            "Failed to JSON serialize JobReviseRateFinalized event data",
-                        )?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::ReviseRateCancelled,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobReviseRateCancelled event data")?,
+                });
+            }
+            JobEvent::ReviseRateFinalized(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-                JobEvent::MetadataUpdated(event) => {
-                    if !active_jobs.contains(&event.job_id) {
-                        continue;
-                    }
 
-                    job_event_records.push(JobEventRecord {
-                        job_id: event.job_id.clone(),
-                        event_name: "JobMetadataUpdated".to_string(),
-                        event_data: serde_json::to_value(event)
-                            .context("Failed to JSON serialize JobMetadataUpdated event data")?,
-                    });
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::ReviseRateFinalized,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobReviseRateFinalized event data")?,
+                });
+            }
+            JobEvent::MetadataUpdated(event) => {
+                if !active_jobs.contains(&event.job_id) {
+                    continue;
                 }
-            };
-        }
 
-        Ok(job_event_records)
+                job_event_records.push(JobEventRecord {
+                    job_id: event.job_id.clone(),
+                    event_name: JobEventName::MetadataUpdated,
+                    event_data: serde_json::to_value(event)
+                        .context("Failed to JSON serialize JobMetadataUpdated event data")?,
+                });
+            }
+        };
     }
+
+    Ok(job_event_records)
 }

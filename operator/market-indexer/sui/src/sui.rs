@@ -3,21 +3,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::U256;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
+use indexer_framework::SaturatingConvert;
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::{self, JobEvent};
-use indexer_framework::SaturatingConvert;
 use serde::Deserialize;
-use sui_rpc_api::client::AuthInterceptor;
 use sui_rpc_api::Client;
+use sui_rpc_api::client::AuthInterceptor;
 use sui_storage::blob::Blob;
 use sui_types::base_types::SuiAddress;
 use sui_types::full_checkpoint_content::CheckpointData;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
 const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);

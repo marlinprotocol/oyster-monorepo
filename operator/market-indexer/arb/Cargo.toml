@@ -1,7 +1,7 @@
 [package]
 name = "oyster-arb-market-indexer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
@@ -15,7 +15,6 @@ tokio-retry = "0.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [profile.release]
-strip = true
 lto = true
 panic = "abort"
 codegen-units = 1

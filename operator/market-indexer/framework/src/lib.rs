@@ -6,13 +6,13 @@ pub(crate) mod schema;
 use std::cmp::min;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tokio::time::sleep;
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, info, instrument, trace};
 
-use chain::ChainHandler;
+use chain::{ChainHandler, transform_block_logs_into_records};
 use repository::Repository;
 
 // Define generic trait for safe integer conversions
@@ -45,11 +45,7 @@ impl SaturatingConvert<i64> for u64 {
 // i64 -> u64
 impl SaturatingConvert<u64> for i64 {
     fn saturating_to(self) -> u64 {
-        if self < 0 {
-            0
-        } else {
-            self as u64
-        }
+        if self < 0 { 0 } else { self as u64 }
     }
 }
 
@@ -148,13 +144,12 @@ pub async fn run(
         for block_number in start_block..=end_block {
             let empty = Vec::new();
 
-            let records = rpc_client
-                .transform_block_logs_into_records(
-                    &provider,
-                    block_logs.get(&block_number).unwrap_or(&empty),
-                    &mut active_job_ids,
-                )
-                .context("Failed to transform block logs into DB records")?;
+            let records = transform_block_logs_into_records(
+                &provider,
+                block_logs.get(&block_number).unwrap_or(&empty),
+                &mut active_job_ids,
+            )
+            .context("Failed to transform block logs into DB records")?;
 
             debug!(
                 block_number,

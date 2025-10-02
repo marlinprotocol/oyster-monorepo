@@ -1,7 +1,7 @@
 [package]
 name = "oyster-sui-market-indexer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
@@ -26,7 +26,6 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 # sui-storage = { path = "vendor/sui-storage" }
 
 [profile.release]
-strip = true
 lto = true
 panic = "abort"
 codegen-units = 1

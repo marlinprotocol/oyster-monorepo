@@ -6,16 +6,16 @@ use alloy::hex::ToHexExt;
 use alloy::network::Ethereum;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, RootProvider};
-use alloy::rpc::types::eth::Log;
 use alloy::rpc::types::Filter;
+use alloy::rpc::types::eth::Log;
 use alloy::sol;
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::reqwest::Url;
 use anyhow::{Context, Result};
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::*;
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
 sol!(
     #[allow(missing_docs)]
@@ -29,7 +29,7 @@ pub struct ArbLog(pub Log);
 
 impl FromLog for ArbLog {
     fn to_job_event(&self) -> Result<Option<JobEvent>> {
-        match &self.0.topic0() {
+        match self.0.topic0() {
             Some(&MarketV1Contract::JobOpened::SIGNATURE_HASH) => {
                 let decoded_data = MarketV1Contract::JobOpened::decode_log(&self.0.inner)
                     .context("Failed to abi decode JobOpened event data")?

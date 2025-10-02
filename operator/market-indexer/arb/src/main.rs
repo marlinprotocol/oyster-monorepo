@@ -1,10 +1,10 @@
 mod arb;
 
 use anyhow::{Context, Result};
-use clap::{command, Parser};
+use clap::{Parser, command};
 use dotenvy::dotenv;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
 
 use arb::ArbProvider;
 

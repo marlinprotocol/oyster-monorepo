@@ -42,13 +42,13 @@ impl Repository {
             r#"
             SELECT job_id
             FROM job_events
-            WHERE event_name = 'JobOpened'
+            WHERE event_name = 'Opened'
 
             EXCEPT
 
             SELECT job_id
             FROM job_events
-            WHERE event_name = 'JobClosed'
+            WHERE event_name = 'Closed'
             "#,
         )
         .fetch_all(&self.pool)
@@ -135,7 +135,7 @@ impl Repository {
                 job_id, event_name, event_data
             )
             SELECT * FROM UNNEST(
-                $1::VARCHAR[], $2::VARCHAR[], $3::JSONB[]
+                $1::VARCHAR[], $2::event_name[], $3::JSONB[]
             )
             "#,
         )
