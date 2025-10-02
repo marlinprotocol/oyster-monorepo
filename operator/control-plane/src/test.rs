@@ -9,9 +9,9 @@ use anyhow::{anyhow, Result};
 #[cfg(test)]
 use tokio::time::Instant;
 
-#[cfg(test)]
-use crate::market::JobEvent;
 use crate::market::{GBRateCard, InfraProvider, JobId, RateCard, RegionalRates};
+#[cfg(test)]
+use crate::market::{JobEvent, JobEventName};
 
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
@@ -245,7 +245,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::Open(metadata, rate, balance, timestamp) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobOpened".to_owned(),
+            event_name: JobEventName::Opened,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "owner": compute_address_word("owner"),
@@ -259,7 +259,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::Close => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobClosed".to_owned(),
+            event_name: JobEventName::Closed,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
             }),
@@ -267,7 +267,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::Settle(amount, timestamp) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobSettled".to_owned(),
+            event_name: JobEventName::Settled,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "amount": amount,
@@ -277,7 +277,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::Deposit(amount) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobDeposited".to_owned(),
+            event_name: JobEventName::Deposited,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "from": compute_address_word("depositor"),
@@ -287,7 +287,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::Withdraw(amount) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobWithdrew".to_owned(),
+            event_name: JobEventName::Withdrew,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "to": compute_address_word("withdrawer"),
@@ -297,7 +297,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::ReviseRateInitiated(rate) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobReviseRateInitiated".to_owned(),
+            event_name: JobEventName::ReviseRateInitiated,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "new_rate": rate,
@@ -306,7 +306,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::ReviseRateCancelled => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobReviseRateCancelled".to_owned(),
+            event_name: JobEventName::ReviseRateCancelled,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
             }),
@@ -314,7 +314,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::ReviseRateFinalized(rate) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobReviseRateFinalized".to_owned(),
+            event_name: JobEventName::ReviseRateFinalized,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "new_rate": rate,
@@ -323,7 +323,7 @@ pub fn get_event(topic: Action, id: i64, job_idx: B256) -> JobEvent {
         Action::MetadataUpdated(metadata) => JobEvent {
             id: id,
             job_id: job_idx.encode_hex_with_prefix(),
-            event_name: "JobMetadataUpdated".to_owned(),
+            event_name: JobEventName::MetadataUpdated,
             event_data: serde_json::json!({
                 "job_id": job_idx.encode_hex_with_prefix(),
                 "new_metadata": metadata,
