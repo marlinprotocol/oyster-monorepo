@@ -21,12 +21,27 @@
     if systemConfig.static
     then pkgs.pkgsStatic.stdenv.cc
     else pkgs.stdenv.cc;
+  projectSrc = ./.;
+  libSrc = ../framework;
+  combinedSrc = pkgs.runCommand "combined-src" {} ''
+    # Copy the project
+    cp -r ${projectSrc} $out
+    chmod -R +w $out
+
+    # Copy the library into the project directory
+    mkdir -p $out/libs/framework
+    cp -r ${libSrc}/* $out/libs/framework
+
+    # Patch Cargo.toml to point to the new library location
+    substituteInPlace $out/Cargo.toml \
+      --replace 'path = "../framework"' 'path = "./libs/framework"'
+  '';
 in rec {
   uncompressed = naersk'.buildPackage {
-    src = ./.;
+    src = combinedSrc;
     CARGO_BUILD_TARGET = target;
     TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
-    nativeBuildInputs = [cc pkgs.perl];
+    nativeBuildInputs = [cc];
   };
 
   compressed =
