@@ -94,8 +94,10 @@ echo "status"
 
 sleep 2
 
-# start derive server
-/app/supervisord ctl -c /etc/supervisord.conf start derive-server
+# # start derive server
+# /app/supervisord ctl -c /etc/supervisord.conf start derive-server
+
+echo "[setup.sh] checkpoint 1 reached"
 
 sleep 10
 
@@ -104,6 +106,8 @@ sleep 10
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
+
+echo "[setup.sh] checkpoint 1 reached"
 
 # Wait for Docker daemon to be ready
 until docker info >/dev/null 2>&1; do
