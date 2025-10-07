@@ -96,10 +96,10 @@ echo "Checking connectivity to NFS server with telnet"
 telnet 5.9.93.176 2049
 
 echo "Mounting NFS to /app/nfs/general"
-mount -vvv -t nfs -o nolock,vers=4 5.9.93.176:/root/nfs_test/ /app/nfs
+mount -vvv -t nfs -o nolock,vers=4 5.9.93.176:/root/nfs_test/ /app/nfs/
 if [ $? -eq 0 ]; then
   df -h
-  cat /app/nfs/general/test_file.txt
+  cat /app/nfs/test_file.txt
 else
   echo "Mount failed"
 fi
