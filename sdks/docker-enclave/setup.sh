@@ -2,8 +2,6 @@
 
 set -e
 
-echo "lolololol"
-
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
@@ -12,8 +10,8 @@ cat /app/ip.txt && echo
 /app/vet --url vsock://3:1300/oyster/job > /app/job.txt
 cat /app/job.txt && echo
 
-# # query init params for enclave and store
-# /app/vet --url vsock://3:1300/oyster/init-params > /app/init-params
+# query init params for enclave and store
+/app/vet --url vsock://3:1300/oyster/init-params > /app/init-params
 
 # extract digest, skip if empty
 mkdir /init-params
