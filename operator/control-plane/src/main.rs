@@ -3,8 +3,7 @@ use std::net::SocketAddr;
 
 use alloy_primitives::hex::ToHexExt;
 use alloy_primitives::B256;
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
@@ -123,7 +122,8 @@ async fn get_chain_id(db_url: &str) -> Result<String> {
         .await
         .context("Failed to query chain ID from 'indexer_state' table")?;
 
-    Ok(row.get::<String, _>("chain_id"))
+    row.get::<Option<String>, _>("chain_id")
+        .ok_or(anyhow!("Chain ID not yet set in the DB by the indexer"))
 }
 
 async fn run() -> Result<()> {

@@ -48,7 +48,7 @@ pub(crate) fn transform_block_logs_into_records(
         match job_event {
             JobEvent::Opened(event) => {
                 // Check if provider matches the target
-                if event.provider != provider {
+                if !event.provider.eq_ignore_ascii_case(provider) {
                     continue;
                 }
 

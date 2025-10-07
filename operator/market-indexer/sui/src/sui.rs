@@ -352,7 +352,7 @@ fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> 
         };
 
         for event in events.data {
-            if event.package_id.to_string() != package_id {
+            if !event.package_id.to_string().eq_ignore_ascii_case(package_id) {
                 continue;
             }
 
