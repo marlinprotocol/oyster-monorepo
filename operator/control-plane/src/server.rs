@@ -158,8 +158,8 @@ mod tests {
 
     use std::net::SocketAddr;
 
-    use alloy::hex::ToHexExt;
-    use alloy::primitives::U256;
+    use alloy_primitives::hex::ToHexExt;
+    use alloy_primitives::U256;
     use anyhow;
     use serde_json::json;
 

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::migrate::Migrator;
@@ -8,7 +7,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::schema::JobEventRecord;
 
-const MIGRATION_PATH: &str = "../framework/migrations";
+const MIGRATOR: Migrator = sqlx::migrate!("../framework/migrations");
 
 #[derive(Clone, Debug)]
 pub struct Repository {
@@ -28,10 +27,7 @@ impl Repository {
     }
 
     pub async fn apply_migrations(&self) -> Result<()> {
-        let migrator = Migrator::new(Path::new(MIGRATION_PATH))
-            .await
-            .context("Failed to initialize the migrator")?;
-        migrator
+        MIGRATOR
             .run(&self.pool)
             .await
             .context("Failed to apply migrations to the database")
@@ -83,6 +79,22 @@ impl Repository {
         .context(
             "Failed to execute update query for last processed block in 'indexer state' table",
         )?;
+
+        Ok(result.rows_affected())
+    }
+
+    pub async fn update_chain_id(&self, chain_id: String) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE indexer_state
+            SET chain_id = $1, updated_at = now()
+            WHERE id = 1
+            "#,
+        )
+        .bind(chain_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to execute update query for chain ID in 'indexer state' table")?;
 
         Ok(result.rows_affected())
     }

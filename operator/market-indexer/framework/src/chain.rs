@@ -15,6 +15,9 @@ pub trait FromLog: Sized {
 pub trait ChainHandler {
     type RawLog: FromLog;
 
+    /// Fetch chain ID from the RPC
+    fn fetch_chain_id(&self) -> impl Future<Output = Result<String>> + Send;
+
     /// Fetch latest block/checkpoint/slot for the chain
     fn fetch_latest_block(&self) -> impl Future<Output = Result<u64>> + Send;
 
@@ -45,7 +48,7 @@ pub(crate) fn transform_block_logs_into_records(
         match job_event {
             JobEvent::Opened(event) => {
                 // Check if provider matches the target
-                if event.provider != provider {
+                if !event.provider.eq_ignore_ascii_case(provider) {
                     continue;
                 }
 

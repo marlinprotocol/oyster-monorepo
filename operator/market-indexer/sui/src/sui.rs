@@ -9,7 +9,8 @@ use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::{self, JobEvent};
 use serde::Deserialize;
 use sui_rpc_api::Client;
-use sui_rpc_api::client::AuthInterceptor;
+use sui_rpc_api::client::{AuthInterceptor, ResponseExt};
+use sui_rpc_api::proto::sui::rpc::v2beta2::GetServiceInfoRequest;
 use sui_storage::blob::Blob;
 use sui_types::base_types::SuiAddress;
 use sui_types::full_checkpoint_content::CheckpointData;
@@ -220,6 +221,34 @@ impl SuiProvider {
 impl ChainHandler for SuiProvider {
     type RawLog = SuiLog;
 
+    async fn fetch_chain_id(&self) -> Result<String> {
+        let provider = self
+            .get_client()
+            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let service_info = Retry::spawn(
+            ExponentialBackoff::from_millis(500)
+                .max_delay(Duration::from_secs(10))
+                .map(jitter),
+            || async {
+                timeout(
+                    DEFAULT_REQUEST_TIMEOUT,
+                    provider
+                        .raw_client()
+                        .get_service_info(GetServiceInfoRequest::default()),
+                )
+                .await
+            },
+        )
+        .await
+        .context("Request timed out for fetching chain ID")?
+        .context("Request failed for fetching chain ID")?;
+
+        service_info
+            .chain_id()
+            .map(|dig| dig.to_base58())
+            .ok_or(anyhow!("RPC returned empty chain ID"))
+    }
+
     async fn fetch_latest_block(&self) -> Result<u64> {
         let provider = self
             .get_client()
@@ -323,7 +352,7 @@ fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> 
         };
 
         for event in events.data {
-            if event.package_id.to_string() != package_id {
+            if !event.package_id.to_string().eq_ignore_ascii_case(package_id) {
                 continue;
             }
 
