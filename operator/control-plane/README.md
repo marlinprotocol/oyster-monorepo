@@ -55,7 +55,7 @@ Built using Nix on the `control-plane-v3.0.0` tag.
 $ ./target/release/control-plane --help
 Control plane for Oyster
 
-Usage: control-plane [OPTIONS] --profile <PROFILE> --key-name <KEY_NAME> --db-url <DB_URL> --rates <RATES> --bandwidth <BANDWIDTH> --chain <CHAIN> --contract <CONTRACT> --provider <PROVIDER>
+Usage: control-plane [OPTIONS] --profile <PROFILE> --key-name <KEY_NAME> --db-url <DB_URL> --rates <RATES> --bandwidth <BANDWIDTH> --contract <CONTRACT> --provider <PROVIDER>
 
 Options:
       --profile <PROFILE>
@@ -70,8 +70,6 @@ Options:
           Rates location
       --bandwidth <BANDWIDTH>
           Bandwidth Rates location
-      --chain <CHAIN>
-          Chain ID
       --contract <CONTRACT>
           Contract address
       --provider <PROVIDER>

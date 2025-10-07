@@ -15,6 +15,9 @@ pub trait FromLog: Sized {
 pub trait ChainHandler {
     type RawLog: FromLog;
 
+    /// Fetch chain ID from the RPC
+    fn fetch_chain_id(&self) -> impl Future<Output = Result<String>> + Send;
+
     /// Fetch latest block/checkpoint/slot for the chain
     fn fetch_latest_block(&self) -> impl Future<Output = Result<u64>> + Send;
 

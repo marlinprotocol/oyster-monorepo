@@ -45,4 +45,5 @@ httpc-test = "0.1.10"
 
 [profile.release]
 lto = true
+panic = "abort"
 codegen-units = 1

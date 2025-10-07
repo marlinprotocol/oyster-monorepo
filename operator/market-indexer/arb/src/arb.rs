@@ -149,6 +149,19 @@ pub struct ArbProvider {
 impl ChainHandler for ArbProvider {
     type RawLog = ArbLog;
 
+    async fn fetch_chain_id(&self) -> Result<String> {
+        let provider = RootProvider::<Ethereum>::new_http(self.rpc_url.clone());
+        let chain_id = Retry::spawn(
+            ExponentialBackoff::from_millis(500)
+                .max_delay(Duration::from_secs(10))
+                .map(jitter),
+            || async { provider.get_chain_id().await },
+        )
+        .await
+        .context("Failed to fetch chain ID from the RPC")?;
+        Ok(chain_id.to_string())
+    }
+
     async fn fetch_latest_block(&self) -> Result<u64> {
         let provider = RootProvider::<Ethereum>::new_http(self.rpc_url.clone());
         let block_number = Retry::spawn(

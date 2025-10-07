@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use alloy_primitives::U256;
@@ -11,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Type};
-use tokio::fs;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
@@ -404,6 +402,7 @@ async fn fetch_job_events(
         FROM job_events
         WHERE id > $1
         ORDER BY id ASC
+        LIMIT 1000
         "#,
     )
     .bind(last_processed_id)
@@ -1108,30 +1107,36 @@ impl<'a> JobState<'a> {
 pub struct JobRegistry {
     active_jobs: Arc<Mutex<HashMap<String, Sender<JobEvent>>>>,
     terminated_jobs: Arc<Mutex<HashSet<String>>>,
-    save_path: String,
+    db_url: String,
 }
 
 impl JobRegistry {
-    pub async fn new(save_path: String) -> Result<Self> {
-        let mut terminated_jobs = HashSet::new();
-        // Initialize with jobs from disk if file exists
-        if Path::new(&save_path).exists() {
-            terminated_jobs = fs::read_to_string(&save_path)
-                .await?
-                .trim()
-                .lines()
-                .map(str::to_owned)
-                .collect();
-            info!(
-                "Loaded {} terminated jobs from registry",
-                terminated_jobs.len()
-            );
-        }
+    pub async fn new(db_url: String) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .connect(&db_url)
+            .await
+            .context("Failed to connect to the DATABASE_URL")?;
+
+        let rows = sqlx::query_as::<_, (String,)>(
+            r#"
+            SELECT job_id FROM terminated_jobs
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .context("Failed to query terminated jobs ids from the DB")?;
+
+        let terminated_jobs: HashSet<String> = rows.into_iter().map(|(id,)| id).collect();
+
+        info!(
+            "Loaded {} terminated jobs from registry",
+            terminated_jobs.len()
+        );
 
         Ok(JobRegistry {
             active_jobs: Arc::new(Mutex::new(HashMap::new())),
             terminated_jobs: Arc::new(Mutex::new(terminated_jobs)),
-            save_path,
+            db_url,
         })
     }
 
@@ -1147,29 +1152,49 @@ impl JobRegistry {
         self.terminated_jobs.lock().unwrap().contains(job_id)
     }
 
-    async fn save_to_disk(&self) -> Result<(), std::io::Error> {
-        let jobs = self
+    async fn save_to_disk(&self) -> Result<u64> {
+        let job_ids: Vec<String> = self
             .terminated_jobs
             .lock()
             .unwrap()
             .iter()
-            .fold("".to_owned(), |a, b| a + "\n" + b)
-            .trim()
-            .to_owned();
-        fs::write(&self.save_path, jobs).await?;
-        Ok(())
+            .cloned()
+            .collect();
+
+        if job_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let pool = PgPoolOptions::new()
+            .connect(&self.db_url)
+            .await
+            .context("Failed to connect to the DATABASE_URL")?;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO terminated_jobs (job_id)
+            SELECT * FROM UNNEST ($1::VARCHAR[])
+            ON CONFLICT (job_id) DO NOTHING
+        "#,
+        )
+        .bind(&job_ids)
+        .execute(&pool)
+        .await
+        .context("Failed to execute batch insert for terminated_jobs")?;
+
+        Ok(result.rows_affected())
     }
 
     pub async fn run_periodic_save(self, interval_secs: u64) {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
-            if let Err(e) = self.save_to_disk().await {
-                error!("Failed to save job registry: {:?}", e);
-            } else {
-                info!(
-                    "Job registry saved to disk: {} terminated jobs",
-                    self.terminated_jobs.lock().unwrap().len()
-                );
+            match self.save_to_disk().await {
+                Ok(inserted) => {
+                    info!("Job registry saved to disk: {} terminated jobs", inserted);
+                }
+                Err(e) => {
+                    error!("Failed to save job registry: {:?}", e);
+                }
             }
         }
     }
@@ -1181,6 +1206,9 @@ impl JobRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex};
+
     use alloy_primitives::hex::FromHex;
     use alloy_primitives::{B256, U256};
     use tokio::sync::mpsc;
@@ -1200,6 +1228,17 @@ mod tests {
     impl SystemContext for TestSystemContext {
         fn now_timestamp(&self) -> Duration {
             Instant::now() - self.start
+        }
+    }
+
+    #[cfg(test)]
+    impl market::JobRegistry {
+        pub fn new_test() -> Self {
+            market::JobRegistry {
+                active_jobs: Arc::new(Mutex::new(HashMap::new())),
+                terminated_jobs: Arc::new(Mutex::new(HashSet::new())),
+                db_url: "db_url".to_string(),
+            }
         }
     }
 
@@ -1232,9 +1271,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<JobEvent>(10);
         let mut aws: TestAws = Default::default();
-        let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string())
-            .await
-            .unwrap();
+        let job_registry = market::JobRegistry::new_test();
 
         tokio::spawn(async move {
             for (moment, event) in job_logs {

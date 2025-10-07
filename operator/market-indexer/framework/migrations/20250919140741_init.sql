@@ -25,8 +25,15 @@ CREATE TABLE job_events (
 -- Indexer state table to track progress
 CREATE TABLE indexer_state (
     id INT PRIMARY KEY,
+    chain_id VARCHAR(66),
     last_processed_block BIGINT NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Table to track terminated jobs
+CREATE TABLE terminated_jobs (
+    job_id VARCHAR(66) PRIMARY KEY,
+    terminated_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- Initial values

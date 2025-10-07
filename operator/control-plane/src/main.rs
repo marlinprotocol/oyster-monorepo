@@ -6,6 +6,8 @@ use alloy_primitives::B256;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::Row;
 use tracing::Instrument;
 use tracing::{error, info, info_span};
 use tracing_subscriber::EnvFilter;
@@ -45,10 +47,6 @@ struct Cli {
     /// Bandwidth Rates location
     #[clap(long, value_parser)]
     bandwidth: String,
-
-    /// Chain ID
-    #[clap(long, value_parser)]
-    chain: String,
 
     /// Contract address
     #[clap(long, value_parser)]
@@ -114,6 +112,20 @@ async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRa
     Ok(rates)
 }
 
+async fn get_chain_id(db_url: &str) -> Result<String> {
+    let pool = PgPoolOptions::new()
+        .connect(db_url)
+        .await
+        .context("Failed to connect to the DATABASE_URL")?;
+
+    let row = sqlx::query("SELECT chain_id FROM indexer_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .context("Failed to query chain ID from 'indexer_state' table")?;
+
+    Ok(row.get::<String, _>("chain_id"))
+}
+
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -122,7 +134,6 @@ async fn run() -> Result<()> {
     info!(?cli.db_url);
     info!(?cli.rates);
     info!(?cli.bandwidth);
-    info!(?cli.chain);
     info!(?cli.contract);
     info!(?cli.provider);
     info!(?cli.blacklist);
@@ -204,8 +215,12 @@ async fn run() -> Result<()> {
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
 
+    let chain = get_chain_id(&cli.db_url)
+        .await
+        .context("Failed to fetch chain ID")?;
+
     // Initialize job registry for terminated jobs
-    let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
+    let job_registry = market::JobRegistry::new(cli.db_url.clone()).await?;
 
     // Start periodic job registry persistence task
     let registry_clone = job_registry.clone();
@@ -217,7 +232,7 @@ async fn run() -> Result<()> {
         id: B256::ZERO.encode_hex_with_prefix(),
         operator: cli.provider.clone(),
         contract: cli.contract.clone(),
-        chain: cli.chain,
+        chain,
     };
 
     tokio::spawn(

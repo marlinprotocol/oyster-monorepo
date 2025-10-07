@@ -79,6 +79,18 @@ pub async fn run(
         debug!("Start block updated: {}", updated == 1);
     }
 
+    let chain_id = rpc_client
+        .fetch_chain_id()
+        .await
+        .context("RPC chain ID fetch failed")?;
+
+    let updated = repo
+        .update_chain_id(chain_id)
+        .await
+        .context("Failed to update chain ID in the DB")?;
+
+    debug!("Chain ID updated: {}", updated == 1);
+
     if range_size == 0 {
         return Err(anyhow!("Range size must not be zero"));
     }

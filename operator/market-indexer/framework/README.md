@@ -41,6 +41,11 @@ pub struct MyChainHandler {
 #[async_trait]
 impl ChainHandler for MyChainHandler {
     type RawLog: FromLog;
+    
+    async fn fetch_chain_id(&self) -> anyhow::Result<String> {
+        // Call your RPC endpoint
+        Ok("123")
+    }
 
     async fn fetch_latest_block(&self) -> anyhow::Result<u64> {
         // Call your RPC endpoint

@@ -13,17 +13,12 @@ dotenvy = "0.15.7"
 indexer-framework = { version = "0.1.0", path = "../framework" }
 reqwest = "0.12.23"
 serde = { version = "1.0.217", features = ["derive"] }
-sui_types = { git = "https://github.com/mystenlabs/sui/", package = "sui-types", rev = "mainnet-v1.56.2"}
-sui_rpc_api = { git = "https://github.com/mystenlabs/sui/", package = "sui-rpc-api", rev = "mainnet-v1.56.2"}
-sui_storage = { git = "https://github.com/mystenlabs/sui/", package = "sui-storage", rev = "mainnet-v1.56.2"}
+sui_types = { git = "https://github.com/mystenlabs/sui/", package = "sui-types", rev = "mainnet-v1.57.2"}
+sui_rpc_api = { git = "https://github.com/mystenlabs/sui/", package = "sui-rpc-api", rev = "mainnet-v1.57.2"}
+sui_storage = { git = "https://github.com/mystenlabs/sui/", package = "sui-storage", rev = "mainnet-v1.57.2"}
 tokio = { version = "1.46.1", features = ["full"] }
 tokio-retry = "0.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-
-# [patch.crates-io]
-# sui-types = { path = "vendor/sui-types" }
-# sui-rpc-api = { path = "vendor/sui-rpc-api" }
-# sui-storage = { path = "vendor/sui-storage" }
 
 [profile.release]
 lto = true
