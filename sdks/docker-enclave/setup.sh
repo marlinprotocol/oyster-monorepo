@@ -2,7 +2,7 @@
 
 set -e
 
-echo "Yooooooooooooooooooooooooo"
+echo "Ezzzzzzzzzzz"
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
