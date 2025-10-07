@@ -92,6 +92,14 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
 # /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
+mount -vvv -t nfs -o nolock,vers=4 5.9.93.176:/root/nfs_test/ /nfs/general
+if [ $? -eq 0 ]; then
+  df -h
+  cat /nfs/general/test_file.txt
+else
+  echo "Mount failed"
+fi
+
 sleep 2
 
 # # start derive server
