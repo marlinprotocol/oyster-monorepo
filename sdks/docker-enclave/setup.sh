@@ -90,7 +90,7 @@ echo "status"
 
 # start attestation servers
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
-/app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
+# /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
 sleep 2
 
