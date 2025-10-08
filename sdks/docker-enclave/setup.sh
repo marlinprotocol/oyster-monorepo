@@ -60,7 +60,8 @@ ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
-ipset add portfilter 1024-61439
+ipset add portfilter 1024-5554
+ipset add portfilter 5556-61439
 ipset add portfilter 80
 ipset add portfilter 443
 
