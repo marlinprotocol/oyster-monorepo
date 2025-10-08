@@ -96,7 +96,7 @@ echo "status"
 # (echo quit) | telnet 127.0.0.1 2049
 
 echo "Mounting NFS to /app/nfs/"
-mount -vvv -t nfs -o nolock,vers=4,port=2049,addr=3:/home/ubuntu/nfs/general /app/nfs/
+mount -vvv -t nfs -o nolock,vers=4 0.0.0.0:/home/ubuntu/nfs/general /app/nfs/
 if [ $? -eq 0 ]; then
   df -h
   cat /app/nfs/test_file.txt
