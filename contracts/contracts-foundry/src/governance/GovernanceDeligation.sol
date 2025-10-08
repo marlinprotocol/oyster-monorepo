@@ -66,5 +66,13 @@ contract GovernanceDelegation is
         emit DelegationSet(msg.sender, delegatee);
     }
 
+    function getDelegator(address delegator) external view returns (address) {
+        return delegations[delegator];
+    }
+
+    function isDelegationSet(address delegator, address delegatee) external view returns (bool) {
+        return delegations[delegator] == delegatee;
+    }
+
     //-------------------------------- Functions end --------------------------------//
 }

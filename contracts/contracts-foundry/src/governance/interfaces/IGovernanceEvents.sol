@@ -12,6 +12,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event RpcUrlUpdated(uint256 indexed chainId, string[] rpcUrls);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
     event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2, bytes32 indexed imageId);
+    event GovernanceEnclaveSet(address indexed governanceEnclave);
     event TreasurySet(address indexed treasury);
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);
     event ProposalPassVetoThresholdSet(uint256 threshold);
@@ -56,7 +57,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event VoteSubmitted(
         bytes32 indexed proposalId,
         address indexed voter,
-        // address indexed delegator,
+        address indexed delegator,
         uint256 delegatorChainId,
         uint256 voteIdx,
         bytes voteEncrypted
@@ -71,4 +72,6 @@ interface IGovernanceEvents is IGovernanceTypes {
     event ProposalExecuted(
         bytes32 indexed proposalId
     );
+
+    event GovernanceDelegationSet(uint256 indexed chainId, address indexed governanceDelegation);
 }

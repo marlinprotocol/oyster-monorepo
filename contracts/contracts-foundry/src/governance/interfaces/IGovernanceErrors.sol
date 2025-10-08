@@ -40,5 +40,6 @@ interface IGovernanceErrors {
     error Governance__ZeroProposalTimeConfig();
     error Governance__InvalidMinQuorumThreshold();
     error Governance__InvalidAddress();
+    error Governance__InvalidDelegatorAndChainId();
     error Governance__InvalidDelegatorChainId();
 }

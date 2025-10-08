@@ -42,6 +42,7 @@ contract Governance is
     // Core Contracts
     address public treasury;
     address public governanceEnclave;
+    mapping (uint256 chainId => address governanceDelegation) public governanceDelegations;
 
     // Proposal Management
     mapping(address token => uint256 amount) public proposalDepositAmounts;
@@ -137,9 +138,8 @@ contract Governance is
         // Set Treasury Address
         _setTreasury(_treasury);
 
-        // Set Governance Admin
-        require(_governanceEnclave != address(0), Governance__InvalidAddress());
-        governanceEnclave = _governanceEnclave;
+        // Set Governance Enclave
+        _setGovernanceEnclave(_governanceEnclave);
 
         // Set Proposal Pass Threshold
         _setProposalPassVetoThreshold(_proposalPassVetoThreshold);
@@ -159,6 +159,26 @@ contract Governance is
     //-------------------------------- Initializer end --------------------------------//
 
     //-------------------------------- Admin start --------------------------------//
+
+    function setGovernanceEnclave(address _governanceEnclave) external onlyConfigSetter {
+        _setGovernanceEnclave(_governanceEnclave);
+    }
+
+    function _setGovernanceEnclave(address _governanceEnclave) internal {
+        require(_governanceEnclave != address(0), Governance__InvalidAddress());
+        governanceEnclave = _governanceEnclave;
+        emit GovernanceEnclaveSet(_governanceEnclave);
+    }
+
+    function setGovernanceDelegation(uint256 _chainId, address _governanceDelegation) external onlyConfigSetter {
+        _setGovernanceDelegation(_chainId, _governanceDelegation);
+    }
+
+    function _setGovernanceDelegation(uint256 _chainId, address _governanceDelegation) internal {
+        require(_governanceDelegation != address(0), Governance__InvalidAddress());
+        governanceDelegations[_chainId] = _governanceDelegation;
+        emit GovernanceDelegationSet(_chainId, _governanceDelegation);
+    }
 
     /// @notice Sets the required deposit amount for a specific token when creating proposals
     /// @dev This function allows config setters to specify how much of a particular token must be deposited to create a proposal
@@ -420,23 +440,35 @@ contract Governance is
 
         for (uint256 i = 0; i < _encryptedVotes.length; ++i) {
             bytes calldata _encryptedVote = _encryptedVotes[i];
-            address _delegator = _delegators[i];
-            uint256 _delegatorChainId = _delegatorChainIds[i];
+            address delegator = _delegators[i];
+            uint256 delegatorChainId = _delegatorChainIds[i];
 
             // Validate delegator and chainId combination
             require(
-                (_delegator == address(0) && _delegatorChainId == 0)
-                    || (_delegator != address(0) && _delegatorChainId != 0),
-                Governance__InvalidDelegatorChainId()
+                (delegator == address(0) && delegatorChainId == 0)
+                    || (delegator != address(0) && delegatorChainId != 0),
+                Governance__InvalidDelegatorAndChainId()
             );
 
+            if (delegatorChainId != 0) {
+                require(
+                    governanceDelegations[delegatorChainId] != address(0),
+                    Governance__InvalidDelegatorChainId()
+                );
+            }
+
             uint256 voteIdx = proposalVoteInfo.voteCount;
-            proposalVoteInfo.votes[voteIdx] = Vote({voter: msg.sender, voteEncrypted: _encryptedVote});
+            proposalVoteInfo.votes[voteIdx] = Vote({
+                voter: msg.sender,
+                delegator: delegator,
+                delegatorChainId: delegatorChainId,
+                voteEncrypted: _encryptedVote
+            });
             proposalVoteInfo.voteCount++;
 
             proposalVoteInfo.voteHash = sha256(abi.encode(proposalVoteInfo.voteHash, sha256(_encryptedVote)));
 
-            emit VoteSubmitted(_proposalId, _delegator, _delegatorChainId, voteIdx, _encryptedVote);
+            emit VoteSubmitted(_proposalId, msg.sender, delegator, delegatorChainId, voteIdx, _encryptedVote);
         }
     }
 

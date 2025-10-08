@@ -35,9 +35,10 @@ interface IGovernanceTypes {
         address token;
         uint256 amount;
     }
-
     struct Vote {
         address voter;
+        address delegator; // address(0) if not delegated
+        uint256 delegatorChainId; // 0 if not delegated
         bytes voteEncrypted;
     }
 
