@@ -93,7 +93,7 @@ echo "status"
 # /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
 # echo "Checking connectivity to NFS server with telnet"
-(echo quit) | telnet 172.31.8.34 5555
+(echo quit) | telnet 0.0.0.0 5555
 
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -t nfs -o nolock,vers=4 0.0.0.0:/home/ubuntu/nfs/general /app/nfs/
