@@ -60,11 +60,7 @@ ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
-# Add ranges excluding 5555 and 2049
-ipset add portfilter 1024-2048
-ipset add portfilter 2050-5554
-ipset add portfilter 5556-61439
-
+ipset add portfilter 1024-61439
 ipset add portfilter 80
 ipset add portfilter 443
 
@@ -97,7 +93,7 @@ echo "status"
 # /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
 # echo "Checking connectivity to NFS server with telnet"
-(echo quit) | telnet 172.31.8.34 5555
+(echo quit) | telnet $ip 5555
 
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -t nfs -o nolock,vers=4 0.0.0.0:/home/ubuntu/nfs/general /app/nfs/
