@@ -11,7 +11,6 @@ interface IGovernanceEvents is IGovernanceTypes {
     event NetworkConfigSet(uint256 chainId, address tokenAddress, string[] rpcUrls, bytes32 networkHash);
     event RpcUrlUpdated(uint256 indexed chainId, string[] rpcUrls);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
-    event KMSPathSet(string kmsPath);
     event PCRConfigSet(bytes pcr0, bytes pcr1, bytes pcr2, bytes32 indexed imageId);
     event TreasurySet(address indexed treasury);
     event MaxRpcUrlsPerChainSet(uint256 maxRpcUrlsPerChain);

@@ -13,6 +13,7 @@ interface IGovernanceTypes {
         Failed,
         Vetoed
     }
+
     struct ProposalInfo {
         address proposer;
         address[] targets;
@@ -80,18 +81,6 @@ interface IGovernanceTypes {
         uint256 proposalDuration;
     }
 
-    struct PCRConfig {
-        PCR pcr;
-        bytes32 imageId;
-    }
-
-    struct PCR {
-        bytes pcr0;
-        bytes pcr1;
-        bytes pcr2;
-    }
-
-
     /*//////////////////////////////////////////////////////////////
                                  PARAMS
     //////////////////////////////////////////////////////////////*/
@@ -104,7 +93,7 @@ interface IGovernanceTypes {
         string title;
         string description;
     }
-    
+
     struct SubmitResultInputParams {
         bytes kmsSig;
         bytes enclavePubKey;
