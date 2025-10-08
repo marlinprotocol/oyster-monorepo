@@ -22,6 +22,7 @@ contract GovernanceDelegation is
 {
 
     error NotDefaultAdmin();
+    error DelegationAlreadySet();
 
     event DelegationSet(address delegator, address delegatee);
 
@@ -59,7 +60,9 @@ contract GovernanceDelegation is
     //-------------------------------- Functions start --------------------------------//
 
     function setDelegation(address delegatee) external {
+        address existingDelegatee = delegations[msg.sender];
         delegations[msg.sender] = delegatee;
+        require(existingDelegatee != delegatee, DelegationAlreadySet());
         emit DelegationSet(msg.sender, delegatee);
     }
 
