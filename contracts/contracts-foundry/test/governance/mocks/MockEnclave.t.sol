@@ -12,6 +12,19 @@ contract MockEnclave is Test {
     bytes constant ENCLAVE_PRIV_KEY = hex"b763604770e22821286dd58419a0499c6793490d8584f4ac7803e526a0036673";
     uint256 constant POND_TOTAL_SUPPLY = 10_000_000 * 1e18; // 10M total supply
 
+    // Getter functions for constants
+    function getKmsSig() public pure returns (bytes memory) {
+        return KMS_SIG;
+    }
+
+    function getEnclavePubKey() public pure returns (bytes memory) {
+        return ENCLAVE_PUB_KEY;
+    }
+
+    function getEnclavePrivKey() public pure returns (bytes memory) {
+        return ENCLAVE_PRIV_KEY;
+    }
+
     // values in percentage (1e18 = 100%)
     struct VotePercentage {
         uint256 yes;
