@@ -121,6 +121,7 @@ fn handle_conn(
         // get src and dst addr
         let src_addr = u32::from_ne_bytes(buf[12..16].try_into().unwrap());
         let src_addr_read = Ipv4Addr::from(src_addr);
+        println!("\n--------------------------------------------------------------");
         println!("src_addr {:#?}",src_addr_read);
         let dst_addr = u32::from_be_bytes(buf[16..20].try_into().unwrap());
         let dst_addr_read = Ipv4Addr::from(dst_addr);
@@ -173,6 +174,7 @@ fn handle_conn(
         let ip_header_size = usize::from((buf[0] & 0x0f) * 4);
         let src_port =
             u16::from_be_bytes(buf[ip_header_size..ip_header_size + 2].try_into().unwrap());
+        println!("src_port {:#}",src_port);
 
         if src_port != 80 && src_port != 443 && (src_port < 1024 || src_port > 61439) {
             // silently drop
