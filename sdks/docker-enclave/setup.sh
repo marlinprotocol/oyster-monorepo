@@ -95,6 +95,8 @@ echo "status"
 # echo "Checking connectivity to NFS server with telnet"
  echo quit | telnet 3.111.219.88 2049
 
+sleep 10
+
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -t nfs -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs/general /app/nfs/
 if [ $? -eq 0 ]; then

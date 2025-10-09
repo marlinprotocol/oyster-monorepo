@@ -40,6 +40,7 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use libc::{freeifaddrs, getifaddrs, ifaddrs, strncmp};
 use socket2::{SockAddr, Socket};
+use chrono::Utc;
 
 use oyster_raw_proxy::{
     accept_vsock_conn_with_backoff, new_ip_socket_with_backoff, new_vsock_server_with_backoff,
@@ -175,6 +176,10 @@ fn handle_conn(
         let src_port =
             u16::from_be_bytes(buf[ip_header_size..ip_header_size + 2].try_into().unwrap());
         println!("src_port {:#}",src_port);
+        let now = Utc::now();
+        let timestamp = now.timestamp();
+
+        println!("Unix timestamp (seconds): {}", timestamp);
 
         if src_port != 80 && src_port != 443 && (src_port < 1024 || src_port > 61439) {
             // silently drop

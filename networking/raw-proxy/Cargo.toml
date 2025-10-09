@@ -31,6 +31,7 @@ libc = "0.2.153"
 nfq = "0.2.5"
 socket2 = { version = "0.5.6", features = ["all"] }
 thiserror = "1.0.57"
+chrono = "0.4"
 
 [profile.release]
 strip = true
