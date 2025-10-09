@@ -98,6 +98,7 @@ fn handle_conn(
 ) -> Result<(), ProxyError> {
     let mut buf = vec![0u8; 65535].into_boxed_slice();
     println!("New connection");
+    println!("{:#?}",conn_socket);
     // does not matter what the address is, just has to be a publicly routed address
     let external_addr: SockAddr = "1.1.1.1:80".parse::<SocketAddrV4>().unwrap().into();
 
