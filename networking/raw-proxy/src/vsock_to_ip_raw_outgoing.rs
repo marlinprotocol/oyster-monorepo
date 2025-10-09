@@ -35,7 +35,7 @@
 use std::ffi::CStr;
 use std::io::Read;
 use std::net::SocketAddrV4;
-
+use std::net::Ipv4Addr; 
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use libc::{freeifaddrs, getifaddrs, ifaddrs, strncmp};
@@ -98,7 +98,6 @@ fn handle_conn(
 ) -> Result<(), ProxyError> {
     let mut buf = vec![0u8; 65535].into_boxed_slice();
     println!("New connection");
-    println!("{:#?}",conn_socket);
     // does not matter what the address is, just has to be a publicly routed address
     let external_addr: SockAddr = "1.1.1.1:80".parse::<SocketAddrV4>().unwrap().into();
 
@@ -121,8 +120,11 @@ fn handle_conn(
 
         // get src and dst addr
         let src_addr = u32::from_ne_bytes(buf[12..16].try_into().unwrap());
+        let src_addr_read = Ipv4Addr::from(src_addr);
+        println!("src_addr {:#?}",src_addr_read);
         let dst_addr = u32::from_be_bytes(buf[16..20].try_into().unwrap());
-
+        let dst_addr_read = Ipv4Addr::from(dst_addr);
+        println!("dst_addr {:#?}",dst_addr_read);
         // ignore packets not originating from the interface address
         if src_addr != ifaddr {
             continue;
