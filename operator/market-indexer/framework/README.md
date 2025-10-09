@@ -47,6 +47,11 @@ impl ChainHandler for MyChainHandler {
         Ok("123")
     }
 
+    async fn fetch_extra_decimals(&self) -> anyhow::Result<i64> {
+        // Call your RPC endpoint on market contract
+        Ok(12)
+    }
+
     async fn fetch_latest_block(&self) -> anyhow::Result<u64> {
         // Call your RPC endpoint
         Ok(12345)

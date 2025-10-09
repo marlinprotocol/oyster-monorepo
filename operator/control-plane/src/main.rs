@@ -111,19 +111,26 @@ async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRa
     Ok(rates)
 }
 
-async fn get_chain_id(db_url: &str) -> Result<String> {
+async fn get_chain_state(db_url: &str) -> Result<(String, i64)> {
     let pool = PgPoolOptions::new()
         .connect(db_url)
         .await
         .context("Failed to connect to the DATABASE_URL")?;
 
-    let row = sqlx::query("SELECT chain_id FROM indexer_state WHERE id = 1")
+    let row = sqlx::query("SELECT chain_id, extra_decimals FROM indexer_state WHERE id = 1")
         .fetch_one(&pool)
         .await
-        .context("Failed to query chain ID from 'indexer_state' table")?;
+        .context("Failed to query 'indexer_state' table")?;
 
-    row.get::<Option<String>, _>("chain_id")
-        .ok_or(anyhow!("Chain ID not yet set in the DB by the indexer"))
+    let chain_id = row
+        .get::<Option<String>, _>("chain_id")
+        .ok_or_else(|| anyhow!("Chain ID not yet set in the DB by the indexer"))?;
+
+    let extra_decimals = row
+        .get::<Option<i64>, _>("extra_decimals")
+        .ok_or_else(|| anyhow!("Extra decimals not yet set in the DB by the indexer"))?;
+
+    Ok((chain_id, extra_decimals))
 }
 
 async fn run() -> Result<()> {
@@ -215,9 +222,9 @@ async fn run() -> Result<()> {
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
 
-    let chain = get_chain_id(&cli.db_url)
+    let (chain, extra_decimals) = get_chain_state(&cli.db_url)
         .await
-        .context("Failed to fetch chain ID")?;
+        .context("Failed to fetch chain state from the DB")?;
 
     // Initialize job registry for terminated jobs
     let job_registry = market::JobRegistry::new(cli.db_url.clone()).await?;
@@ -255,6 +262,7 @@ async fn run() -> Result<()> {
         bandwidth_rates,
         address_whitelist,
         address_blacklist,
+        extra_decimals,
         job_id,
         job_registry,
     )

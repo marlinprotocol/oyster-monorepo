@@ -256,6 +256,7 @@ pub async fn run(
     gb_rates: &'static [GBRateCard],
     address_whitelist: &'static [String],
     address_blacklist: &'static [String],
+    extra_decimals: i64,
     // without job_id.id set
     job_id: JobId,
     job_registry: JobRegistry,
@@ -362,6 +363,7 @@ pub async fn run(
                                 gb_rates,
                                 address_whitelist,
                                 address_blacklist,
+                                extra_decimals,
                                 job_registry.clone(),
                             )
                             .instrument(info_span!(parent: None, "job", ?event.job_id)),
@@ -424,6 +426,7 @@ async fn job_manager(
     gb_rates: &[GBRateCard],
     address_whitelist: &[String],
     address_blacklist: &[String],
+    extra_decimals: i64,
     job_registry: JobRegistry,
 ) -> JobResult {
     let mut state = JobState::new(
@@ -449,7 +452,7 @@ async fn job_manager(
     // Insolvency and heartbeats only matter when job is not already scheduled for termination
     'event: loop {
         // compute time to insolvency
-        let insolvency_duration = state.insolvency_duration();
+        let insolvency_duration = state.insolvency_duration(extra_decimals);
         info!(duration = insolvency_duration.as_secs(), "Insolvency after");
 
         let aws_delay_timeout = state
@@ -647,7 +650,7 @@ impl<'a> JobState<'a> {
         }
     }
 
-    fn insolvency_duration(&self) -> Duration {
+    fn insolvency_duration(&self, extra_decimals: i64) -> Duration {
         let now_ts = self.context.now_timestamp();
 
         if self.rate == U256::ZERO {
@@ -655,7 +658,7 @@ impl<'a> JobState<'a> {
         } else {
             // solvent for balance / rate seconds from last_settled with 300s as margin
             Duration::from_secs(
-                (self.balance * U256::from(10).pow(U256::from(12)) / self.rate)
+                (self.balance * U256::from(10).pow(U256::from(extra_decimals)) / self.rate)
                     .saturating_to::<u64>()
                     .saturating_sub(300),
             )
@@ -1294,6 +1297,7 @@ mod tests {
             &test::get_gb_rates(),
             &job_manager_params.address_whitelist,
             &job_manager_params.address_blacklist,
+            12,
             job_registry,
         )
         .await;

@@ -249,6 +249,10 @@ impl ChainHandler for SuiProvider {
             .ok_or(anyhow!("RPC returned empty chain ID"))
     }
 
+    async fn fetch_extra_decimals(&self) -> Result<i64> {
+        Ok(12)
+    }
+
     async fn fetch_latest_block(&self) -> Result<u64> {
         let provider = self
             .get_client()
