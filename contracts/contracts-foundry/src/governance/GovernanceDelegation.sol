@@ -21,8 +21,8 @@ contract GovernanceDelegation is
     ReentrancyGuardUpgradeable
 {
 
-    error NotDefaultAdmin();
-    error DelegationAlreadySet();
+    error GovernanceDelegation__NotDefaultAdmin();
+    error GovernanceDelegation__DelegationAlreadySet();
 
     event DelegationSet(address delegator, address delegatee);
 
@@ -30,7 +30,7 @@ contract GovernanceDelegation is
 
     //-------------------------------- Modifiers start --------------------------------//
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), NotDefaultAdmin());
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), GovernanceDelegation__NotDefaultAdmin());
         _;
     }
     //-------------------------------- Modifiers end --------------------------------//
@@ -55,14 +55,26 @@ contract GovernanceDelegation is
 
     constructor() initializer {}
 
+    function initialize(address _admin) public initializer {
+        __Context_init_unchained();
+        __ERC165_init_unchained();
+        __AccessControl_init_unchained();
+        __ERC1967Upgrade_init_unchained();
+        __UUPSUpgradeable_init_unchained();
+        __Pausable_init_unchained();
+        __ReentrancyGuard_init_unchained();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+    }
+
     //-------------------------------- Initializer end --------------------------------//
 
     //-------------------------------- Functions start --------------------------------//
 
     function setDelegation(address delegatee) external {
         address existingDelegatee = delegations[msg.sender];
+        require(existingDelegatee != delegatee, GovernanceDelegation__DelegationAlreadySet());
         delegations[msg.sender] = delegatee;
-        require(existingDelegatee != delegatee, DelegationAlreadySet());
         emit DelegationSet(msg.sender, delegatee);
     }
 
