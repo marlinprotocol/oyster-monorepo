@@ -47,7 +47,7 @@ ipset add internal 10.0.0.0/8
 ipset add internal 100.64.0.0/10
 ipset add internal 127.0.0.0/8
 ipset add internal 169.254.0.0/16
-#ipset add internal 172.16.0.0/12
+ipset add internal 172.16.0.0/12
 ipset add internal 192.0.0.0/24
 ipset add internal 192.0.2.0/24
 ipset add internal 192.88.99.0/24
@@ -62,10 +62,9 @@ ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
-ipset add portfilter 1-21
-ipset add portfilter 23-79
-ipset add portfilter 81-442
-ipset add portfilter 444-61439
+ipset add portfilter 1024-61439
+ipset add portfilter 80
+ipset add portfilter 443
 
 # iptables rules to route traffic to a nfqueue to be picked up by the proxy
 iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
