@@ -13,6 +13,7 @@
   kernels,
   compose ? ./. + "/docker-compose.yml",
   dockerImages ? [],
+  localIpToVsock ? null,  # Add this parameter
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -21,7 +22,10 @@
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
   keygenX25519 = "${keygen}/bin/keygen-x25519";
-  itvroProxy = "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
+  # Use local binary if provided, otherwise use the package
+  itvroProxy = if localIpToVsock != null 
+               then localIpToVsock 
+               else "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
   vtiriProxy = "${raw-proxy}/bin/vsock-to-ip-raw-incoming";
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
@@ -62,7 +66,6 @@
       else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/app/docker-images/") dockerImages)
     }
   '';
-  # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
     cp ${init} $out
     chmod +x $out
