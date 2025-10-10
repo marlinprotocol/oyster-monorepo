@@ -2,6 +2,7 @@
 
 set -e
 ls /app
+du -sh /app/ip-to-vsock-raw-outgoing
 
 # /app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
 
@@ -81,7 +82,7 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf status
 
 # start proxies
-# /app/supervisord ctl -c /etc/supervisord.conf start ip-to-vsock-raw-outgoing
+/app/supervisord ctl -c /etc/supervisord.conf start ip-to-vsock-raw-outgoing
 /app/supervisord ctl -c /etc/supervisord.conf start vsock-to-ip-raw-incoming
 
 # start dnsproxy
