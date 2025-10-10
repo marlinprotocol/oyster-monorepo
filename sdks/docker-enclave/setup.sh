@@ -45,23 +45,23 @@ route -n
 
 # create ipset with all "internal" (unroutable) addresses
 ipset create internal hash:net
-# ipset add internal 0.0.0.0/8
-# ipset add internal 10.0.0.0/8
-# ipset add internal 100.64.0.0/10
-# ipset add internal 127.0.0.0/8
-# ipset add internal 169.254.0.0/16
-# ipset add internal 172.16.0.0/12
-# ipset add internal 192.0.0.0/24
-# ipset add internal 192.0.2.0/24
-# ipset add internal 192.88.99.0/24
-# ipset add internal 192.168.0.0/16
-# ipset add internal 198.18.0.0/15
-# ipset add internal 198.51.100.0/24
-# ipset add internal 203.0.113.0/24
-# ipset add internal 224.0.0.0/4
-# ipset add internal 233.252.0.0/24
-# ipset add internal 240.0.0.0/4
-# ipset add internal 255.255.255.255/32
+ipset add internal 0.0.0.0/8
+ipset add internal 10.0.0.0/8
+ipset add internal 100.64.0.0/10
+ipset add internal 127.0.0.0/8
+ipset add internal 169.254.0.0/16
+ipset add internal 172.16.0.0/12
+ipset add internal 192.0.0.0/24
+ipset add internal 192.0.2.0/24
+ipset add internal 192.88.99.0/24
+ipset add internal 192.168.0.0/16
+ipset add internal 198.18.0.0/15
+ipset add internal 198.51.100.0/24
+ipset add internal 203.0.113.0/24
+ipset add internal 224.0.0.0/4
+ipset add internal 233.252.0.0/24
+ipset add internal 240.0.0.0/4
+ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
@@ -85,6 +85,7 @@ echo "status"
 # start proxies
 /app/supervisord ctl -c /etc/supervisord.conf start ip-to-vsock-raw-outgoing
 /app/supervisord ctl -c /etc/supervisord.conf start vsock-to-ip-raw-incoming
+/app/supervisord ctl -c /etc/supervisord.conf start tcpdump
 
 # start dnsproxy
 /app/supervisord ctl -c /etc/supervisord.conf start dnsproxy
