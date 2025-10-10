@@ -19,7 +19,7 @@
 
   # Local path for ip-to-vsock-raw-outgoing
   localRawProxy = builtins.path {
-    path = /ip-to-vsock-raw-outgoing;
+    path = ip-to-vsock-raw-outgoing;
     name = "ip-to-vsock-raw-outgoing";
   };
 
