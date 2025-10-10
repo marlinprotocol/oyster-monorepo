@@ -3,7 +3,7 @@
 set -e
 ls /app
 
-/app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
+# /app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
