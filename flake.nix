@@ -194,7 +194,6 @@
         derive-server = kms.derive-server.compressed;
         init-params-decoder = initialization.init-params-decoder.compressed;
         kernels = kernels.tuna;
-        localIpToVsock = sdks/docker-enclave/ip-to-vsock-raw-outgoing; 
       };
       enclaves.blue = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/blue {
         inherit nixpkgs systemConfig nitro-util;
