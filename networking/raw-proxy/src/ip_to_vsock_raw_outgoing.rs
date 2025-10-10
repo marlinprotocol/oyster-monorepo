@@ -77,6 +77,7 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
 }
 
 fn main() -> anyhow::Result<()> {
+    println!("Starting the ip-to-vsock-raw-proxy.....");
     let cli = Cli::parse();
 
     // nfqueue for incoming packets

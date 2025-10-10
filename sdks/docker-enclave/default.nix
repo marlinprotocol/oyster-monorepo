@@ -15,6 +15,15 @@
   dockerImages ? [],
 }: let
   system = systemConfig.system;
+
+
+  # Local path for ip-to-vsock-raw-outgoing
+  localRawProxy = builtins.path {
+    path = ../../networking/raw/proxy/target/release/ip-to-vsock-raw-outgoing;
+    name = "ip-to-vsock-raw-outgoing";
+  };
+
+
   nitro = nitro-util.lib.${system};
   eifArch = systemConfig.eif_arch;
   pkgs = nixpkgs.legacyPackages."${system}";
@@ -44,7 +53,7 @@
     mkdir -p $out/app/nfs
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenX25519} $out/app/keygen-x25519
-    cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
+    cp ${localRawProxy} $out/app/ip-to-vsock-raw-outgoing
     cp ${vtiriProxy} $out/app/vsock-to-ip-raw-incoming
     cp ${attestationServer} $out/app/attestation-server
     cp ${dnsproxy'} $out/app/dnsproxy
