@@ -1,7 +1,9 @@
 #!/bin/sh
 
 set -e
-ll /app
+ls /app
+
+/app/ip-to-vsock-raw-outgoing --vsock-addr 3:1200 --queue-num 0
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
