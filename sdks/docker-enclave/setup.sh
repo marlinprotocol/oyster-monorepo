@@ -1,9 +1,6 @@
 #!/bin/sh
 
 set -e
-ls /app
-du -sh /app/ip-to-vsock-raw-outgoing
-ls -lh /app/ip-to-vsock-raw-outgoing
 
 # /app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
 
@@ -50,6 +47,7 @@ ipset add internal 10.0.0.0/8
 ipset add internal 100.64.0.0/10
 ipset add internal 127.0.0.0/8
 ipset add internal 169.254.0.0/16
+ipset add internal 172.16.0.0/12
 ipset add internal 192.0.0.0/24
 ipset add internal 192.0.2.0/24
 ipset add internal 192.88.99.0/24
@@ -64,10 +62,9 @@ ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
-ipset add portfilter 0-65535
-# ipset add portfilter 80
-# ipset add portfilter 443
-# ipset add portfilter 760
+ipset add portfilter 1024-61439
+ipset add portfilter 80
+ipset add portfilter 443
 
 # iptables rules to route traffic to a nfqueue to be picked up by the proxy
 iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
@@ -101,7 +98,7 @@ echo "status"
 sleep 10
 
 # # echo "Checking connectivity to NFS server with telnet"
-# echo quit | telnet 3.111.219.88 2049
+echo quit | telnet 3.111.219.88 2049
 
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -t nfs -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
