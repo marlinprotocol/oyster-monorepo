@@ -1,7 +1,7 @@
 #!/bin/sh
 
 set -e
-ls /app
+ll /app
 
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
