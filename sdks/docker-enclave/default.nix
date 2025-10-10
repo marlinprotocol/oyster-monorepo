@@ -13,7 +13,6 @@
   kernels,
   compose ? ./. + "/docker-compose.yml",
   dockerImages ? [],
-  localIpToVsock ? ./. + "/ip-to-vsock-raw-outgoing",
 }: let
   system = systemConfig.system;
   nitro = nitro-util.lib.${system};
@@ -22,6 +21,7 @@
   supervisord' = "${supervisord}/bin/supervisord";
   dnsproxy' = "${dnsproxy}/bin/dnsproxy";
   keygenX25519 = "${keygen}/bin/keygen-x25519";
+  itvroProxy = "${raw-proxy}/bin/ip-to-vsock-raw-outgoing";
   vtiriProxy = "${raw-proxy}/bin/vsock-to-ip-raw-incoming";
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
@@ -44,7 +44,7 @@
     mkdir -p $out/app/nfs
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenX25519} $out/app/keygen-x25519
-    cp ${localIpToVsock} $out/app/ip-to-vsock-raw-outgoing
+    cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
     cp ${vtiriProxy} $out/app/vsock-to-ip-raw-incoming
     cp ${attestationServer} $out/app/attestation-server
     cp ${dnsproxy'} $out/app/dnsproxy
