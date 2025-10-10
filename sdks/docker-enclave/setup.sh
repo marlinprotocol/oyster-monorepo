@@ -3,6 +3,7 @@
 set -e
 ls /app
 du -sh /app/ip-to-vsock-raw-outgoing
+ls -lh /app/ip-to-vsock-raw-outgoing
 
 # /app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
 
