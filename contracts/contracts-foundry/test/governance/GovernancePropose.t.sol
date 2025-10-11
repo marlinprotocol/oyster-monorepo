@@ -16,24 +16,13 @@ contract GovernanceProposeTest is GovernanceSetup {
     // ========== Basic Propose Tests ==========
     
     function test_propose_Success() public {
-        // Prepare proposal parameters
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("someFunction()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Test Proposal",
-            description: "This is a test proposal description",
-            depositToken: address(depositToken)
-        });
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("someFunction()"),
+            "Test Proposal",
+            "This is a test proposal description"
+        );
 
         // Get initial balances
         uint256 initialProposerBalance = depositToken.balanceOf(proposer);
@@ -105,7 +94,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-
         vm.prank(proposer);
         bytes32 proposalId = governance.propose{value: 0}(params);
 
@@ -140,24 +128,13 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     function test_propose_revert_when_EmptyTitle() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "", // Empty title
-            description: "Valid description",
-            depositToken: address(depositToken)
-        });
-
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("function()"),
+            "", // Empty title
+            "Valid description"
+        );
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
@@ -165,24 +142,13 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     function test_propose_revert_when_EmptyDescription() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Valid Title",
-            description: "", // Empty description
-            depositToken: address(depositToken)
-        });
-
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("function()"),
+            "Valid Title",
+            "" // Empty description
+        );
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
@@ -190,24 +156,13 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     function test_propose_revert_when_InvalidTargetAddress() public {
-        address[] memory targets = new address[](1);
-        targets[0] = address(governance); // Cannot target governance contract itself
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Invalid Target",
-            description: "Proposal targeting governance contract",
-            depositToken: address(depositToken)
-        });
-
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            address(governance), // Cannot target governance contract itself
+            0,
+            abi.encodeWithSignature("function()"),
+            "Invalid Target",
+            "Proposal targeting governance contract"
+        );
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
@@ -215,24 +170,13 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     function test_propose_revert_when_InvalidMsgValue() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0.1 ether; // Value specified but no ETH sent
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Invalid Msg Value",
-            description: "Proposal with mismatched msg.value",
-            depositToken: address(depositToken)
-        });
-
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0.1 ether, // Value specified but no ETH sent
+            abi.encodeWithSignature("function()"),
+            "Invalid Msg Value",
+            "Proposal with mismatched msg.value"
+        );
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidMsgValue.selector);
@@ -242,23 +186,14 @@ contract GovernanceProposeTest is GovernanceSetup {
     // ========== Token and Deposit Tests ==========
     
     function test_propose_revert_when_UnsupportedToken() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Unsupported Token",
-            description: "Proposal with unsupported deposit token",
-            depositToken: makeAddr("unsupportedToken") // Token not configured
-        });
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("function()"),
+            "Unsupported Token",
+            "Proposal with unsupported deposit token"
+        );
+        params.depositToken = makeAddr("unsupportedToken"); // Override with unsupported token
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__TokenNotSupported.selector);
@@ -266,71 +201,43 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     function test_propose_revert_when_InsufficientTokenBalance() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Insufficient Balance",
-            description: "Proposal with insufficient token balance",
-            depositToken: address(depositToken)
-        });
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("function()"),
+            "Insufficient Balance",
+            "Proposal with insufficient token balance"
+        );
 
-        // Clear proposer's existing balance by transferring to admin
+        // Clear proposer's balance
         uint256 proposerBalance = depositToken.balanceOf(proposer);
-        if (proposerBalance > 0) {
-            vm.prank(proposer);
-            depositToken.transfer(admin, proposerBalance);
-        }
-        
-        // Fund proposer with less than required amount
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT - 1); // Give exactly DEPOSIT_AMOUNT - 1
-        
         vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
+        depositToken.transfer(admin, proposerBalance);
+        
+        // Fund with insufficient amount
+        vm.prank(admin);
+        depositToken.mint(proposer, DEPOSIT_AMOUNT - 1);
 
         vm.prank(proposer);
-        vm.expectRevert("ERC20: transfer amount exceeds balance"); // Should revert due to insufficient balance
+        vm.expectRevert("ERC20: transfer amount exceeds balance");
         governance.propose{value: 0}(params);
     }
 
     function test_propose_revert_when_InsufficientAllowance() public {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Insufficient Allowance",
-            description: "Proposal with insufficient allowance",
-            depositToken: address(depositToken)
-        });
-
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
+        IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
+            makeAddr("target"),
+            0,
+            abi.encodeWithSignature("function()"),
+            "Insufficient Allowance",
+            "Proposal with insufficient allowance"
+        );
         
         // Approve less than required amount
         vm.prank(proposer);
         depositToken.approve(address(governance), DEPOSIT_AMOUNT / 2);
 
         vm.prank(proposer);
-        vm.expectRevert(); // Should revert due to insufficient allowance
+        vm.expectRevert();
         governance.propose{value: 0}(params);
     }
 

@@ -186,6 +186,33 @@ contract GovernanceSetup is Test {
 
     //-------------------------------- Common Helpers start --------------------------------//
 
+    /// @dev Helper to build ProposeInputParams with single target
+    function _buildProposeParams(
+        address target,
+        uint256 value,
+        bytes memory calldata_,
+        string memory title,
+        string memory description
+    ) internal view returns (IGovernanceTypes.ProposeInputParams memory) {
+        address[] memory targets = new address[](1);
+        targets[0] = target;
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = value;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = calldata_;
+        
+        return IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: title,
+            description: description,
+            depositToken: address(depositToken)
+        });
+    }
+
     /// @dev Helper to create a simple proposal with default params
     function _createSimpleProposal() internal returns (bytes32) {
         return _createProposal(makeAddr("target"), 0, abi.encodeWithSignature("function()"), "Test Proposal", "Test Description");
