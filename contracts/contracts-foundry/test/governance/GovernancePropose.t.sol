@@ -6,11 +6,25 @@ import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {IGovernanceErrors} from "../../src/governance/interfaces/IGovernanceErrors.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+import {GovernanceEnclave} from "../../src/governance/GovernanceEnclave.sol";
 import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
 
 contract GovernanceProposeTest is GovernanceSetup {
+
+    // Helper function to convert single vote to array format
+    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = _voteEncrypted;
+        delegators[0] = _delegator;
+        delegatorChainIds[0] = _delegatorChainId;
+        
+        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
+    }
 
     // ========== Basic Propose Tests ==========
     
@@ -147,7 +161,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.InvalidInputLength.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidInputLength.selector);
         governance.propose{value: 0}(params);
     }
 
@@ -176,7 +190,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.InvalidTitleLength.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
         governance.propose{value: 0}(params);
     }
 
@@ -205,7 +219,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.InvalidTitleLength.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
         governance.propose{value: 0}(params);
     }
 
@@ -234,7 +248,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.InvalidAddress.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
         governance.propose{value: 0}(params);
     }
 
@@ -263,7 +277,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.InvalidMsgValue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidMsgValue.selector);
         governance.propose{value: 0}(params); // No ETH sent
     }
 
@@ -289,7 +303,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         });
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.TokenNotSupported.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__TokenNotSupported.selector);
         governance.propose{value: 0}(params);
     }
 
@@ -485,7 +499,21 @@ contract GovernanceProposeTest is GovernanceSetup {
     // ========== Network Configuration Tests ==========
     
     function test_propose_revert_when_NoSupportedChains() public {
-        // Create a new governance instance without network configuration
+        // Create a new governance enclave without network configuration
+        GovernanceEnclave newGovernanceEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
+        
+        vm.prank(admin);
+        newGovernanceEnclave.initialize(
+            admin,
+            kmsPath,
+            kmsRootServerPubKey,
+            pcr0,
+            pcr1,
+            pcr2,
+            maxRPCUrlsPerChain
+        );
+        
+        // Create a new governance instance with the new enclave
         Governance newGovernance = Governance(address(new ERC1967Proxy(address(new Governance()), "")));
         
         vm.prank(admin);
@@ -493,16 +521,13 @@ contract GovernanceProposeTest is GovernanceSetup {
             admin,
             configSetter,
             treasury,
+            address(newGovernanceEnclave),
             minQuorumThreshold,
             proposalPassVetoThreshold,
             vetoSlashRate,
             voteActivationDelay,
             voteDuration,
-            proposalDuration,
-            maxRPCUrlsPerChain,
-            pcr,
-            kmsRootServerPubKey,
-            kmsPath
+            proposalDuration
         );
 
         // Set token lock amount but no network config
@@ -533,7 +558,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         depositToken.approve(address(newGovernance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.NoSupportedChainConfigured.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__NoSupportedChainConfigured.selector);
         newGovernance.propose{value: 0}(params);
     }
 
@@ -696,10 +721,10 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         // Add some votes
         vm.prank(voter1);
-        governance.vote(proposalId, "encrypted_vote_1", address(0), 0);
+        _vote(proposalId, "encrypted_vote_1", address(0), 0);
         
         vm.prank(voter2);
-        governance.vote(proposalId, "encrypted_vote_2", address(0), 0);
+        _vote(proposalId, "encrypted_vote_2", address(0), 0);
 
         // Test getAllVoteInfo
         (
@@ -773,7 +798,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         // Add a vote
         vm.prank(voter1);
-        governance.vote(proposalId, "encrypted_vote_1", address(0), 0);
+        _vote(proposalId, "encrypted_vote_1", address(0), 0);
 
         // Test getVoteInfo
         (address voteVoter, bytes memory voteEncrypted) = governance.getVoteInfo(proposalId, 0);

@@ -1,0 +1,425 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.29;
+
+import {Test} from "forge-std/Test.sol";
+import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
+import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
+import {IGovernanceErrors} from "../../src/governance/interfaces/IGovernanceErrors.sol";
+import {Governance} from "../../src/governance/Governance.sol";
+import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {GovernanceSetup} from "./GovernanceSetup.t.sol";
+
+contract GovernanceEdgeCasesTest is GovernanceSetup {
+    
+    function _createTestProposal() internal returns (bytes32) {
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("function()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal for Edge Cases",
+            description: "This proposal is created for testing edge cases",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(admin);
+        depositToken.mint(proposer, DEPOSIT_AMOUNT);
+        
+        vm.prank(proposer);
+        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
+
+        vm.prank(proposer);
+        return governance.propose{value: 0}(params);
+    }
+    
+    // Helper function to convert single vote to array format
+    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = _voteEncrypted;
+        delegators[0] = _delegator;
+        delegatorChainIds[0] = _delegatorChainId;
+        
+        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
+    }
+
+    // ========== Boundary Value Tests ==========
+
+    function test_ProposeWithLargeValues() public {
+        // Test with large but reasonable values
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory calldatas = new bytes[](3);
+        
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = makeAddr(string(abi.encodePacked("target", i)));
+            values[i] = 1 ether; // Reasonable large value
+            calldatas[i] = abi.encodeWithSignature("setValue(uint256)", i);
+        }
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Large Values Proposal",
+            description: "A proposal with large values to test boundary conditions",
+            depositToken: address(depositToken)
+        });
+        
+        // Should succeed with correct msg.value
+        vm.deal(proposer, 10 ether);
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 3 ether}(params);
+        assertTrue(proposalId != bytes32(0), "Proposal should be created");
+    }
+
+    function test_ProposeWithZeroValues() public {
+        // Test with zero values
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("setValue(uint256)", 0);
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Zero Values Proposal",
+            description: "A proposal with zero values",
+            depositToken: address(depositToken)
+        });
+        
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+        
+        // Verify proposal was created
+        (address proposalProposer,,,,,) = governance.getProposalInfo(proposalId);
+        assertTrue(proposalProposer != address(0), "Proposal should be created");
+    }
+
+    function test_VoteWithMaximumData() public {
+        // Create a proposal
+        bytes32 proposalId = _createTestProposal();
+        
+        // Create maximum size vote data
+        bytes memory maxVoteData = new bytes(10000); // 10KB of data
+        for (uint256 i = 0; i < maxVoteData.length; i++) {
+            maxVoteData[i] = bytes1(uint8(i % 256));
+        }
+        
+        // Fast forward to voting period
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        
+        vm.prank(voter1);
+        _vote(proposalId, maxVoteData, address(0), 0);
+        
+        // Verify vote was recorded
+        assertEq(governance.getVoteCount(proposalId), 1, "Large vote data should be recorded");
+    }
+
+    function test_VoteWithEmptyData() public {
+        // Create a proposal
+        bytes32 proposalId = _createTestProposal();
+        
+        // Fast forward to voting period
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        
+        vm.prank(voter1);
+        _vote(proposalId, "", address(0), 0);
+        
+        // Verify vote was recorded
+        assertEq(governance.getVoteCount(proposalId), 1, "Empty vote data should be recorded");
+    }
+
+    // ========== Overflow/Underflow Tests ==========
+
+    function test_ProposalNonceOverflow() public {
+        // This test would require creating 2^256 proposals, which is impractical
+        // Instead, we'll test the nonce increment logic
+        
+        // Create multiple proposals from the same proposer
+        for (uint256 i = 0; i < 10; i++) {
+            bytes32 proposalId = _createTestProposal();
+            (address proposalProposer,,,,,) = governance.getProposalInfo(proposalId);
+            assertTrue(proposalProposer != address(0), "Proposal should be created");
+        }
+        
+        // Verify nonce incremented
+        assertEq(governance.proposerNonce(proposer), 10, "Nonce should increment properly");
+    }
+
+    function test_VoteCountOverflow() public {
+        // Create a proposal
+        bytes32 proposalId = _createTestProposal();
+        
+        // Fast forward to voting period
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        
+        // Create many voters and vote
+        for (uint256 i = 0; i < 100; i++) {
+            address voter = makeAddr(string(abi.encodePacked("voter", i)));
+            bytes memory voteData = abi.encode(string(abi.encodePacked("vote", i)));
+            
+            vm.prank(voter);
+            _vote(proposalId, voteData, address(0), 0);
+        }
+        
+        // Verify all votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 100, "All votes should be recorded");
+    }
+
+    // ========== Memory Limit Tests ==========
+
+    function test_LargeProposalArrays() public {
+        // Test with large arrays (but not too large to avoid gas issues)
+        address[] memory targets = new address[](50);
+        uint256[] memory values = new uint256[](50);
+        bytes[] memory calldatas = new bytes[](50);
+        
+        for (uint256 i = 0; i < 50; i++) {
+            targets[i] = makeAddr(string(abi.encodePacked("target", i)));
+            values[i] = 0;
+            calldatas[i] = abi.encodeWithSignature("setValue(uint256)", i);
+        }
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Large Arrays Proposal",
+            description: "A proposal with large arrays to test memory limits",
+            depositToken: address(depositToken)
+        });
+        
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+        
+        // Verify proposal was created
+        (address proposalProposer,,,,,) = governance.getProposalInfo(proposalId);
+        assertTrue(proposalProposer != address(0), "Large proposal should be created");
+    }
+
+    // ========== Timing Edge Cases ==========
+
+    function test_VoteAtExactActivationTime() public {
+        bytes32 proposalId = _createTestProposal();
+        
+        // Get exact activation time
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        uint256 activationTime = timeInfo.voteActivationTimestamp;
+        
+        // Vote exactly at activation time
+        vm.warp(activationTime);
+        
+        vm.prank(voter1);
+        _vote(proposalId, abi.encode("vote"), address(0), 0);
+        
+        // Verify vote was recorded
+        assertEq(governance.getVoteCount(proposalId), 1, "Vote at exact activation time should work");
+    }
+
+    function test_VoteAtExactDeadline() public {
+        bytes32 proposalId = _createTestProposal();
+        
+        // Get exact deadline
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        uint256 deadline = timeInfo.voteDeadlineTimestamp;
+        
+        // Try to vote exactly at deadline (should fail)
+        vm.warp(deadline);
+        
+        vm.prank(voter1);
+        vm.expectRevert(IGovernanceErrors.Governance__VotingNotActive.selector);
+        _vote(proposalId, abi.encode("vote"), address(0), 0);
+    }
+
+    function test_RefundAfterProposalDeadline() public {
+        // Create a proposal with ETH value
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0.1 ether;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("function()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Test Proposal with ETH",
+            description: "Test proposal for refund",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(admin);
+        depositToken.mint(proposer, DEPOSIT_AMOUNT);
+        
+        vm.prank(proposer);
+        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
+        
+        vm.deal(proposer, 1 ether);
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0.1 ether}(params);
+        
+        // Get exact deadline
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        uint256 proposalDeadline = timeInfo.proposalDeadlineTimestamp;
+        
+        // Refund should only work after proposal deadline
+        vm.warp(proposalDeadline + 1);
+        
+        vm.prank(proposer);
+        governance.refund(proposalId);
+        
+        // Verify refund was processed
+        // This tests the exact timing boundary
+    }
+
+    // ========== Invalid Input Tests ==========
+
+    function test_ProposeWithZeroAddressTarget() public {
+        address[] memory targets = new address[](1);
+        targets[0] = address(0); // Zero address is allowed, only governance itself is not allowed
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("setValue(uint256)", 42);
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Zero Address Target Proposal",
+            description: "A proposal with zero address target",
+            depositToken: address(depositToken)
+        });
+        
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0}(params);
+        
+        // Verify proposal was created (zero address target is allowed)
+        (address proposalProposer,,,,,) = governance.getProposalInfo(proposalId);
+        assertTrue(proposalProposer != address(0), "Proposal should be created");
+    }
+
+    function test_ProposeWithSelfTarget() public {
+        address[] memory targets = new address[](1);
+        targets[0] = address(governance); // Self target
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("setValue(uint256)", 42);
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "Self Target Proposal",
+            description: "A proposal targeting itself",
+            depositToken: address(depositToken)
+        });
+        
+        vm.prank(proposer);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
+        governance.propose{value: 0}(params);
+    }
+
+    // ========== State Transition Tests ==========
+
+    function test_ProposalStateTransitions() public {
+        // Create a proposal with ETH value
+        address[] memory targets = new address[](1);
+        targets[0] = makeAddr("target");
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = 0.5 ether;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("function()");
+        
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: "State Transition Test",
+            description: "Test proposal state transitions",
+            depositToken: address(depositToken)
+        });
+
+        vm.prank(admin);
+        depositToken.mint(proposer, DEPOSIT_AMOUNT);
+        
+        vm.prank(proposer);
+        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
+        
+        vm.deal(proposer, 1 ether);
+        vm.prank(proposer);
+        bytes32 proposalId = governance.propose{value: 0.5 ether}(params);
+        
+        // Initial state: proposal exists but no votes
+        assertEq(governance.getVoteCount(proposalId), 0, "Initial vote count should be 0");
+        
+        // After voting: vote count increases
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        vm.prank(voter1);
+        _vote(proposalId, abi.encode("vote"), address(0), 0);
+        assertEq(governance.getVoteCount(proposalId), 1, "Vote count should increase after voting");
+        
+        // After proposal deadline passes without submitResult
+        vm.warp(timeInfo.proposalDeadlineTimestamp + 1);
+        vm.prank(proposer);
+        governance.refund(proposalId);
+        
+        // Try to refund again (should fail)
+        vm.prank(proposer);
+        vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
+        governance.refund(proposalId);
+    }
+
+    // ========== Gas Limit Tests ==========
+
+    function test_GasLimitWithLargeVoteData() public {
+        bytes32 proposalId = _createTestProposal();
+        
+        // Create very large vote data
+        bytes memory largeVoteData = new bytes(50000); // 50KB
+        for (uint256 i = 0; i < largeVoteData.length; i++) {
+            largeVoteData[i] = bytes1(uint8(i % 256));
+        }
+        
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        
+        // Vote with large data - should work
+        vm.prank(voter1);
+        _vote(proposalId, largeVoteData, address(0), 0);
+        
+        // Verify vote was recorded
+        assertEq(governance.getVoteCount(proposalId), 1, "Large vote data should be recorded");
+    }
+}

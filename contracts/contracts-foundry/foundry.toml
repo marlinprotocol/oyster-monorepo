@@ -7,17 +7,7 @@ optimizer = true
 optimizer_runs = 200
 solc_version = "0.8.29"
 via_ir = true
-skip = [
-  "script/**/*.sol",
-  "test/governance/GovernanceAdmin.t.sol",
-  "test/governance/GovernanceEdgeCases.t.sol",
-  "test/governance/GovernancePropose.t.sol",
-  "test/governance/GovernanceSetup.t.sol",
-  "test/governance/GovernanceSlash.t.sol",
-  "test/governance/GovernanceSubmitResult.t.sol",
-  "test/governance/GovernanceVote.t.sol",
-  "test/governance/mocks/**/*.sol",
-]
+skip = ["script/**"]
 
 [etherscan]
 arbitrum_sepolia = { key = "${ARBITRUM_SEPOLIA_API_KEY}" }

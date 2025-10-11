@@ -54,7 +54,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -133,7 +133,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -223,7 +223,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
 
         // Get proposal info
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
 
         // Warp to after vote deadline
@@ -297,7 +297,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
 
         // Get proposal info
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
 
         // Warp to after vote deadline
@@ -357,7 +357,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
 
         // Get proposal info
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
 
         // Warp to after vote deadline
@@ -428,7 +428,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -499,7 +499,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -533,7 +533,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to quorum not met
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed
@@ -573,7 +573,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -607,7 +607,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to veto
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed
@@ -645,7 +645,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -679,7 +679,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to no clear majority
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed
@@ -718,7 +718,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -752,7 +752,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to yes votes below threshold
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed
@@ -791,7 +791,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -825,7 +825,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to no clear decision
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed
@@ -865,7 +865,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -899,7 +899,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         
         // Execute the proposal - should fail due to veto votes below threshold
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.ProposalNotInQueue.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalNotInQueue.selector);
         governance.execute(proposalId);
         
         // Verify the execution failed

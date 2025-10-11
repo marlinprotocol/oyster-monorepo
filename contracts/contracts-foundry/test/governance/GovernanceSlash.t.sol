@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.29;
 
 import {Test, console} from "forge-std/Test.sol";
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
@@ -177,7 +177,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -272,7 +272,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -350,7 +350,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Try to refund before deadline - should fail
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.NotRefundableProposal.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
         governance.refund(proposalId);
     }
 
@@ -383,7 +383,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        bytes32 networkHash = governance.getNetworkHash();
+        bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
         
         // Wait for vote deadline to pass
@@ -414,7 +414,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Try to refund after submitResult - should fail
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.NotRefundableProposal.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
         governance.refund(proposalId);
     }
 
@@ -424,7 +424,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         bytes32 nonExistentProposalId = keccak256("non-existent");
         
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.ProposalDoesNotExist.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__ProposalDoesNotExist.selector);
         governance.refund(nonExistentProposalId);
     }
 
@@ -464,7 +464,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         // Second refund should fail due to NotRefundableProposal
         vm.prank(proposer);
-        vm.expectRevert(IGovernanceErrors.NotRefundableProposal.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
         governance.refund(proposalId);
     }
 }

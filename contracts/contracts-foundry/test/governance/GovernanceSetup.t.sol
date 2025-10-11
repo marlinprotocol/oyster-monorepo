@@ -5,11 +5,15 @@ import {Test} from "forge-std/Test.sol";
 import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+import {GovernanceEnclave} from "../../src/governance/GovernanceEnclave.sol";
+import {GovernanceDelegation} from "../../src/governance/GovernanceDelegation.sol";
 import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract GovernanceSetup is Test {
     Governance public governance;
+    GovernanceEnclave public governanceEnclave;
+    GovernanceDelegation public governanceDelegation;
 
     uint256 constant GAS_FUND_AMOUNT = 10 ether;
     uint256 constant DEPOSIT_AMOUNT = 100 * 1e18;
@@ -33,7 +37,9 @@ contract GovernanceSetup is Test {
     uint256 public proposalDuration;
     uint256 public maxRPCUrlsPerChain;
     
-    IGovernanceTypes.PCR public pcr;
+    bytes public pcr0;
+    bytes public pcr1;
+    bytes public pcr2;
     bytes public kmsRootServerPubKey;
     string public kmsPath;
 
@@ -60,11 +66,10 @@ contract GovernanceSetup is Test {
         voteDuration = 2 * 60; // 2 minutes
         proposalDuration = 10 * 60; // 10 minutes (must be > voteActivationDelay + voteDuration)
         maxRPCUrlsPerChain = 10;
-        pcr = IGovernanceTypes.PCR({
-                pcr0: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-                pcr1: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-                pcr2: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-            });
+        
+        pcr0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        pcr1 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        pcr2 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
         kmsRootServerPubKey = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
         kmsPath = "governance_test";
@@ -106,6 +111,29 @@ contract GovernanceSetup is Test {
             admin
         );
         
+        /* Deploy GovernanceEnclave and initialize */
+        vm.startPrank(admin);
+        governanceEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
+        governanceEnclave.initialize(
+            admin,
+            kmsPath,
+            kmsRootServerPubKey,
+            pcr0,
+            pcr1,
+            pcr2,
+            maxRPCUrlsPerChain
+        );
+        
+        // Grant configSetter role to configSetter address
+        governanceEnclave.grantRole(governanceEnclave.GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE(), configSetter);
+        vm.stopPrank();
+        
+        /* Deploy GovernanceDelegation and initialize */
+        vm.startPrank(admin);
+        governanceDelegation = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        governanceDelegation.initialize(admin);
+        vm.stopPrank();
+        
         /* Deploy Governance and initialize */
         vm.startPrank(admin);
         governance = Governance(address(new ERC1967Proxy(address(new Governance()), "")));
@@ -113,16 +141,13 @@ contract GovernanceSetup is Test {
             admin,
             configSetter,
             treasury,
+            address(governanceEnclave),
             minQuorumThreshold,
             proposalPassVetoThreshold,
             vetoSlashRate,
             voteActivationDelay,
             voteDuration,
-            proposalDuration,
-            maxRPCUrlsPerChain,
-            pcr,
-            kmsRootServerPubKey,
-            kmsPath
+            proposalDuration
         );
         _setUpConfig();
         vm.stopPrank();
@@ -138,19 +163,24 @@ contract GovernanceSetup is Test {
     }
 
     function _setUpConfig() internal {
-        vm.startPrank(configSetter);
-        governance.setTokenLockAmount(address(depositToken), DEPOSIT_AMOUNT);
-
+        // Set network config on GovernanceEnclave (requires admin)
+        vm.startPrank(admin);
         string[] memory rpcUrls = new string[](maxRPCUrlsPerChain);
         for (uint256 i = 0; i < maxRPCUrlsPerChain; i++) {
             rpcUrls[i] = "https://rpc.marlin.com";
         }
 
-        governance.setNetworkConfig(
+        governanceEnclave.setNetworkConfig(
             block.chainid,
             address(marlinGovernanceToken),
             rpcUrls
         );
+        vm.stopPrank();
+        
+        // Set token lock amount and governance delegation (requires configSetter)
+        vm.startPrank(configSetter);
+        governance.setTokenLockAmount(address(depositToken), DEPOSIT_AMOUNT);
+        governance.setGovernanceDelegation(block.chainid, address(governanceDelegation));
         vm.stopPrank();
     }
 }
