@@ -6,6 +6,7 @@ import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {IGovernanceErrors} from "../../src/governance/interfaces/IGovernanceErrors.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+import {GovernanceDelegation} from "../../src/governance/GovernanceDelegation.sol";
 import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
@@ -582,4 +583,478 @@ contract GovernanceVoteTest is GovernanceSetup {
         vm.expectRevert();
         governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
     }
+
+    // ========== Delegation Voting Tests ==========
+
+    function test_vote_WithValidDelegation() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup delegation
+        address delegator = makeAddr("delegator");
+        address delegatee = voter1;
+        
+        vm.prank(delegator);
+        governanceDelegation.setDelegation(delegatee);
+        
+        // Verify delegation is set
+        assertTrue(governanceDelegation.isDelegationSet(delegator, delegatee), "Delegation should be set");
+        
+        // Vote with delegation
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = voteEncrypted;
+        delegators[0] = delegator;
+        delegatorChainIds[0] = block.chainid;
+        
+        vm.prank(delegatee);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify vote was recorded
+        assertEq(governance.getVoteCount(proposalId), 1);
+        (IGovernanceTypes.Vote[] memory votes,,) = governance.getAllVoteInfo(proposalId);
+        assertEq(votes[0].voter, delegatee, "Voter should be delegatee");
+        assertEq(votes[0].delegator, delegator, "Delegator should be recorded");
+        assertEq(votes[0].delegatorChainId, block.chainid, "ChainId should be recorded");
+    }
+
+    function test_vote_WithDelegation_revert_WhenNotSetInGovernanceDelegation() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Vote with delegation WITHOUT setting it in GovernanceDelegation
+        address fakeDelegator = makeAddr("fakeDelegator");
+        
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = voteEncrypted;
+        delegators[0] = fakeDelegator;
+        delegatorChainIds[0] = block.chainid;
+        
+        // This should succeed - validation happens in enclave, not in vote submission
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        assertEq(governance.getVoteCount(proposalId), 1, "Vote should be recorded");
+    }
+
+    function test_vote_WithDelegation_revert_WhenInvalidChainId() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        address delegator = makeAddr("delegator");
+        uint256 invalidChainId = 999999; // Chain without governance delegation
+        
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = voteEncrypted;
+        delegators[0] = delegator;
+        delegatorChainIds[0] = invalidChainId;
+        
+        vm.prank(voter1);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidDelegatorChainId.selector);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+    }
+
+    // ========== Multi-Chain Delegation Tests ==========
+
+    function test_vote_MultiChainDelegation() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup additional chains
+        uint256 chain2 = 137; // Polygon
+        uint256 chain3 = 56;  // BSC
+        
+        // Deploy additional GovernanceDelegation contracts for other chains
+        GovernanceDelegation delegation2 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        GovernanceDelegation delegation3 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        
+        vm.startPrank(admin);
+        delegation2.initialize(admin);
+        delegation3.initialize(admin);
+        vm.stopPrank();
+        
+        // Set governance delegations for multiple chains
+        vm.startPrank(configSetter);
+        governance.setGovernanceDelegation(chain2, address(delegation2));
+        governance.setGovernanceDelegation(chain3, address(delegation3));
+        vm.stopPrank();
+        
+        // Setup delegations on different chains
+        address delegator1 = makeAddr("delegator1");
+        address delegator2 = makeAddr("delegator2");
+        address delegator3 = makeAddr("delegator3");
+        
+        vm.prank(delegator1);
+        governanceDelegation.setDelegation(voter1);
+        
+        vm.prank(delegator2);
+        delegation2.setDelegation(voter1);
+        
+        vm.prank(delegator3);
+        delegation3.setDelegation(voter1);
+        
+        // Vote with delegations from multiple chains
+        bytes[] memory voteEncrypteds = new bytes[](3);
+        address[] memory delegators = new address[](3);
+        uint256[] memory delegatorChainIds = new uint256[](3);
+        
+        voteEncrypteds[0] = abi.encode("vote1");
+        voteEncrypteds[1] = abi.encode("vote2");
+        voteEncrypteds[2] = abi.encode("vote3");
+        delegators[0] = delegator1;
+        delegators[1] = delegator2;
+        delegators[2] = delegator3;
+        delegatorChainIds[0] = block.chainid;
+        delegatorChainIds[1] = chain2;
+        delegatorChainIds[2] = chain3;
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify all votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 3, "All multi-chain votes should be recorded");
+        
+        // Verify vote details
+        (IGovernanceTypes.Vote[] memory votes,,) = governance.getAllVoteInfo(proposalId);
+        assertEq(votes[0].delegator, delegator1);
+        assertEq(votes[0].delegatorChainId, block.chainid);
+        assertEq(votes[1].delegator, delegator2);
+        assertEq(votes[1].delegatorChainId, chain2);
+        assertEq(votes[2].delegator, delegator3);
+        assertEq(votes[2].delegatorChainId, chain3);
+    }
+
+    function test_vote_MixedDirectAndDelegatedVotes() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup delegation
+        address delegator = makeAddr("delegator");
+        vm.prank(delegator);
+        governanceDelegation.setDelegation(voter1);
+        
+        // Vote with mix of direct and delegated votes
+        bytes[] memory voteEncrypteds = new bytes[](3);
+        address[] memory delegators = new address[](3);
+        uint256[] memory delegatorChainIds = new uint256[](3);
+        
+        voteEncrypteds[0] = abi.encode("direct_vote");
+        voteEncrypteds[1] = abi.encode("delegated_vote1");
+        voteEncrypteds[2] = abi.encode("direct_vote2");
+        delegators[0] = address(0); // Direct vote
+        delegators[1] = delegator;   // Delegated vote
+        delegators[2] = address(0); // Direct vote
+        delegatorChainIds[0] = 0;
+        delegatorChainIds[1] = block.chainid;
+        delegatorChainIds[2] = 0;
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify all votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 3);
+    }
+
+    // ========== Batch Voting Tests ==========
+
+    function test_vote_BatchVoting_SingleVoterMultipleVotes() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        uint256 batchSize = 10;
+        bytes[] memory voteEncrypteds = new bytes[](batchSize);
+        address[] memory delegators = new address[](batchSize);
+        uint256[] memory delegatorChainIds = new uint256[](batchSize);
+        
+        for (uint256 i = 0; i < batchSize; i++) {
+            voteEncrypteds[i] = abi.encode(string(abi.encodePacked("vote", i)));
+            delegators[i] = address(0);
+            delegatorChainIds[i] = 0;
+        }
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify all votes were recorded
+        assertEq(governance.getVoteCount(proposalId), batchSize);
+    }
+
+    function test_vote_BatchVoting_MultipleDelegations() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup multiple delegations
+        address[] memory delegatorList = new address[](5);
+        for (uint256 i = 0; i < 5; i++) {
+            delegatorList[i] = makeAddr(string(abi.encodePacked("delegator", i)));
+            vm.prank(delegatorList[i]);
+            governanceDelegation.setDelegation(voter1);
+        }
+        
+        // Batch vote with all delegations
+        bytes[] memory voteEncrypteds = new bytes[](5);
+        address[] memory delegators = new address[](5);
+        uint256[] memory delegatorChainIds = new uint256[](5);
+        
+        for (uint256 i = 0; i < 5; i++) {
+            voteEncrypteds[i] = abi.encode(string(abi.encodePacked("delegated_vote", i)));
+            delegators[i] = delegatorList[i];
+            delegatorChainIds[i] = block.chainid;
+        }
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify all delegated votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 5);
+    }
+
+    function test_vote_BatchVoting_LargeBatch() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        uint256 largeBatchSize = 50;
+        bytes[] memory voteEncrypteds = new bytes[](largeBatchSize);
+        address[] memory delegators = new address[](largeBatchSize);
+        uint256[] memory delegatorChainIds = new uint256[](largeBatchSize);
+        
+        for (uint256 i = 0; i < largeBatchSize; i++) {
+            voteEncrypteds[i] = abi.encode(string(abi.encodePacked("batch_vote", i)));
+            delegators[i] = address(0);
+            delegatorChainIds[i] = 0;
+        }
+        
+        uint256 gasBefore = gasleft();
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        uint256 gasUsed = gasBefore - gasleft();
+        
+        // Verify all votes were recorded
+        assertEq(governance.getVoteCount(proposalId), largeBatchSize);
+        emit log_named_uint("Gas used for batch of 50 votes", gasUsed);
+    }
+
+    // ========== Multi-Chain Scenario Tests ==========
+
+    function test_vote_MultiChain_DifferentDelegationsPerChain() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup multiple chains
+        uint256 chain2 = 137;
+        uint256 chain3 = 56;
+        
+        GovernanceDelegation delegation2 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        GovernanceDelegation delegation3 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        
+        vm.startPrank(admin);
+        delegation2.initialize(admin);
+        delegation3.initialize(admin);
+        vm.stopPrank();
+        
+        vm.startPrank(configSetter);
+        governance.setGovernanceDelegation(chain2, address(delegation2));
+        governance.setGovernanceDelegation(chain3, address(delegation3));
+        vm.stopPrank();
+        
+        // Different delegators for each chain, all delegate to different voters
+        address delegator1 = makeAddr("delegator1");
+        address delegator2 = makeAddr("delegator2");
+        address delegator3 = makeAddr("delegator3");
+        
+        vm.prank(delegator1);
+        governanceDelegation.setDelegation(voter1);
+        
+        vm.prank(delegator2);
+        delegation2.setDelegation(voter2);
+        
+        vm.prank(delegator3);
+        delegation3.setDelegation(voter3);
+        
+        // Voter1 votes with chain1 delegation
+        bytes[] memory votes1 = new bytes[](1);
+        address[] memory dels1 = new address[](1);
+        uint256[] memory chains1 = new uint256[](1);
+        votes1[0] = abi.encode("vote_chain1");
+        dels1[0] = delegator1;
+        chains1[0] = block.chainid;
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, votes1, dels1, chains1);
+        
+        // Voter2 votes with chain2 delegation
+        bytes[] memory votes2 = new bytes[](1);
+        address[] memory dels2 = new address[](1);
+        uint256[] memory chains2 = new uint256[](1);
+        votes2[0] = abi.encode("vote_chain2");
+        dels2[0] = delegator2;
+        chains2[0] = chain2;
+        
+        vm.prank(voter2);
+        governance.vote(proposalId, votes2, dels2, chains2);
+        
+        // Voter3 votes with chain3 delegation
+        bytes[] memory votes3 = new bytes[](1);
+        address[] memory dels3 = new address[](1);
+        uint256[] memory chains3 = new uint256[](1);
+        votes3[0] = abi.encode("vote_chain3");
+        dels3[0] = delegator3;
+        chains3[0] = chain3;
+        
+        vm.prank(voter3);
+        governance.vote(proposalId, votes3, dels3, chains3);
+        
+        // Verify all votes from different chains were recorded
+        assertEq(governance.getVoteCount(proposalId), 3);
+        
+        // Verify each vote has correct chain info
+        (IGovernanceTypes.Vote[] memory allVotes,,) = governance.getAllVoteInfo(proposalId);
+        assertEq(allVotes[0].delegatorChainId, block.chainid);
+        assertEq(allVotes[1].delegatorChainId, chain2);
+        assertEq(allVotes[2].delegatorChainId, chain3);
+    }
+
+    function test_vote_MultiChain_SameDelegatorDifferentChains() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup multiple chains
+        uint256 chain2 = 137;
+        
+        GovernanceDelegation delegation2 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        
+        vm.prank(admin);
+        delegation2.initialize(admin);
+        
+        vm.prank(configSetter);
+        governance.setGovernanceDelegation(chain2, address(delegation2));
+        
+        // Same delegator delegates on multiple chains
+        address delegator = makeAddr("multi_chain_delegator");
+        
+        vm.prank(delegator);
+        governanceDelegation.setDelegation(voter1);
+        
+        vm.prank(delegator);
+        delegation2.setDelegation(voter1);
+        
+        // Vote with same delegator from different chains
+        bytes[] memory voteEncrypteds = new bytes[](2);
+        address[] memory delegators = new address[](2);
+        uint256[] memory delegatorChainIds = new uint256[](2);
+        
+        voteEncrypteds[0] = abi.encode("vote_chain1");
+        voteEncrypteds[1] = abi.encode("vote_chain2");
+        delegators[0] = delegator;
+        delegators[1] = delegator;
+        delegatorChainIds[0] = block.chainid;
+        delegatorChainIds[1] = chain2;
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify both chain votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 2);
+    }
+
+    function test_vote_BatchVoting_MixedChains() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Setup additional chain
+        uint256 chain2 = 137;
+        GovernanceDelegation delegation2 = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
+        
+        vm.prank(admin);
+        delegation2.initialize(admin);
+        
+        vm.prank(configSetter);
+        governance.setGovernanceDelegation(chain2, address(delegation2));
+        
+        // Setup delegations
+        address delegator1 = makeAddr("delegator1");
+        address delegator2 = makeAddr("delegator2");
+        
+        vm.prank(delegator1);
+        governanceDelegation.setDelegation(voter1);
+        
+        vm.prank(delegator2);
+        delegation2.setDelegation(voter1);
+        
+        // Batch vote mixing direct votes and delegations from multiple chains
+        bytes[] memory voteEncrypteds = new bytes[](4);
+        address[] memory delegators = new address[](4);
+        uint256[] memory delegatorChainIds = new uint256[](4);
+        
+        voteEncrypteds[0] = abi.encode("direct_vote");
+        delegators[0] = address(0);
+        delegatorChainIds[0] = 0;
+        
+        voteEncrypteds[1] = abi.encode("delegated_chain1");
+        delegators[1] = delegator1;
+        delegatorChainIds[1] = block.chainid;
+        
+        voteEncrypteds[2] = abi.encode("delegated_chain2");
+        delegators[2] = delegator2;
+        delegatorChainIds[2] = chain2;
+        
+        voteEncrypteds[3] = abi.encode("direct_vote2");
+        delegators[3] = address(0);
+        delegatorChainIds[3] = 0;
+        
+        vm.prank(voter1);
+        governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+        
+        // Verify all mixed votes were recorded
+        assertEq(governance.getVoteCount(proposalId), 4);
+    }
+
+    // ========== Gas Comparison Tests ==========
+
+    function test_vote_GasComparison_SingleVsBatch() public {
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Create second proposal for comparison
+        bytes32 proposalId2 = _createTestProposal();
+        vm.warp(block.timestamp + voteActivationDelay + 1);
+        
+        // Test 1: Submit votes one by one
+        uint256 gasSingle = 0;
+        for (uint256 i = 0; i < 5; i++) {
+            bytes[] memory voteEncrypteds = new bytes[](1);
+            address[] memory delegators = new address[](1);
+            uint256[] memory delegatorChainIds = new uint256[](1);
+            
+            voteEncrypteds[0] = abi.encode(string(abi.encodePacked("vote", i)));
+            delegators[0] = address(0);
+            delegatorChainIds[0] = 0;
+            
+            uint256 gasBeforeSingle = gasleft();
+            vm.prank(voter1);
+            governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
+            gasSingle += gasBeforeSingle - gasleft();
+        }
+        
+        // Test 2: Submit all votes in batch
+        bytes[] memory batchVotes = new bytes[](5);
+        address[] memory batchDelegators = new address[](5);
+        uint256[] memory batchChainIds = new uint256[](5);
+        
+        for (uint256 i = 0; i < 5; i++) {
+            batchVotes[i] = abi.encode(string(abi.encodePacked("batch_vote", i)));
+            batchDelegators[i] = address(0);
+            batchChainIds[i] = 0;
+        }
+        
+        uint256 gasBeforeBatch = gasleft();
+        vm.prank(voter2);
+        governance.vote(proposalId2, batchVotes, batchDelegators, batchChainIds);
+        uint256 gasBatch = gasBeforeBatch - gasleft();
+        
+        // Log gas comparison
+        emit log_named_uint("Gas for 5 single votes", gasSingle);
+        emit log_named_uint("Gas for 1 batch of 5 votes", gasBatch);
+        emit log_named_uint("Gas saved by batching", gasSingle - gasBatch);
+        
+        // Batch should be more efficient
+        assertTrue(gasBatch < gasSingle, "Batch voting should be more gas efficient");
+    }
 }
+
