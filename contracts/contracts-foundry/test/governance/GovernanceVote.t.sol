@@ -15,64 +15,21 @@ contract GovernanceVoteTest is GovernanceSetup {
 
     bytes32 public proposalId;
     bytes public voteEncrypted;
-    
-    // Helper function to convert single vote to array format
-    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
-        bytes[] memory voteEncrypteds = new bytes[](1);
-        address[] memory delegators = new address[](1);
-        uint256[] memory delegatorChainIds = new uint256[](1);
-        
-        voteEncrypteds[0] = _voteEncrypted;
-        delegators[0] = _delegator;
-        delegatorChainIds[0] = _delegatorChainId;
-        
-        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
-    }
 
     function setUp() public override {
         super.setUp();
         
-        // Create a proposal for testing
-        proposalId = _createTestProposal();
+        // Create a proposal for testing (proposer already funded in GovernanceSetup)
+        proposalId = _createSimpleProposal();
         
         // Create test vote data
         voteEncrypted = abi.encode("test vote data");
     }
 
-    function _createTestProposal() internal returns (bytes32) {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Test Proposal for Voting",
-            description: "This proposal is created for testing vote functionality",
-            depositToken: address(depositToken)
-        });
-
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
-
-        vm.prank(proposer);
-        return governance.propose{value: 0}(params);
-    }
-
     // ========== Basic Vote Tests ==========
     
     function test_vote_Success() public {
-        // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         vm.prank(voter1);
         _vote(proposalId, voteEncrypted, address(0), 0);
@@ -87,8 +44,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_MultipleVoters() public {
-        // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory vote1 = abi.encode("vote1");
         bytes memory vote2 = abi.encode("vote2");
@@ -162,7 +118,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_VoteHashUpdated() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes32 initialVoteHash = governance.getVoteHash(proposalId);
 
@@ -177,7 +133,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
     function test_vote_VoteHashConsistency() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory vote1 = abi.encode("vote1");
         bytes memory vote2 = abi.encode("vote2");
@@ -224,7 +180,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_EmptyVoteData() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory emptyVote = "";
 
@@ -239,7 +195,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
     function test_vote_LargeVoteData() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Create large vote data
         bytes memory largeVote = new bytes(1000);
@@ -260,7 +216,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_VoteIndexIncrement() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory vote1 = abi.encode("vote1");
         bytes memory vote2 = abi.encode("vote2");
@@ -300,7 +256,7 @@ contract GovernanceVoteTest is GovernanceSetup {
         governance.pause();
 
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Vote should succeed even when paused (vote function doesn't have whenNotPaused modifier)
         vm.prank(voter1);
@@ -312,7 +268,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
     function test_vote_WhenNotPaused() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Contract should not be paused initially
         assertFalse(governance.paused(), "Contract should not be paused initially");
@@ -328,7 +284,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_MultipleVotesFromSameVoter() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory vote1 = abi.encode("first vote");
         bytes memory vote2 = abi.encode("second vote");
@@ -365,7 +321,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_VoteHashCalculation() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         bytes memory vote1 = abi.encode("vote1");
         bytes memory vote2 = abi.encode("vote2");
@@ -395,7 +351,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     
     function test_vote_ZeroAddressVoter() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         // This should work (zero address can vote)
         vm.prank(address(0));
@@ -409,7 +365,7 @@ contract GovernanceVoteTest is GovernanceSetup {
 
     function test_vote_ContractAddressVoter() public {
         // Fast forward to voting period
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Create a contract address
         address contractVoter = address(0x1234567890123456789012345678901234567890);
@@ -455,7 +411,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     // ========== Array-based vote tests ==========
 
     function test_vote_ArrayLengthMismatch() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes[] memory voteEncrypteds = new bytes[](1); // Mismatch: 1 vs 2
         address[] memory delegators = new address[](2);
@@ -472,7 +428,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_EmptyArray() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes[] memory voteEncrypteds = new bytes[](0);
         address[] memory delegators = new address[](0);
@@ -486,7 +442,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_MultipleVotesOnSameProposal() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes[] memory voteEncrypteds = new bytes[](2);
         address[] memory delegators = new address[](2);
@@ -507,7 +463,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_NonExistentProposal() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes32 fakeProposalId = bytes32(0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef);
         bytes[] memory voteEncrypteds = new bytes[](1);
@@ -524,7 +480,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_LargeArray() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         uint256 arraySize = 10;
         bytes[] memory voteEncrypteds = new bytes[](arraySize);
@@ -545,7 +501,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_ArrayWithDifferentDelegators() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes[] memory voteEncrypteds = new bytes[](3);
         address[] memory delegators = new address[](3);
@@ -569,7 +525,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_ArrayWithInvalidDelegatorAndChainId() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         bytes[] memory voteEncrypteds = new bytes[](1);
         address[] memory delegators = new address[](1);
@@ -587,7 +543,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     // ========== Delegation Voting Tests ==========
 
     function test_vote_WithValidDelegation() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         // Setup delegation
         address delegator = makeAddr("delegator");
@@ -620,7 +576,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_WithDelegation_revert_WhenNotSetInGovernanceDelegation() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         // Vote with delegation WITHOUT setting it in GovernanceDelegation
         address fakeDelegator = makeAddr("fakeDelegator");
@@ -641,7 +597,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_WithDelegation_revert_WhenInvalidChainId() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         address delegator = makeAddr("delegator");
         uint256 invalidChainId = 999999; // Chain without governance delegation
@@ -660,7 +616,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_MixedDirectAndDelegatedVotes() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         // Setup delegation
         address delegator = makeAddr("delegator");
@@ -692,7 +648,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     // ========== Batch Voting Tests ==========
 
     function test_vote_BatchVoting_SingleVoterMultipleVotes() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         uint256 batchSize = 10;
         bytes[] memory voteEncrypteds = new bytes[](batchSize);
@@ -713,7 +669,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_BatchVoting_MultipleDelegations() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         // Setup multiple delegations
         address[] memory delegatorList = new address[](5);
@@ -742,7 +698,7 @@ contract GovernanceVoteTest is GovernanceSetup {
     }
 
     function test_vote_BatchVoting_LargeBatch() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         uint256 largeBatchSize = 50;
         bytes[] memory voteEncrypteds = new bytes[](largeBatchSize);
@@ -768,11 +724,11 @@ contract GovernanceVoteTest is GovernanceSetup {
     // ========== Gas Comparison Tests ==========
 
     function test_vote_GasComparison_SingleVsBatch() public {
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        _warpToVotingPeriod(proposalId);
         
         // Create second proposal for comparison
-        bytes32 proposalId2 = _createTestProposal();
-        vm.warp(block.timestamp + voteActivationDelay + 1);
+        bytes32 proposalId2 = _createSimpleProposal();
+        _warpToVotingPeriod(proposalId2);
         
         // Test 1: Submit votes one by one
         uint256 gasSingle = 0;

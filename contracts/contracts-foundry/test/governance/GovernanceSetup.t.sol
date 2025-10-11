@@ -183,4 +183,97 @@ contract GovernanceSetup is Test {
         governance.setGovernanceDelegation(block.chainid, address(governanceDelegation));
         vm.stopPrank();
     }
+
+    //-------------------------------- Common Helpers start --------------------------------//
+
+    /// @dev Helper to create a simple proposal with default params
+    function _createSimpleProposal() internal returns (bytes32) {
+        return _createProposal(makeAddr("target"), 0, abi.encodeWithSignature("function()"), "Test Proposal", "Test Description");
+    }
+
+    /// @dev Helper to create a proposal with custom params
+    function _createProposal(
+        address target,
+        uint256 value,
+        bytes memory calldata_,
+        string memory title,
+        string memory description
+    ) internal returns (bytes32) {
+        address[] memory targets = new address[](1);
+        targets[0] = target;
+        
+        uint256[] memory values = new uint256[](1);
+        values[0] = value;
+        
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = calldata_;
+        
+        return _createProposalWithArrays(targets, values, calldatas, title, description);
+    }
+
+    /// @dev Helper to create a proposal with arrays
+    function _createProposalWithArrays(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        string memory title,
+        string memory description
+    ) internal returns (bytes32) {
+        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
+            targets: targets,
+            values: values,
+            calldatas: calldatas,
+            title: title,
+            description: description,
+            depositToken: address(depositToken)
+        });
+
+        // Calculate total ETH needed
+        uint256 totalValue = 0;
+        for (uint256 i = 0; i < values.length; i++) {
+            totalValue += values[i];
+        }
+
+        vm.prank(proposer);
+        return governance.propose{value: totalValue}(params);
+    }
+
+    /// @dev Helper to mint additional tokens for proposer (if needed beyond initial 1000)
+    function _mintTokensForProposer(uint256 amount) internal {
+        vm.prank(admin);
+        depositToken.mint(proposer, amount);
+    }
+
+    /// @dev Helper for single vote
+    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
+        bytes[] memory voteEncrypteds = new bytes[](1);
+        address[] memory delegators = new address[](1);
+        uint256[] memory delegatorChainIds = new uint256[](1);
+        
+        voteEncrypteds[0] = _voteEncrypted;
+        delegators[0] = _delegator;
+        delegatorChainIds[0] = _delegatorChainId;
+        
+        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
+    }
+
+    /// @dev Helper to warp to voting period
+    function _warpToVotingPeriod(bytes32 _proposalId) internal {
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(_proposalId);
+        vm.warp(timeInfo.voteActivationTimestamp + 1);
+    }
+
+    /// @dev Helper to warp to result submission period
+    function _warpToResultPeriod(bytes32 _proposalId) internal {
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(_proposalId);
+        vm.warp(timeInfo.voteDeadlineTimestamp + 1);
+    }
+
+    /// @dev Helper to warp past proposal deadline
+    function _warpPastDeadline(bytes32 _proposalId) internal {
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(_proposalId);
+        vm.warp(timeInfo.proposalDeadlineTimestamp + 1);
+    }
+
+    //-------------------------------- Common Helpers end --------------------------------//
 }

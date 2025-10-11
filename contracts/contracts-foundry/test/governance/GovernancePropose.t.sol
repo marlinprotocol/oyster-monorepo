@@ -13,19 +13,6 @@ import {GovernanceSetup} from "./GovernanceSetup.t.sol";
 
 contract GovernanceProposeTest is GovernanceSetup {
 
-    // Helper function to convert single vote to array format
-    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
-        bytes[] memory voteEncrypteds = new bytes[](1);
-        address[] memory delegators = new address[](1);
-        uint256[] memory delegatorChainIds = new uint256[](1);
-        
-        voteEncrypteds[0] = _voteEncrypted;
-        delegators[0] = _delegator;
-        delegatorChainIds[0] = _delegatorChainId;
-        
-        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
-    }
-
     // ========== Basic Propose Tests ==========
     
     function test_propose_Success() public {
@@ -93,13 +80,8 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        // Fund proposer with tokens and ETH
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
+        // Fund proposer with ETH
         vm.deal(proposer, 1 ether);
-        
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         bytes32 proposalId = governance.propose{value: 0.1 ether}(params);
@@ -123,10 +105,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         bytes32 proposalId = governance.propose{value: 0}(params);
@@ -155,10 +133,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidInputLength.selector);
@@ -184,10 +158,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
@@ -213,10 +183,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidTitleLength.selector);
@@ -242,10 +208,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
@@ -271,10 +233,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidMsgValue.selector);
@@ -486,10 +444,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         vm.prank(proposer);
         vm.expectRevert(); // Should revert due to pause
@@ -583,10 +537,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
 
         uint256 proposalTime = block.timestamp;
         vm.prank(proposer);
@@ -608,6 +558,8 @@ contract GovernanceProposeTest is GovernanceSetup {
         vm.deal(proposer2, GAS_FUND_AMOUNT);
         vm.prank(admin);
         depositToken.mint(proposer2, DEPOSIT_AMOUNT);
+        vm.prank(proposer2);
+        depositToken.approve(address(governance), type(uint256).max);
 
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
@@ -716,8 +668,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         bytes32 proposalId = governance.propose{value: 0}(params);
 
         // Wait for voting to be active
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Add some votes
         vm.prank(voter1);
@@ -793,8 +744,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         bytes32 proposalId = governance.propose{value: 0}(params);
 
         // Wait for voting to be active
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(proposalId);
 
         // Add a vote
         vm.prank(voter1);

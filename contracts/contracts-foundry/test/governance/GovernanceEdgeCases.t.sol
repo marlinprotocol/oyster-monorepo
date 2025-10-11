@@ -11,48 +11,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
 
 contract GovernanceEdgeCasesTest is GovernanceSetup {
-    
-    function _createTestProposal() internal returns (bytes32) {
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Test Proposal for Edge Cases",
-            description: "This proposal is created for testing edge cases",
-            depositToken: address(depositToken)
-        });
-
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
-
-        vm.prank(proposer);
-        return governance.propose{value: 0}(params);
-    }
-    
-    // Helper function to convert single vote to array format
-    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
-        bytes[] memory voteEncrypteds = new bytes[](1);
-        address[] memory delegators = new address[](1);
-        uint256[] memory delegatorChainIds = new uint256[](1);
-        
-        voteEncrypteds[0] = _voteEncrypted;
-        delegators[0] = _delegator;
-        delegatorChainIds[0] = _delegatorChainId;
-        
-        governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
-    }
 
     // ========== Boundary Value Tests ==========
 
@@ -113,8 +71,7 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
     }
 
     function test_VoteWithMaximumData() public {
-        // Create a proposal
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
         // Create maximum size vote data
         bytes memory maxVoteData = new bytes(10000); // 10KB of data
@@ -122,42 +79,34 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
             maxVoteData[i] = bytes1(uint8(i % 256));
         }
         
-        // Fast forward to voting period
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(testProposalId);
         
         vm.prank(voter1);
-        _vote(proposalId, maxVoteData, address(0), 0);
+        _vote(testProposalId, maxVoteData, address(0), 0);
         
         // Verify vote was recorded
-        assertEq(governance.getVoteCount(proposalId), 1, "Large vote data should be recorded");
+        assertEq(governance.getVoteCount(testProposalId), 1, "Large vote data should be recorded");
     }
 
     function test_VoteWithEmptyData() public {
-        // Create a proposal
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
-        // Fast forward to voting period
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(testProposalId);
         
         vm.prank(voter1);
-        _vote(proposalId, "", address(0), 0);
+        _vote(testProposalId, "", address(0), 0);
         
         // Verify vote was recorded
-        assertEq(governance.getVoteCount(proposalId), 1, "Empty vote data should be recorded");
+        assertEq(governance.getVoteCount(testProposalId), 1, "Empty vote data should be recorded");
     }
 
     // ========== Overflow/Underflow Tests ==========
 
     function test_ProposalNonceOverflow() public {
-        // This test would require creating 2^256 proposals, which is impractical
-        // Instead, we'll test the nonce increment logic
-        
         // Create multiple proposals from the same proposer
         for (uint256 i = 0; i < 10; i++) {
-            bytes32 proposalId = _createTestProposal();
-            (address proposalProposer,,,,,) = governance.getProposalInfo(proposalId);
+            bytes32 testProposalId = _createSimpleProposal();
+            (address proposalProposer,,,,,) = governance.getProposalInfo(testProposalId);
             assertTrue(proposalProposer != address(0), "Proposal should be created");
         }
         
@@ -166,12 +115,9 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
     }
 
     function test_VoteCountOverflow() public {
-        // Create a proposal
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
-        // Fast forward to voting period
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(testProposalId);
         
         // Create many voters and vote
         for (uint256 i = 0; i < 100; i++) {
@@ -179,11 +125,11 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
             bytes memory voteData = abi.encode(string(abi.encodePacked("vote", i)));
             
             vm.prank(voter);
-            _vote(proposalId, voteData, address(0), 0);
+            _vote(testProposalId, voteData, address(0), 0);
         }
         
         // Verify all votes were recorded
-        assertEq(governance.getVoteCount(proposalId), 100, "All votes should be recorded");
+        assertEq(governance.getVoteCount(testProposalId), 100, "All votes should be recorded");
     }
 
     // ========== Memory Limit Tests ==========
@@ -220,79 +166,39 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
     // ========== Timing Edge Cases ==========
 
     function test_VoteAtExactActivationTime() public {
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
-        // Get exact activation time
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        uint256 activationTime = timeInfo.voteActivationTimestamp;
-        
-        // Vote exactly at activation time
-        vm.warp(activationTime);
+        // Warp to exact activation time
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(testProposalId);
+        vm.warp(timeInfo.voteActivationTimestamp);
         
         vm.prank(voter1);
-        _vote(proposalId, abi.encode("vote"), address(0), 0);
+        _vote(testProposalId, abi.encode("vote"), address(0), 0);
         
         // Verify vote was recorded
-        assertEq(governance.getVoteCount(proposalId), 1, "Vote at exact activation time should work");
+        assertEq(governance.getVoteCount(testProposalId), 1, "Vote at exact activation time should work");
     }
 
     function test_VoteAtExactDeadline() public {
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
-        // Get exact deadline
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        uint256 deadline = timeInfo.voteDeadlineTimestamp;
-        
-        // Try to vote exactly at deadline (should fail)
-        vm.warp(deadline);
+        // Warp to exact deadline
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(testProposalId);
+        vm.warp(timeInfo.voteDeadlineTimestamp);
         
         vm.prank(voter1);
         vm.expectRevert(IGovernanceErrors.Governance__VotingNotActive.selector);
-        _vote(proposalId, abi.encode("vote"), address(0), 0);
+        _vote(testProposalId, abi.encode("vote"), address(0), 0);
     }
 
     function test_RefundAfterProposalDeadline() public {
-        // Create a proposal with ETH value
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0.1 ether;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "Test Proposal with ETH",
-            description: "Test proposal for refund",
-            depositToken: address(depositToken)
-        });
-
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
-        
         vm.deal(proposer, 1 ether);
-        vm.prank(proposer);
-        bytes32 proposalId = governance.propose{value: 0.1 ether}(params);
+        bytes32 testProposalId = _createProposal(makeAddr("target"), 0.1 ether, abi.encodeWithSignature("function()"), "Test", "Test");
         
-        // Get exact deadline
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        uint256 proposalDeadline = timeInfo.proposalDeadlineTimestamp;
-        
-        // Refund should only work after proposal deadline
-        vm.warp(proposalDeadline + 1);
+        _warpPastDeadline(testProposalId);
         
         vm.prank(proposer);
-        governance.refund(proposalId);
-        
-        // Verify refund was processed
-        // This tests the exact timing boundary
+        governance.refund(testProposalId);
     }
 
     // ========== Invalid Input Tests ==========
@@ -351,60 +257,33 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
     // ========== State Transition Tests ==========
 
     function test_ProposalStateTransitions() public {
-        // Create a proposal with ETH value
-        address[] memory targets = new address[](1);
-        targets[0] = makeAddr("target");
-        
-        uint256[] memory values = new uint256[](1);
-        values[0] = 0.5 ether;
-        
-        bytes[] memory calldatas = new bytes[](1);
-        calldatas[0] = abi.encodeWithSignature("function()");
-        
-        IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
-            targets: targets,
-            values: values,
-            calldatas: calldatas,
-            title: "State Transition Test",
-            description: "Test proposal state transitions",
-            depositToken: address(depositToken)
-        });
-
-        vm.prank(admin);
-        depositToken.mint(proposer, DEPOSIT_AMOUNT);
-        
-        vm.prank(proposer);
-        depositToken.approve(address(governance), DEPOSIT_AMOUNT);
-        
         vm.deal(proposer, 1 ether);
-        vm.prank(proposer);
-        bytes32 proposalId = governance.propose{value: 0.5 ether}(params);
+        bytes32 testProposalId = _createProposal(makeAddr("target"), 0.5 ether, abi.encodeWithSignature("function()"), "Test", "Test");
         
         // Initial state: proposal exists but no votes
-        assertEq(governance.getVoteCount(proposalId), 0, "Initial vote count should be 0");
+        assertEq(governance.getVoteCount(testProposalId), 0, "Initial vote count should be 0");
         
         // After voting: vote count increases
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(testProposalId);
         vm.prank(voter1);
-        _vote(proposalId, abi.encode("vote"), address(0), 0);
-        assertEq(governance.getVoteCount(proposalId), 1, "Vote count should increase after voting");
+        _vote(testProposalId, abi.encode("vote"), address(0), 0);
+        assertEq(governance.getVoteCount(testProposalId), 1, "Vote count should increase after voting");
         
         // After proposal deadline passes without submitResult
-        vm.warp(timeInfo.proposalDeadlineTimestamp + 1);
+        _warpPastDeadline(testProposalId);
         vm.prank(proposer);
-        governance.refund(proposalId);
+        governance.refund(testProposalId);
         
         // Try to refund again (should fail)
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
-        governance.refund(proposalId);
+        governance.refund(testProposalId);
     }
 
     // ========== Gas Limit Tests ==========
 
     function test_GasLimitWithLargeVoteData() public {
-        bytes32 proposalId = _createTestProposal();
+        bytes32 testProposalId = _createSimpleProposal();
         
         // Create very large vote data
         bytes memory largeVoteData = new bytes(50000); // 50KB
@@ -412,14 +291,13 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
             largeVoteData[i] = bytes1(uint8(i % 256));
         }
         
-        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
-        vm.warp(timeInfo.voteActivationTimestamp + 1);
+        _warpToVotingPeriod(testProposalId);
         
         // Vote with large data - should work
         vm.prank(voter1);
-        _vote(proposalId, largeVoteData, address(0), 0);
+        _vote(testProposalId, largeVoteData, address(0), 0);
         
         // Verify vote was recorded
-        assertEq(governance.getVoteCount(proposalId), 1, "Large vote data should be recorded");
+        assertEq(governance.getVoteCount(testProposalId), 1, "Large vote data should be recorded");
     }
 }
