@@ -45,13 +45,15 @@ contract GovernanceDelegationTest is Test {
     /// @dev Helper function to verify delegation
     function _verifyDelegation(address delegator, address delegatee) internal view {
         assertEq(governanceDelegation.getDelegator(delegator), delegatee, "Delegatee should match");
-        assertTrue(governanceDelegation.isDelegationSet(delegator, delegatee), "Delegation should be set");
+        // isDelegationSet reverts if delegator or delegatee is address(0)
+        if (delegator != address(0) && delegatee != address(0)) {
+            assertTrue(governanceDelegation.isDelegationSet(delegator, delegatee), "Delegation should be set");
+        }
     }
 
     /// @dev Helper function to verify no delegation
     function _verifyNoDelegation(address delegator) internal view {
         assertEq(governanceDelegation.getDelegator(delegator), address(0), "Should have no delegatee");
-        assertFalse(governanceDelegation.isDelegationSet(delegator, delegatee1), "Delegation should not be set");
     }
 
     //-------------------------------- Helpers end --------------------------------//
@@ -122,20 +124,20 @@ contract GovernanceDelegationTest is Test {
         assertFalse(governanceDelegation.isDelegationSet(delegator1, delegatee1), "Old delegation should not be set");
     }
 
-    function test_setDelegation_UpdateToZeroAddress() public {
+    function test_setDelegation_UpdateToDifferentDelegatee() public {
         // Set initial delegation
         _setupDelegation(delegator1, delegatee1);
         _verifyDelegation(delegator1, delegatee1);
 
-        // Update delegation to zero address (remove delegation)
+        // Update delegation to different delegatee
         vm.expectEmit(true, true, false, false);
-        emit GovernanceDelegation.DelegationSet(delegator1, address(0));
+        emit GovernanceDelegation.DelegationSet(delegator1, delegatee2);
 
         vm.prank(delegator1);
-        governanceDelegation.setDelegation(address(0));
+        governanceDelegation.setDelegation(delegatee2);
 
-        // Verify delegation removed
-        _verifyNoDelegation(delegator1);
+        // Verify delegation updated
+        _verifyDelegation(delegator1, delegatee2);
     }
 
     // ========== Error Cases Tests ==========
@@ -150,17 +152,9 @@ contract GovernanceDelegationTest is Test {
         governanceDelegation.setDelegation(delegatee1);
     }
 
-    function test_setDelegation_revert_WhenSettingToZeroAddressTwice() public {
-        // First set delegation to a non-zero address
-        _setupDelegation(delegator1, delegatee1);
-
-        // Set delegation to zero address
+    function test_setDelegation_revert_WhenZeroAddressDelegatee() public {
         vm.prank(delegator1);
-        governanceDelegation.setDelegation(address(0));
-
-        // Try to set to zero address again
-        vm.prank(delegator1);
-        vm.expectRevert(GovernanceDelegation.GovernanceDelegation__DelegationAlreadySet.selector);
+        vm.expectRevert(GovernanceDelegation.GovernanceDelegation__InvalidAddress.selector);
         governanceDelegation.setDelegation(address(0));
     }
 
@@ -204,8 +198,6 @@ contract GovernanceDelegationTest is Test {
 
     function test_isDelegationSet_WhenNoDelegation() public view {
         assertFalse(governanceDelegation.isDelegationSet(delegator1, delegatee1), "Should return false when no delegation");
-        // Note: delegations[delegator1] defaults to address(0), so isDelegationSet(delegator1, address(0)) returns true
-        assertTrue(governanceDelegation.isDelegationSet(delegator1, address(0)), "Default delegation is address(0)");
     }
 
     function test_isDelegationSet_AfterUpdate() public {
@@ -221,16 +213,19 @@ contract GovernanceDelegationTest is Test {
         assertTrue(governanceDelegation.isDelegationSet(delegator1, delegatee2), "New delegation should be set");
     }
 
-    function test_isDelegationSet_WithZeroAddress() public {
-        // First set delegation to a non-zero address
-        _setupDelegation(delegator1, delegatee1);
+    function test_isDelegationSet_revert_WhenZeroAddressDelegator() public {
+        vm.expectRevert(GovernanceDelegation.GovernanceDelegation__InvalidAddress.selector);
+        governanceDelegation.isDelegationSet(address(0), delegatee1);
+    }
 
-        // Then update to zero address (removing delegation)
-        vm.prank(delegator1);
-        governanceDelegation.setDelegation(address(0));
+    function test_isDelegationSet_revert_WhenZeroAddressDelegatee() public {
+        vm.expectRevert(GovernanceDelegation.GovernanceDelegation__InvalidAddress.selector);
+        governanceDelegation.isDelegationSet(delegator1, address(0));
+    }
 
-        assertTrue(governanceDelegation.isDelegationSet(delegator1, address(0)), "Should return true for zero address delegation");
-        assertFalse(governanceDelegation.isDelegationSet(delegator1, delegatee1), "Should return false for other addresses");
+    function test_isDelegationSet_revert_WhenBothZeroAddress() public {
+        vm.expectRevert(GovernanceDelegation.GovernanceDelegation__InvalidAddress.selector);
+        governanceDelegation.isDelegationSet(address(0), address(0));
     }
 
     //-------------------------------- Edge Cases Tests --------------------------------//
@@ -263,17 +258,6 @@ contract GovernanceDelegationTest is Test {
         governanceDelegation.setDelegation(delegatee1);
 
         _verifyDelegation(address(0), delegatee1);
-    }
-
-    function test_setDelegation_ZeroAddressDelegatee() public {
-        // First set delegation to a non-zero address
-        _setupDelegation(delegator1, delegatee1);
-
-        // Then update to zero address
-        vm.prank(delegator1);
-        governanceDelegation.setDelegation(address(0));
-
-        _verifyDelegation(delegator1, address(0));
     }
 
     // ========== Multiple Updates Tests ==========
@@ -350,20 +334,11 @@ contract GovernanceDelegationTest is Test {
         governanceDelegation.setDelegation(delegatee2);
     }
 
-    function test_setDelegation_EmitsEventForZeroAddress() public {
-        // First set delegation to a non-zero address
-        _setupDelegation(delegator1, delegatee1);
-
-        vm.expectEmit(true, true, false, false);
-        emit GovernanceDelegation.DelegationSet(delegator1, address(0));
-
-        vm.prank(delegator1);
-        governanceDelegation.setDelegation(address(0));
-    }
-
     // ========== Integration Tests ==========
 
     function test_integration_MultipleDelegatorsComplexScenario() public {
+        address delegatee3 = makeAddr("delegatee3");
+        
         // Delegator1 delegates to delegatee1
         _setupDelegation(delegator1, delegatee1);
         
@@ -382,13 +357,13 @@ contract GovernanceDelegationTest is Test {
         _verifyDelegation(delegator1, delegatee2);
         _verifyDelegation(delegator2, delegatee2);
         
-        // Delegator2 removes delegation
+        // Delegator2 updates to delegatee3
         vm.prank(delegator2);
-        governanceDelegation.setDelegation(address(0));
+        governanceDelegation.setDelegation(delegatee3);
         
         // Verify final state
         _verifyDelegation(delegator1, delegatee2);
-        _verifyNoDelegation(delegator2);
+        _verifyDelegation(delegator2, delegatee3);
     }
 
     function test_integration_CircularDelegation() public {
@@ -418,7 +393,8 @@ contract GovernanceDelegationTest is Test {
     // ========== Fuzz Tests ==========
 
     function testFuzz_setDelegation_Success(address delegator, address delegatee) public {
-        vm.assume(delegator != address(0) || delegatee != address(0)); // At least one should be non-zero for meaningful test
+        // delegatee cannot be address(0)
+        vm.assume(delegatee != address(0));
 
         vm.prank(delegator);
         governanceDelegation.setDelegation(delegatee);
@@ -432,6 +408,8 @@ contract GovernanceDelegationTest is Test {
         address secondDelegatee
     ) public {
         vm.assume(firstDelegatee != secondDelegatee); // Must be different to avoid revert
+        vm.assume(firstDelegatee != address(0)); // delegatee cannot be address(0)
+        vm.assume(secondDelegatee != address(0)); // delegatee cannot be address(0)
 
         vm.prank(delegator);
         governanceDelegation.setDelegation(firstDelegatee);
@@ -444,6 +422,9 @@ contract GovernanceDelegationTest is Test {
     }
 
     function testFuzz_getDelegator(address delegator, address delegatee) public {
+        // delegatee cannot be address(0)
+        vm.assume(delegatee != address(0));
+        
         vm.prank(delegator);
         governanceDelegation.setDelegation(delegatee);
 
@@ -452,6 +433,9 @@ contract GovernanceDelegationTest is Test {
     }
 
     function testFuzz_isDelegationSet(address delegator, address delegatee) public {
+        // isDelegationSet reverts if delegator or delegatee is address(0)
+        vm.assume(delegator != address(0) && delegatee != address(0));
+        
         vm.prank(delegator);
         governanceDelegation.setDelegation(delegatee);
 

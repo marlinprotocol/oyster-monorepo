@@ -23,7 +23,8 @@ contract GovernanceDelegation is
 
     error GovernanceDelegation__NotDefaultAdmin();
     error GovernanceDelegation__DelegationAlreadySet();
-
+    error GovernanceDelegation__InvalidAddress();
+    
     event DelegationSet(address delegator, address delegatee);
 
     mapping(address delegator => address delegatee) public delegations;
@@ -72,6 +73,7 @@ contract GovernanceDelegation is
     //-------------------------------- Functions start --------------------------------//
 
     function setDelegation(address delegatee) external {
+        require(delegatee != address(0), GovernanceDelegation__InvalidAddress());
         address existingDelegatee = delegations[msg.sender];
         require(existingDelegatee != delegatee, GovernanceDelegation__DelegationAlreadySet());
         delegations[msg.sender] = delegatee;
@@ -83,6 +85,7 @@ contract GovernanceDelegation is
     }
 
     function isDelegationSet(address delegator, address delegatee) external view returns (bool) {
+        require(delegator != address(0) && delegatee != address(0), GovernanceDelegation__InvalidAddress());
         return delegations[delegator] == delegatee;
     }
 
