@@ -47,7 +47,7 @@ ipset add internal 10.0.0.0/8
 ipset add internal 100.64.0.0/10
 ipset add internal 127.0.0.0/8
 ipset add internal 169.254.0.0/16
-# ipset add internal 172.16.0.0/12
+ipset add internal 172.16.0.0/12
 ipset add internal 192.0.0.0/24
 ipset add internal 192.0.2.0/24
 ipset add internal 192.88.99.0/24
