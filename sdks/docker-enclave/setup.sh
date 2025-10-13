@@ -102,12 +102,7 @@ echo quit | telnet 3.111.219.88 2049
 
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -t nfs -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
-if [ $? -eq 0 ]; then
-  df -h
-  cat /app/nfs/test_file.txt
-else
-  echo "Mount failed"
-fi
+cat /app/nfs/test_file.txt
 
 sleep 2
 
