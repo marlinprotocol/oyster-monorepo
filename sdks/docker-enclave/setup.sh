@@ -100,6 +100,8 @@ sleep 10
 # # echo "Checking connectivity to NFS server with telnet"
 echo quit | telnet 3.111.219.88 2049
 
+mount -l
+
 echo "Mounting NFS to /app/nfs/"
 mount -vvv -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
 cat /app/nfs/test_file.txt
