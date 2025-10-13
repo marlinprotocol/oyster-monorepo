@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import {Script} from "forge-std/Script.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {Governance} from "../../src/governance/Governance.sol";
+import {GovernanceEnclave} from "../../src/governance/GovernanceEnclave.sol";
 import {MockERC20} from "../../src/governance/mocks/MockERC20.sol";
 
 contract HelperConfig is Script {
@@ -12,15 +13,21 @@ contract HelperConfig is Script {
         address admin;
         address configSetter;
         address treasury;
+        address governanceEnclave;
         uint256 proposalPassVetoThreshold;
         uint256 minQuorumThreshold;
         uint256 vetoSlashRate;
         uint256 voteActivationDelay;
         uint256 voteDuration;
         uint256 proposalDuration;
+    }
+    
+    struct EnclaveParams {
         uint256 maxRPCUrlsPerChain;
         // KMS related parameters
-        IGovernanceTypes.PCR pcr;
+        bytes pcr0;
+        bytes pcr1;
+        bytes pcr2;
         bytes kmsRootServerPubKey;
         string kmsPath;
     }
@@ -89,20 +96,13 @@ contract HelperConfig is Script {
             admin: adminAddress, // Replace with actual admin address
             configSetter: adminAddress, // Replace with actual config setter address
             treasury: treasuryAddress, // Replace with actual treasury address
+            governanceEnclave: address(0), // Will be set separately
             proposalPassVetoThreshold: 0.05 * 10**18, // 5%
             minQuorumThreshold: 0.05 * 10**18, // 5%
             vetoSlashRate: 0.3 * 10**18, // 30%
             voteActivationDelay: 5 minutes,
             voteDuration: 15 minutes,
-            proposalDuration: 30 minutes,
-            maxRPCUrlsPerChain: 2,
-            pcr: IGovernanceTypes.PCR({
-                pcr0: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-                pcr1: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-                pcr2: hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-            }),
-            kmsRootServerPubKey: hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276",
-            kmsPath: "gov_key" 
+            proposalDuration: 30 minutes
         });
 
         /*//////////////////////////////////////////////////////////////

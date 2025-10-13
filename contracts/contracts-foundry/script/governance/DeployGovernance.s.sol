@@ -41,16 +41,13 @@ contract DeployGovernance is Script {
             activeConfig.initializeParams.admin,
             activeConfig.initializeParams.configSetter,
             activeConfig.initializeParams.treasury,
+            activeConfig.initializeParams.governanceEnclave,
             activeConfig.initializeParams.minQuorumThreshold,
             activeConfig.initializeParams.proposalPassVetoThreshold,
             activeConfig.initializeParams.vetoSlashRate,
             activeConfig.initializeParams.voteActivationDelay,
             activeConfig.initializeParams.voteDuration,
-            activeConfig.initializeParams.proposalDuration,
-            activeConfig.initializeParams.maxRPCUrlsPerChain,
-            activeConfig.initializeParams.pcr,
-            activeConfig.initializeParams.kmsRootServerPubKey,
-            activeConfig.initializeParams.kmsPath
+            activeConfig.initializeParams.proposalDuration
         );
         vm.stopBroadcast();
 
@@ -69,16 +66,13 @@ contract DeployGovernance is Script {
             initializeParams.admin,
             initializeParams.configSetter,
             initializeParams.treasury,
+            initializeParams.governanceEnclave,
             initializeParams.minQuorumThreshold,
             initializeParams.proposalPassVetoThreshold,
             initializeParams.vetoSlashRate,
             initializeParams.voteActivationDelay,
             initializeParams.voteDuration,
-            initializeParams.proposalDuration,
-            initializeParams.maxRPCUrlsPerChain,
-            initializeParams.pcr,
-            initializeParams.kmsRootServerPubKey,
-            initializeParams.kmsPath
+            initializeParams.proposalDuration
         );
 
         vm.stopBroadcast();
