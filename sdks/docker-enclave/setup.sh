@@ -37,7 +37,9 @@ ip addr
 cat /etc/hosts
 
 # adding a default route
-ip route add default dev lo src $ip
+ip route del default
+ip route add default via 172.31.0.1 dev eth0 src 172.31.8.34
+
 route -n
 
 # create ipset with all "internal" (unroutable) addresses
