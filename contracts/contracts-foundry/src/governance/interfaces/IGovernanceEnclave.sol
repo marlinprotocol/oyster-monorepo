@@ -18,4 +18,8 @@ interface IGovernanceEnclave {
     function getNetworkHash() external view returns (bytes32);
 
     function getSupportedChainIdsLength() external view returns (uint256);
+
+    function getSupportedChainIds() external view returns (uint256[] memory);
+
+    function isChainSupported(uint256 _chainId) external view returns (bool);
 }

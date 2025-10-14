@@ -453,8 +453,32 @@ contract GovernanceEnclave is
         return supportedChainIds.length;
     }
 
+    /// @notice Returns the complete array of supported chain IDs
+    /// @dev This allows external contracts and users to get all supported chains in a single call
+    /// @return chainIds Array of all supported chain IDs
+    function getSupportedChainIds() external view returns (uint256[] memory) {
+        return supportedChainIds;
+    }
+
+    /// @notice Checks if a specific chain ID is supported
+    /// @param _chainId The chain ID to check
+    /// @return isSupported True if the chain is supported, false otherwise
+    function isChainSupported(uint256 _chainId) external view returns (bool) {
+        return _isChainIdSupported(_chainId);
+    }
+
     function getTokenNetworkConfig(uint256 _chainId) external view returns (TokenNetworkConfig memory) {
         return tokenNetworkConfigs[_chainId];
+    }
+
+    /// @notice Returns the PCR configuration including all PCR values and the image ID
+    /// @dev This allows external contracts to verify the current PCR configuration
+    /// @return pcr0 The PCR0 value
+    /// @return pcr1 The PCR1 value
+    /// @return pcr2 The PCR2 value
+    /// @return imageId The generated image ID from the PCR values
+    function getPCRConfig() external view returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId) {
+        return (pcrConfig.pcr.pcr0, pcrConfig.pcr.pcr1, pcrConfig.pcr.pcr2, pcrConfig.imageId);
     }
 
     //-------------------------------- Getters end -------------------------------//

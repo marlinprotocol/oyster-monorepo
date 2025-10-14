@@ -840,6 +840,73 @@ contract Governance is
         voteHash = proposalVoteInfo.voteHash;
     }
 
+    /// @notice Returns the vote outcome of a specific proposal
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return voteOutcome The outcome of the proposal (Pending, Passed, Failed, or Vetoed)
+    function getVoteOutcome(bytes32 _proposalId) external view returns (VoteOutcome) {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
+        return proposals[_proposalId].voteOutcome;
+    }
+
+    /// @notice Returns whether a proposal has been executed
+    /// @dev Returns false for non-existent proposals (same as non-executed proposals)
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return executed True if the proposal has been executed, false otherwise
+    function isProposalExecuted(bytes32 _proposalId) external view returns (bool) {
+        return proposals[_proposalId].executed;
+    }
+
+    /// @notice Returns the image ID associated with a proposal
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return imageId The image ID used for enclave verification
+    function getProposalImageId(bytes32 _proposalId) external view returns (bytes32) {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
+        return proposals[_proposalId].imageId;
+    }
+
+    /// @notice Returns the network hash associated with a proposal
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return networkHash The network hash representing the state of all supported chains
+    function getProposalNetworkHash(bytes32 _proposalId) external view returns (bytes32) {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
+        return proposals[_proposalId].networkHash;
+    }
+
+    /// @notice Returns the token lock information for a specific proposal
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return token The address of the locked token
+    /// @return amount The amount of tokens locked
+    function getTokenLockInfo(bytes32 _proposalId) external view returns (address token, uint256 amount) {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
+        TokenLockInfo storage tokenLockInfo = proposals[_proposalId].tokenLockInfo;
+        return (tokenLockInfo.token, tokenLockInfo.amount);
+    }
+
+    /// @notice Checks if a proposal exists
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return exists True if the proposal exists, false otherwise
+    function proposalExists(bytes32 _proposalId) external view returns (bool) {
+        return proposals[_proposalId].proposalInfo.proposer != address(0);
+    }
+
+    /// @notice Returns the complete state of a proposal in a single call
+    /// @dev This is a gas-efficient way to get all proposal state information at once
+    /// @param _proposalId The unique identifier of the proposal
+    /// @return voteOutcome The outcome of the proposal
+    /// @return executed Whether the proposal has been executed
+    /// @return inExecutionQueue Whether the proposal is in the execution queue
+    /// @return imageId The image ID for enclave verification
+    /// @return networkHash The network hash representing supported chains state
+    function getProposalState(bytes32 _proposalId)
+        external
+        view
+        returns (VoteOutcome voteOutcome, bool executed, bool inExecutionQueue, bytes32 imageId, bytes32 networkHash)
+    {
+        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
+        Proposal storage proposal = proposals[_proposalId];
+        return (proposal.voteOutcome, proposal.executed, executionQueue[_proposalId], proposal.imageId, proposal.networkHash);
+    }
+
     //-------------------------------- Getters end --------------------------------//
 
     uint256[500] private __gap2;
