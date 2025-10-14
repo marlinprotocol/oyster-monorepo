@@ -48,7 +48,6 @@ struct Cli {
 
 fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyError> {
     loop {
-        println!("Yo yo there!!!!!!!!!!!!!!!!!");
         let mut msg = queue
             .recv()
             .map_err(SocketError::ReadError)
@@ -69,10 +68,10 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
         }
 
         // verdicts
-        msg.set_verdict(Verdict::Drop);
+        msg.set_verdict(Verdict::Accept);
         queue
             .verdict(msg)
-            .map_err(|e| SocketError::VerdictError(Verdict::Drop, e))
+            .map_err(|e| SocketError::VerdictError(Verdict::Accept, e))
             .map_err(ProxyError::NfqError)?;
     }
 }
