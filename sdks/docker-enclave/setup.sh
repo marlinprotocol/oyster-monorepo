@@ -37,9 +37,7 @@ ip addr
 cat /etc/hosts
 
 # adding a default route
-ip route del default
-ip route add default via 172.31.0.1 dev eth0 src 172.31.8.34
-
+ip route add default dev lo src $ip
 route -n
 
 # create ipset with all "internal" (unroutable) addresses
@@ -105,7 +103,8 @@ sleep 10
 
 echo "Mounting NFS to /app/nfs/"
 ip route show
-ip route get 3.111.219.88
+ip route del default
+ip route add default via 172.31.0.1 dev eth0 src 172.31.8.34
 mount -vvv -t nfs4 -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
 cat /app/nfs/test_file.txt
 
