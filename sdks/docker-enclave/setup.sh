@@ -103,6 +103,7 @@ sleep 10
 
 echo "Mounting NFS to /app/nfs/"
 ip route show
+ip route get 3.111.219.88
 mount -vvv -t nfs4 -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
 cat /app/nfs/test_file.txt
 
