@@ -54,7 +54,7 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
             .map_err(ProxyError::NfqError)?;
 
         let buf = msg.get_payload_mut();
-
+        println!("Buf {:#?}",buf);
         let size = buf.len();
 
         // send through vsock

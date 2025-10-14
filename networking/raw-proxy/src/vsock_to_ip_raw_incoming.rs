@@ -83,7 +83,6 @@ fn handle_conn(
                 acc + &val.to_string()
             }
         });
-        println!("vsock_to_ip dst_addr : {:#?}",dst_addr);
         if dst_addr != ip {
             continue;
         }
