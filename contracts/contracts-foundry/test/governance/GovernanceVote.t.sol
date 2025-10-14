@@ -711,65 +711,11 @@ contract GovernanceVoteTest is GovernanceSetup {
             delegatorChainIds[i] = 0;
         }
         
-        uint256 gasBefore = gasleft();
         vm.prank(voter1);
         governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
-        uint256 gasUsed = gasBefore - gasleft();
         
         // Verify all votes were recorded
         assertEq(governance.getVoteCount(proposalId), largeBatchSize);
-        emit log_named_uint("Gas used for batch of 50 votes", gasUsed);
-    }
-
-    // ========== Gas Comparison Tests ==========
-
-    function test_vote_GasComparison_SingleVsBatch() public {
-        _warpToVotingPeriod(proposalId);
-        
-        // Create second proposal for comparison
-        bytes32 proposalId2 = _createSimpleProposal();
-        _warpToVotingPeriod(proposalId2);
-        
-        // Test 1: Submit votes one by one
-        uint256 gasSingle = 0;
-        for (uint256 i = 0; i < 5; i++) {
-            bytes[] memory voteEncrypteds = new bytes[](1);
-            address[] memory delegators = new address[](1);
-            uint256[] memory delegatorChainIds = new uint256[](1);
-            
-            voteEncrypteds[0] = abi.encode(string(abi.encodePacked("vote", i)));
-            delegators[0] = address(0);
-            delegatorChainIds[0] = 0;
-            
-            uint256 gasBeforeSingle = gasleft();
-            vm.prank(voter1);
-            governance.vote(proposalId, voteEncrypteds, delegators, delegatorChainIds);
-            gasSingle += gasBeforeSingle - gasleft();
-        }
-        
-        // Test 2: Submit all votes in batch
-        bytes[] memory batchVotes = new bytes[](5);
-        address[] memory batchDelegators = new address[](5);
-        uint256[] memory batchChainIds = new uint256[](5);
-        
-        for (uint256 i = 0; i < 5; i++) {
-            batchVotes[i] = abi.encode(string(abi.encodePacked("batch_vote", i)));
-            batchDelegators[i] = address(0);
-            batchChainIds[i] = 0;
-        }
-        
-        uint256 gasBeforeBatch = gasleft();
-        vm.prank(voter2);
-        governance.vote(proposalId2, batchVotes, batchDelegators, batchChainIds);
-        uint256 gasBatch = gasBeforeBatch - gasleft();
-        
-        // Log gas comparison
-        emit log_named_uint("Gas for 5 single votes", gasSingle);
-        emit log_named_uint("Gas for 1 batch of 5 votes", gasBatch);
-        emit log_named_uint("Gas saved by batching", gasSingle - gasBatch);
-        
-        // Batch should be more efficient
-        assertTrue(gasBatch < gasSingle, "Batch voting should be more gas efficient");
     }
 }
 

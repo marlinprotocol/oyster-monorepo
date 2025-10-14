@@ -287,30 +287,6 @@ contract GovernanceDelegationTest is Test {
         }
     }
 
-    // ========== Gas Optimization Tests ==========
-
-    function test_setDelegation_GasOptimization_FirstSet() public {
-        uint256 gasBefore = gasleft();
-        
-        vm.prank(delegator1);
-        governanceDelegation.setDelegation(delegatee1);
-        
-        uint256 gasUsed = gasBefore - gasleft();
-        emit log_named_uint("Gas used for first delegation", gasUsed);
-    }
-
-    function test_setDelegation_GasOptimization_Update() public {
-        // Set initial delegation
-        _setupDelegation(delegator1, delegatee1);
-
-        uint256 gasBefore = gasleft();
-        
-        vm.prank(delegator1);
-        governanceDelegation.setDelegation(delegatee2);
-        
-        uint256 gasUsed = gasBefore - gasleft();
-        emit log_named_uint("Gas used for delegation update", gasUsed);
-    }
 
     // ========== Event Tests ==========
 

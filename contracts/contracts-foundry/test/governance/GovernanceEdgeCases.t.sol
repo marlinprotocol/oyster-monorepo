@@ -280,9 +280,9 @@ contract GovernanceEdgeCasesTest is GovernanceSetup {
         governance.refund(testProposalId);
     }
 
-    // ========== Gas Limit Tests ==========
+    // ========== Large Data Tests ==========
 
-    function test_GasLimitWithLargeVoteData() public {
+    function test_LargeVoteData() public {
         bytes32 testProposalId = _createSimpleProposal();
         
         // Create very large vote data
