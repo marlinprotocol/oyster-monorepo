@@ -68,10 +68,10 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
         }
 
         // verdicts
-        msg.set_verdict(Verdict::Accept);
+        msg.set_verdict(Verdict::Drop);
         queue
             .verdict(msg)
-            .map_err(|e| SocketError::VerdictError(Verdict::Accept, e))
+            .map_err(|e| SocketError::VerdictError(Verdict::Drop, e))
             .map_err(ProxyError::NfqError)?;
     }
 }
