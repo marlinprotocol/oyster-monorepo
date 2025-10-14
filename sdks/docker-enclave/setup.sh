@@ -97,8 +97,8 @@ echo "status"
 
 sleep 10
 
-# # echo "Checking connectivity to NFS server with telnet"
-echo quit | telnet 3.111.219.88 2049
+# # # echo "Checking connectivity to NFS server with telnet"
+# echo quit | telnet 3.111.219.88 2049
 
 
 echo "Mounting NFS to /app/nfs/"
