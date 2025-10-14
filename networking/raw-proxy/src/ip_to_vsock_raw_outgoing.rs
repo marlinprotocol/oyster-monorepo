@@ -48,6 +48,7 @@ struct Cli {
 
 fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyError> {
     loop {
+        println!("Yo yo there!!!!!!!!!!!!!!!!!")
         let mut msg = queue
             .recv()
             .map_err(SocketError::ReadError)
