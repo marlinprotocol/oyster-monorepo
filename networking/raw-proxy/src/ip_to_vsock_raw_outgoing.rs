@@ -54,7 +54,11 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
             .map_err(ProxyError::NfqError)?;
 
         let buf = msg.get_payload_mut();
-        println!("Buf {:#?}",buf);
+
+        if let Some(src_port) = get_source_port(buf) {
+            println!("Source port: {}", src_port);
+        }
+
         let size = buf.len();
 
         // send through vsock
@@ -75,6 +79,30 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
             .map_err(ProxyError::NfqError)?;
     }
 }
+
+fn get_source_port(packet: &[u8]) -> Option<u16> {
+    if packet.len() < 20 {
+        return None; // too small for IPv4
+    }
+
+    // Get the IHL (Internet Header Length) from low 4 bits of first byte
+    let ihl = (packet[0] & 0x0f) * 4;
+    if packet.len() < ihl as usize + 4 {
+        return None; // not enough for transport header
+    }
+
+    // Check protocol field (byte 9)
+    let proto = packet[9];
+    if proto != 6 && proto != 17 {
+        // Not TCP (6) or UDP (17)
+        return None;
+    }
+
+    // Source port is the first 2 bytes of TCP/UDP header
+    let src_port = u16::from_be_bytes([packet[ihl as usize], packet[ihl as usize + 1]]);
+    Some(src_port)
+}
+
 
 fn main() -> anyhow::Result<()> {
     println!("Starting the ip-to-vsock-raw-proxy.....");
