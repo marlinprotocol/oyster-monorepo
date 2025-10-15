@@ -93,8 +93,6 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
 # /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
-sleep 10
-
 echo "Mounting NFS to /app/nfs/"
 ip route show
 mount -vvv -t nfs4 -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
@@ -105,7 +103,6 @@ sleep 2
 # # start derive server
 # /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 
-echo "[setup.sh] checkpoint 1 reached"
 
 sleep 10
 
@@ -114,8 +111,6 @@ sleep 10
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
-
-echo "[setup.sh] checkpoint 1 reached"
 
 # Wait for Docker daemon to be ready
 until docker info >/dev/null 2>&1; do
