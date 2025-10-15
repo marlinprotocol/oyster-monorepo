@@ -1,9 +1,11 @@
 services:
-  memcached:
-    image: memcached@sha256:706d1761d9646b9f827f049a71fdab99457f90b920c1cca9fc295821b6df1753
+  ubuntu-nfs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sagarparker/nfs_oyster:latest
+    init: true
+    privileged: true
     network_mode: host
-    restart: unless-stopped
-  redis:
-    image: redis@sha256:af0be38eb8e43191bae9b03fe5c928803930b6f93e2dde3a7ad1165c04b1ce22
-    network_mode: host
-    restart: unless-stopped
+    volumes:
+      - /app/nfs/:/app/nfs/
