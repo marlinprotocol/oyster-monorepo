@@ -5,7 +5,6 @@ services:
       dockerfile: Dockerfile
     image: sagarparker/nfs_oyster:latest
     init: true
-    privileged: true
     network_mode: host
     volumes:
       - /app/nfs/:/app/nfs/
