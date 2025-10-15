@@ -182,6 +182,7 @@ fn handle_conn(
         println!("Unix timestamp (seconds): {}", timestamp);
 
         if src_port != 80 && src_port != 443 && (src_port < 1024 || src_port > 61439) {
+            println!("Dropping!");
             // silently drop
             continue;
         }
