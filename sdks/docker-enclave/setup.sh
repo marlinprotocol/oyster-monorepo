@@ -47,7 +47,7 @@ ipset add internal 10.0.0.0/8
 ipset add internal 100.64.0.0/10
 ipset add internal 127.0.0.0/8
 ipset add internal 169.254.0.0/16
-#ipset add internal 172.16.0.0/12
+ipset add internal 172.16.0.0/12
 ipset add internal 192.0.0.0/24
 ipset add internal 192.0.2.0/24
 ipset add internal 192.88.99.0/24
@@ -85,7 +85,6 @@ echo "status"
 # start proxies
 /app/supervisord ctl -c /etc/supervisord.conf start ip-to-vsock-raw-outgoing
 /app/supervisord ctl -c /etc/supervisord.conf start vsock-to-ip-raw-incoming
-/app/supervisord ctl -c /etc/supervisord.conf start tcpdump
 
 # start dnsproxy
 /app/supervisord ctl -c /etc/supervisord.conf start dnsproxy
@@ -99,10 +98,6 @@ echo "status"
 # /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
 sleep 10
-
-# # # echo "Checking connectivity to NFS server with telnet"
-# echo quit | telnet 3.111.219.88 2049
-
 
 echo "Mounting NFS to /app/nfs/"
 ip route show
