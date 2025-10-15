@@ -55,9 +55,6 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
 
         let buf = msg.get_payload_mut();
 
-        if let Some((dst_ip, dst_port)) = parse_ipv4_dst(buf) {
-            println!("Destination: {}.{}.{}.{}:{}", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], dst_port);
-        }
         let size = buf.len();
 
         // send through vsock
@@ -79,37 +76,7 @@ fn handle_conn(conn_socket: &mut Socket, queue: &mut Queue) -> Result<(), ProxyE
     }
 }
 
-fn parse_ipv4_dst(buf: &[u8]) -> Option<([u8; 4], u16)> {
-    if buf.len() < 20 {
-        return None; // too short for IPv4 header
-    }
-
-    let ihl = (buf[0] & 0x0f) as usize * 4;
-    if buf.len() < ihl {
-        return None;
-    }
-
-    let dst_ip = [buf[16], buf[17], buf[18], buf[19]];
-
-    let protocol = buf[9];
-    let transport_header = &buf[ihl..];
-
-    if protocol == 6 && transport_header.len() >= 4 {
-        // TCP
-        let dst_port = u16::from_be_bytes([transport_header[2], transport_header[3]]);
-        Some((dst_ip, dst_port))
-    } else if protocol == 17 && transport_header.len() >= 4 {
-        // UDP
-        let dst_port = u16::from_be_bytes([transport_header[2], transport_header[3]]);
-        Some((dst_ip, dst_port))
-    } else {
-        None
-    }
-}
-
-
 fn main() -> anyhow::Result<()> {
-    println!("Starting the ip-to-vsock-raw-proxy.....");
     let cli = Cli::parse();
 
     // nfqueue for incoming packets
