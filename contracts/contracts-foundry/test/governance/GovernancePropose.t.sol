@@ -588,7 +588,6 @@ contract GovernanceProposeTest is GovernanceSetup {
         (
             IGovernanceTypes.Vote[] memory allVotes,
             uint256 voteCount,
-            bytes32 voteHash
         ) = governance.getAllVoteInfo(proposalId);
         
         assertEq(allVotes.length, 2, "Should have 2 votes");
@@ -662,5 +661,94 @@ contract GovernanceProposeTest is GovernanceSetup {
         
         assertEq(voteVoter, voter1, "Voter should match");
         assertEq(voteEncrypted, "encrypted_vote_1", "Vote should match");
+    }
+
+    // ========== Proposal Getter Tests ==========
+    
+    function test_proposalExists_ReturnsTrue() public {
+        bytes32 testProposalId = _createSimpleProposal();
+        assertTrue(governance.proposalExists(testProposalId), "Proposal should exist");
+    }
+
+    function test_proposalExists_ReturnsFalse() public view {
+        bytes32 nonExistentId = keccak256("non-existent");
+        assertFalse(governance.proposalExists(nonExistentId), "Proposal should not exist");
+    }
+
+    function test_getProposalImageId_ReturnsImageId() public {
+        bytes32 testProposalId = _createSimpleProposal();
+        bytes32 imageId = governance.getProposalImageId(testProposalId);
+        bytes32 expectedImageId = governanceEnclave.getImageId();
+        assertEq(imageId, expectedImageId, "Image ID should match");
+    }
+
+    function test_getProposalImageId_RevertsForNonExistentProposal() public {
+        bytes32 nonExistentId = keccak256("non-existent");
+        vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
+        governance.getProposalImageId(nonExistentId);
+    }
+
+    function test_getProposalNetworkHash_ReturnsNetworkHash() public {
+        bytes32 testProposalId = _createSimpleProposal();
+        bytes32 networkHash = governance.getProposalNetworkHash(testProposalId);
+        bytes32 expectedNetworkHash = governanceEnclave.getNetworkHash();
+        assertEq(networkHash, expectedNetworkHash, "Network hash should match");
+    }
+
+    function test_getProposalNetworkHash_RevertsForNonExistentProposal() public {
+        bytes32 nonExistentId = keccak256("non-existent");
+        vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
+        governance.getProposalNetworkHash(nonExistentId);
+    }
+
+    function test_getTokenLockInfo_ReturnsCorrectInfo() public {
+        bytes32 testProposalId = _createSimpleProposal();
+        (address token, uint256 amount) = governance.getTokenLockInfo(testProposalId);
+        assertEq(token, address(depositToken), "Token should be deposit token");
+        assertEq(amount, DEPOSIT_AMOUNT, "Amount should match deposit amount");
+    }
+
+    function test_getTokenLockInfo_RevertsForNonExistentProposal() public {
+        bytes32 nonExistentId = keccak256("non-existent");
+        vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
+        governance.getTokenLockInfo(nonExistentId);
+    }
+
+    function test_getTokenLockInfo_MultipleProposals() public {
+        // Create multiple proposals
+        bytes32 proposal1 = _createSimpleProposal();
+        bytes32 proposal2 = _createSimpleProposal();
+        
+        // Both should have the same token lock info
+        (address token1, uint256 amount1) = governance.getTokenLockInfo(proposal1);
+        (address token2, uint256 amount2) = governance.getTokenLockInfo(proposal2);
+        
+        assertEq(token1, token2, "Tokens should be the same");
+        assertEq(amount1, amount2, "Amounts should be the same");
+        assertEq(token1, address(depositToken), "Token should be deposit token");
+        assertEq(amount1, DEPOSIT_AMOUNT, "Amount should match");
+    }
+
+    function test_getProposalState_ReturnsCorrectState() public {
+        bytes32 testProposalId = _createSimpleProposal();
+        (
+            IGovernanceTypes.VoteOutcome voteOutcome,
+            bool executed,
+            bool inExecutionQueue,
+            bytes32 imageId,
+            bytes32 networkHash
+        ) = governance.getProposalState(testProposalId);
+
+        assertEq(uint256(voteOutcome), uint256(IGovernanceTypes.VoteOutcome.Pending), "Vote outcome should be Pending");
+        assertFalse(executed, "Proposal should not be executed");
+        assertFalse(inExecutionQueue, "Proposal should not be in execution queue");
+        assertEq(imageId, governanceEnclave.getImageId(), "Image ID should match");
+        assertEq(networkHash, governanceEnclave.getNetworkHash(), "Network hash should match");
+    }
+
+    function test_getProposalState_RevertsForNonExistentProposal() public {
+        bytes32 nonExistentId = keccak256("non-existent");
+        vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
+        governance.getProposalState(nonExistentId);
     }
 }

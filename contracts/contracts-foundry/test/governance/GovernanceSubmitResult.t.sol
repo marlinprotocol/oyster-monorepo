@@ -905,4 +905,72 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Verify the execution failed
         assertEq(mockTarget.value(), 0, "Value should remain unchanged");
     }
+
+    // ========== Vote Outcome and Execution State Getter Tests ==========
+    
+    function test_getVoteOutcome_Pending() public {
+        bytes32 proposalId = _createSimpleProposal();
+        IGovernanceTypes.VoteOutcome outcome = governance.getVoteOutcome(proposalId);
+        assertEq(uint256(outcome), uint256(IGovernanceTypes.VoteOutcome.Pending), "Vote outcome should be Pending");
+    }
+
+    function test_getVoteOutcome_RevertsForNonExistentProposal() public {
+        bytes32 nonExistentId = keccak256("non-existent");
+        vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
+        governance.getVoteOutcome(nonExistentId);
+    }
+
+    function test_isProposalExecuted_ReturnsFalse() public {
+        bytes32 proposalId = _createSimpleProposal();
+        assertFalse(governance.isProposalExecuted(proposalId), "Proposal should not be executed");
+    }
+
+    function test_isProposalExecuted_ReturnsFalseForNonExistent() public view {
+        bytes32 nonExistentId = keccak256("non-existent");
+        // Should NOT revert, just return false
+        assertFalse(governance.isProposalExecuted(nonExistentId), "Non-existent proposal should return false");
+    }
+
+    function test_isProposalExecuted_Integration() public {
+        // Test that it returns false for different proposal states
+        bytes32 proposalId = _createSimpleProposal();
+        
+        // Initially should be false
+        assertFalse(governance.isProposalExecuted(proposalId), "Should be false initially");
+        
+        // After voting period starts, still false
+        _warpToVotingPeriod(proposalId);
+        assertFalse(governance.isProposalExecuted(proposalId), "Should be false during voting");
+        
+        // After voting period ends, still false
+        _warpToResultPeriod(proposalId);
+        assertFalse(governance.isProposalExecuted(proposalId), "Should be false after voting");
+    }
+
+    function test_getProposalState_AfterExecution() public {
+        // Create a proposal that passes
+        bytes32 proposalId = _createSimpleProposal();
+        
+        // Warp to voting period and vote
+        _warpToVotingPeriod(proposalId);
+        
+        vm.prank(voter1);
+        _vote(proposalId, hex"1234", address(0), 0);
+        
+        // Warp to result period
+        _warpToResultPeriod(proposalId);
+        
+        // Check state before result submission
+        (
+            IGovernanceTypes.VoteOutcome voteOutcome,
+            bool executed,
+            bool inExecutionQueue,
+            ,
+        ) = governance.getProposalState(proposalId);
+        
+        // Before result submission, should still be Pending
+        assertEq(uint256(voteOutcome), uint256(IGovernanceTypes.VoteOutcome.Pending), "Should be Pending before result");
+        assertFalse(executed, "Should not be executed");
+        assertFalse(inExecutionQueue, "Should not be in queue");
+    }
 }

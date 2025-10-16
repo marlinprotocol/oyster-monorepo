@@ -486,6 +486,119 @@ contract GovernanceEnclaveTest is Test {
         assertTrue(config.chainHash != bytes32(0));
     }
 
+    function test_getSupportedChainIds_Empty() public view {
+        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        assertEq(chainIds.length, 0, "Should have no supported chains initially");
+    }
+
+    function test_getSupportedChainIds_Multiple() public {
+        // Add multiple networks
+        _setupNetwork(1, 1);
+        _setupNetwork(2, 1);
+        _setupNetwork(3, 1);
+
+        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        assertEq(chainIds.length, 3, "Should have 3 supported chains");
+        
+        // Verify chain IDs are correct (order might not be guaranteed)
+        bool hasChain1 = false;
+        bool hasChain2 = false;
+        bool hasChain3 = false;
+        
+        for (uint256 i = 0; i < chainIds.length; i++) {
+            if (chainIds[i] == 1) hasChain1 = true;
+            if (chainIds[i] == 2) hasChain2 = true;
+            if (chainIds[i] == 3) hasChain3 = true;
+        }
+        
+        assertTrue(hasChain1, "Should contain chain 1");
+        assertTrue(hasChain2, "Should contain chain 2");
+        assertTrue(hasChain3, "Should contain chain 3");
+    }
+
+    function test_getSupportedChainIds_AfterRemoval() public {
+        // Add networks
+        _setupNetwork(1, 1);
+        _setupNetwork(2, 1);
+        
+        assertEq(governanceEnclave.getSupportedChainIds().length, 2, "Should have 2 chains");
+        
+        // Remove one network by setting token to address(0)
+        string[] memory emptyUrls = new string[](1);
+        emptyUrls[0] = "https://placeholder.com";
+        
+        vm.prank(admin);
+        governanceEnclave.setNetworkConfig(1, address(0), emptyUrls);
+        
+        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        assertEq(chainIds.length, 1, "Should have 1 chain after removal");
+        assertEq(chainIds[0], 2, "Should only have chain 2");
+    }
+
+    function test_isChainSupported_True() public {
+        _setupNetwork(TEST_CHAIN_ID, 1);
+        assertTrue(governanceEnclave.isChainSupported(TEST_CHAIN_ID), "Chain should be supported");
+    }
+
+    function test_isChainSupported_False() public view {
+        assertFalse(governanceEnclave.isChainSupported(999), "Chain should not be supported");
+    }
+
+    function test_isChainSupported_Multiple() public {
+        _setupNetwork(1, 1);
+        _setupNetwork(2, 1);
+        _setupNetwork(5, 1);
+        
+        assertTrue(governanceEnclave.isChainSupported(1), "Chain 1 should be supported");
+        assertTrue(governanceEnclave.isChainSupported(2), "Chain 2 should be supported");
+        assertFalse(governanceEnclave.isChainSupported(3), "Chain 3 should not be supported");
+        assertFalse(governanceEnclave.isChainSupported(4), "Chain 4 should not be supported");
+        assertTrue(governanceEnclave.isChainSupported(5), "Chain 5 should be supported");
+    }
+
+    function test_isChainSupported_AfterRemoval() public {
+        _setupNetwork(TEST_CHAIN_ID, 1);
+        assertTrue(governanceEnclave.isChainSupported(TEST_CHAIN_ID), "Chain should be supported");
+        
+        // Remove network
+        string[] memory emptyUrls = new string[](1);
+        emptyUrls[0] = "https://placeholder.com";
+        
+        vm.prank(admin);
+        governanceEnclave.setNetworkConfig(TEST_CHAIN_ID, address(0), emptyUrls);
+        
+        assertFalse(governanceEnclave.isChainSupported(TEST_CHAIN_ID), "Chain should not be supported after removal");
+    }
+
+    function test_getPCRConfig_ReturnsCorrectValues() public view {
+        (bytes memory returnedPcr0, bytes memory returnedPcr1, bytes memory returnedPcr2, bytes32 returnedImageId) 
+            = governanceEnclave.getPCRConfig();
+        
+        assertEq(returnedPcr0, pcr0, "PCR0 should match");
+        assertEq(returnedPcr1, pcr1, "PCR1 should match");
+        assertEq(returnedPcr2, pcr2, "PCR2 should match");
+        assertEq(returnedImageId, governanceEnclave.getImageId(), "ImageId should match getImageId()");
+    }
+
+    function test_getPCRConfig_AfterUpdate() public {
+        // Update PCR config
+        bytes memory newPcr0 = hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        bytes memory newPcr1 = hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
+        bytes memory newPcr2 = hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
+        
+        vm.prank(admin);
+        governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2);
+        
+        (bytes memory returnedPcr0, bytes memory returnedPcr1, bytes memory returnedPcr2, bytes32 returnedImageId) 
+            = governanceEnclave.getPCRConfig();
+        
+        assertEq(returnedPcr0, newPcr0, "PCR0 should be updated");
+        assertEq(returnedPcr1, newPcr1, "PCR1 should be updated");
+        assertEq(returnedPcr2, newPcr2, "PCR2 should be updated");
+        assertTrue(returnedImageId != bytes32(0), "ImageId should be generated");
+        assertEq(returnedImageId, governanceEnclave.getImageId(), "ImageId should match getImageId()");
+    }
+
     //-------------------------------- Verification Tests --------------------------------//
 
     function test_verifyKMSSig_WrongSigner() public view {
