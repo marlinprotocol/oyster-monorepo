@@ -263,13 +263,13 @@ contract GovernanceEnclave is
     }
 
     function _calcNetworkHash() internal view returns (bytes32) {
-        bytes memory chainHashEncoded;
+        bytes32 currentHash = bytes32(0);
         for (uint256 i = 0; i < supportedChainIds.length; ++i) {
             uint256 chainId = supportedChainIds[i];
             bytes32 chainHash = tokenNetworkConfigs[chainId].chainHash;
-            chainHashEncoded = abi.encode(chainHashEncoded, chainHash);
+            currentHash = sha256(abi.encode(currentHash, chainHash));
         }
-        return sha256(chainHashEncoded);
+        return currentHash;
     }
 
     function _isChainIdSupported(uint256 _chainId) internal view returns (bool) {

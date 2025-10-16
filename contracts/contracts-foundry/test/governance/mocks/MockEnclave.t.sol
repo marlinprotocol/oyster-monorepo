@@ -39,11 +39,12 @@ contract MockEnclave is Test {
         address _contractAddress,
         uint256 _proposedTimestamp,
         bytes32 _networkHash,
+        bytes32 _contractConfigHash,
         bytes32 _voteHash
     ) public pure returns (IGovernanceTypes.SubmitResultInputParams memory) {
         bytes memory resultData = _formResultData(_proposalId, _votePercentage);
         bytes memory enclaveSig =
-            _signResultData(resultData, _contractAddress, _proposedTimestamp, _networkHash, _voteHash);
+            _signResultData(resultData, _contractAddress, _proposedTimestamp, _networkHash, _contractConfigHash, _voteHash);
 
         return IGovernanceTypes.SubmitResultInputParams({
             kmsSig: KMS_SIG,
@@ -79,10 +80,11 @@ contract MockEnclave is Test {
         address _contractAddress,
         uint256 _proposedTimestamp,
         bytes32 _networkHash,
+        bytes32 _contractConfigHash,
         bytes32 _voteHash
     ) internal pure returns (bytes memory) {
         // Enclave will sign on this digest
-        bytes32 contractDataHash = sha256(abi.encode(_contractAddress, _proposedTimestamp, _networkHash, _voteHash));
+        bytes32 contractDataHash = sha256(abi.encode(_contractAddress, _proposedTimestamp, _networkHash, _contractConfigHash, _voteHash));
 
         // Decode resultData to get proposalId and voteDecisionResult
         (bytes32 proposalId, IGovernanceTypes.VoteDecisionResult memory voteDecisionResult) =

@@ -75,6 +75,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -154,6 +155,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -241,6 +243,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
 
@@ -315,6 +318,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
 
@@ -375,6 +379,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
 
@@ -450,6 +455,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -521,6 +527,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -595,6 +602,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -667,6 +675,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -740,6 +749,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -813,6 +823,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         
@@ -887,6 +898,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
             address(governance),
             timeInfo.proposedTimestamp,
             networkHash,
+            governance.contractConfigHash(),
             voteHash
         );
         

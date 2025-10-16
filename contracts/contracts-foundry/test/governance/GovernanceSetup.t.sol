@@ -180,7 +180,7 @@ contract GovernanceSetup is Test {
         // Set token lock amount and governance delegation (requires configSetter)
         vm.startPrank(configSetter);
         governance.setTokenLockAmount(address(depositToken), DEPOSIT_AMOUNT);
-        governance.setGovernanceDelegation(block.chainid, address(governanceDelegation));
+        governance.addGovernanceDelegation(block.chainid, address(governanceDelegation));
         vm.stopPrank();
     }
 

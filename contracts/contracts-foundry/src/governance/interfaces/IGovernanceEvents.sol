@@ -73,5 +73,6 @@ interface IGovernanceEvents is IGovernanceTypes {
         bytes32 indexed proposalId
     );
 
-    event GovernanceDelegationSet(uint256 indexed chainId, address indexed governanceDelegation);
+    event GovernanceDelegationAdded(uint256 indexed chainId, address indexed governanceDelegation);
+    event GovernanceDelegationRemoved(uint256 indexed chainId);
 }

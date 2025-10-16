@@ -70,6 +70,7 @@ interface IGovernanceTypes {
         VoteOutcome voteOutcome;
         bytes32 imageId;
         bytes32 networkHash;
+        bytes32 contractConfigHash;
         bool executed;
     }
 

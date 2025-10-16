@@ -62,36 +62,149 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.setGovernanceEnclave(address(0));
     }
 
-    // ========== setGovernanceDelegation Tests ==========
+    // ========== addGovernanceDelegation Tests ==========
     
-    function test_setGovernanceDelegation_Success() public {
+    function test_addGovernanceDelegation_Success() public {
         GovernanceDelegation newDelegation = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
         vm.prank(admin);
         newDelegation.initialize(admin);
         
         uint256 newChainId = 999;
         
-        vm.prank(configSetter);
-        governance.setGovernanceDelegation(newChainId, address(newDelegation));
+        // Check initial state
+        assertEq(governance.getDelegationChainIds().length, 1, "Should have 1 delegation initially");
+        assertEq(governance.getGovernanceDelegation(newChainId), address(0), "Chain should not be configured");
         
+        vm.prank(configSetter);
+        governance.addGovernanceDelegation(newChainId, address(newDelegation));
+        
+        // Verify delegation was added
         assertEq(governance.governanceDelegations(newChainId), address(newDelegation), "governanceDelegation not set");
+        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getGovernanceDelegation(newChainId), address(newDelegation), "Chain should be configured");
     }
 
-    function test_setGovernanceDelegation_revert_when_NonConfigSetter() public {
+    function test_addGovernanceDelegation_revert_when_NonConfigSetter() public {
         uint256 chainId = 999;
         address newDelegation = makeAddr("newDelegation");
         
         vm.prank(admin);
         vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
-        governance.setGovernanceDelegation(chainId, newDelegation);
+        governance.addGovernanceDelegation(chainId, newDelegation);
     }
 
-    function test_setGovernanceDelegation_revert_when_ZeroAddress() public {
+    function test_addGovernanceDelegation_revert_when_ZeroAddress() public {
         uint256 chainId = 999;
         
         vm.prank(configSetter);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
-        governance.setGovernanceDelegation(chainId, address(0));
+        governance.addGovernanceDelegation(chainId, address(0));
+    }
+
+    function test_addGovernanceDelegation_revert_when_ZeroChainId() public {
+        address newDelegation = makeAddr("newDelegation");
+        
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
+        governance.addGovernanceDelegation(0, newDelegation);
+    }
+
+    function test_addGovernanceDelegation_revert_when_ChainIdAlreadyExists() public {
+        // Try to add the same chain ID that was added in setup
+        uint256 existingChainId = block.chainid;
+        address newDelegation = makeAddr("newDelegation");
+        
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
+        governance.addGovernanceDelegation(existingChainId, newDelegation);
+    }
+
+    // ========== removeGovernanceDelegation Tests ==========
+    
+    function test_removeGovernanceDelegation_Success() public {
+        // Add another delegation first
+        uint256 newChainId = 999;
+        address newDelegation = makeAddr("newDelegation");
+        
+        vm.prank(configSetter);
+        governance.addGovernanceDelegation(newChainId, newDelegation);
+        
+        // Verify it was added
+        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getGovernanceDelegation(newChainId), newDelegation, "Chain should be configured");
+        
+        // Remove it (index 1 since it was added second)
+        vm.prank(configSetter);
+        governance.removeGovernanceDelegation(1);
+        
+        // Verify it was removed
+        assertEq(governance.getDelegationChainIds().length, 1, "Should have 1 delegation");
+        assertEq(governance.getGovernanceDelegation(newChainId), address(0), "Chain should not be configured");
+        assertEq(governance.governanceDelegations(newChainId), address(0), "governanceDelegation should be zero");
+    }
+
+    function test_removeGovernanceDelegation_SwapAndPop() public {
+        // Add two more delegations
+        uint256 chainId1 = 999;
+        uint256 chainId2 = 888;
+        address delegation1 = makeAddr("delegation1");
+        address delegation2 = makeAddr("delegation2");
+        
+        vm.startPrank(configSetter);
+        governance.addGovernanceDelegation(chainId1, delegation1);
+        governance.addGovernanceDelegation(chainId2, delegation2);
+        vm.stopPrank();
+        
+        // Now we have 3 delegations: [block.chainid, chainId1, chainId2]
+        assertEq(governance.getDelegationChainIds().length, 3, "Should have 3 delegations");
+        
+        // Remove the middle one (index 1)
+        vm.prank(configSetter);
+        governance.removeGovernanceDelegation(1);
+        
+        // Verify: should have swapped chainId2 to index 1 and popped
+        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getGovernanceDelegation(chainId1), address(0), "chainId1 should not be configured");
+        assertEq(governance.getGovernanceDelegation(chainId2), delegation2, "chainId2 should still be configured");
+    }
+
+    function test_removeGovernanceDelegation_revert_when_NonConfigSetter() public {
+        vm.prank(admin);
+        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        governance.removeGovernanceDelegation(0);
+    }
+
+    function test_removeGovernanceDelegation_revert_when_InvalidIndex() public {
+        uint256 currentLength = governance.getDelegationChainIds().length;
+        
+        vm.prank(configSetter);
+        vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
+        governance.removeGovernanceDelegation(currentLength); // Out of bounds
+    }
+
+    // ========== getDelegationChainIds Tests ==========
+    
+    function test_getDelegationChainIds() public {
+        // Initially should have only block.chainid
+        uint256[] memory chainIds = governance.getDelegationChainIds();
+        assertEq(chainIds.length, 1, "Should have 1 chain ID");
+        assertEq(chainIds[0], block.chainid, "Should be block.chainid");
+        
+        // Add more chains
+        uint256 chainId1 = 999;
+        uint256 chainId2 = 888;
+        
+        vm.startPrank(configSetter);
+        governance.addGovernanceDelegation(chainId1, makeAddr("delegation1"));
+        governance.addGovernanceDelegation(chainId2, makeAddr("delegation2"));
+        vm.stopPrank();
+        
+        // Verify all chains are in the array
+        chainIds = governance.getDelegationChainIds();
+        assertEq(chainIds.length, 3, "Should have 3 chain IDs");
+        assertEq(chainIds[0], block.chainid, "First should be block.chainid");
+        assertEq(chainIds[1], chainId1, "Second should be chainId1");
+        assertEq(chainIds[2], chainId2, "Third should be chainId2");
     }
 
     // ========== setTokenLockAmount Tests ==========

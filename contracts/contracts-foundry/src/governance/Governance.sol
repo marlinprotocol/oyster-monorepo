@@ -43,6 +43,8 @@ contract Governance is
     address public treasury;
     address public governanceEnclave;
     mapping (uint256 chainId => address governanceDelegation) public governanceDelegations;
+    uint256[] public delegationChainIds;
+    bytes32 public contractConfigHash;
 
     // Proposal Management
     mapping(address token => uint256 amount) public proposalDepositAmounts;
@@ -55,12 +57,6 @@ contract Governance is
     uint256 public minQuorumThreshold;
     uint256 public proposalPassVetoThreshold;
     uint256 public vetoSlashRate;
-
-    /*     // Network Configuration
-    bytes32 private networkHash;
-    uint256[] public supportedChainIds;
-    uint256 public maxRPCUrlsPerChain;
-    mapping(uint256 chainId => TokenNetworkConfig config) public tokenNetworkConfigs; */
 
     uint256[50] private __gap1;
 
@@ -167,17 +163,64 @@ contract Governance is
     function _setGovernanceEnclave(address _governanceEnclave) internal {
         require(_governanceEnclave != address(0), Governance__InvalidAddress());
         governanceEnclave = _governanceEnclave;
+        
+        // Update contract config hash when governance enclave changes
+        contractConfigHash = _calcContractConfigHash();
+        
         emit GovernanceEnclaveSet(_governanceEnclave);
     }
 
-    function setGovernanceDelegation(uint256 _chainId, address _governanceDelegation) external onlyConfigSetter {
-        _setGovernanceDelegation(_chainId, _governanceDelegation);
+    /// @notice Adds a governance delegation for a specific chain
+    /// @dev Adds the chain ID to delegationChainIds array if not already present
+    /// @param _chainId The chain ID to add delegation for
+    /// @param _governanceDelegation The governance delegation contract address
+    function addGovernanceDelegation(uint256 _chainId, address _governanceDelegation) external onlyConfigSetter {
+        require(_chainId != 0, Governance__InvalidAddress());
+        require(_governanceDelegation != address(0), Governance__InvalidAddress());
+        require(governanceDelegations[_chainId] == address(0), Governance__InvalidAddress());
+
+        governanceDelegations[_chainId] = _governanceDelegation;
+        delegationChainIds.push(_chainId);
+        
+        // Update contract config hash
+        contractConfigHash = _calcContractConfigHash();
+        
+        emit GovernanceDelegationAdded(_chainId, _governanceDelegation);
     }
 
-    function _setGovernanceDelegation(uint256 _chainId, address _governanceDelegation) internal {
-        require(_governanceDelegation != address(0), Governance__InvalidAddress());
-        governanceDelegations[_chainId] = _governanceDelegation;
-        emit GovernanceDelegationSet(_chainId, _governanceDelegation);
+    /// @notice Removes a governance delegation at a specific index
+    /// @dev Removes by swapping with the last element and popping
+    /// @param _index The index in delegationChainIds array to remove
+    function removeGovernanceDelegation(uint256 _index) external onlyConfigSetter {
+        require(_index < delegationChainIds.length, Governance__InvalidAddress());
+
+        uint256 chainIdToRemove = delegationChainIds[_index];
+        
+        // Remove from mapping
+        delete governanceDelegations[chainIdToRemove];
+        
+        // Remove from array by swapping with last element and popping
+        delegationChainIds[_index] = delegationChainIds[delegationChainIds.length - 1];
+        delegationChainIds.pop();
+        
+        // Update contract config hash
+        contractConfigHash = _calcContractConfigHash();
+        
+        emit GovernanceDelegationRemoved(chainIdToRemove);
+    }
+
+    /// @notice Calculates the contract config hash from governanceEnclave and all configured governance delegations
+    /// @dev Uses iterative hashing for gas efficiency - hashes governanceEnclave first, then chains each 
+    ///      (chainId, address) pair to create a hash for integrity verification
+    /// @return currentHash The computed contract config hash representing the current governance configuration
+    function _calcContractConfigHash() internal view returns (bytes32) {
+        bytes32 currentHash = sha256(abi.encode(governanceEnclave));
+        for (uint256 i = 0; i < delegationChainIds.length; ++i) {
+            uint256 chainId = delegationChainIds[i];
+            address delegation = governanceDelegations[chainId];
+            currentHash = sha256(abi.encode(currentHash, chainId, delegation));
+        }
+        return currentHash;
     }
 
     /// @notice Sets the required deposit amount for a specific token when creating proposals
@@ -402,7 +445,7 @@ contract Governance is
         });
 
         proposals[_proposalId].networkHash = _getCurrentNetworkHash();
-
+        proposals[_proposalId].contractConfigHash = contractConfigHash;
         proposals[_proposalId].imageId = IGovernanceEnclave(governanceEnclave).getImageId();
     }
 
@@ -510,6 +553,7 @@ contract Governance is
                 address(this),
                 proposalTimeInfo.proposedTimestamp,
                 proposals[proposalId].networkHash,
+                proposals[proposalId].contractConfigHash,
                 proposals[proposalId].proposalVoteInfo.voteHash
             )
         );
@@ -905,6 +949,20 @@ contract Governance is
         require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
         Proposal storage proposal = proposals[_proposalId];
         return (proposal.voteOutcome, proposal.executed, executionQueue[_proposalId], proposal.imageId, proposal.networkHash);
+    }
+
+    /// @notice Returns the complete array of delegation chain IDs
+    /// @dev This allows external contracts and users to get all delegation chains in a single call
+    /// @return chainIds Array of all delegation chain IDs
+    function getDelegationChainIds() external view returns (uint256[] memory) {
+        return delegationChainIds;
+    }
+
+    /// @notice Checks if a governance delegation is configured for a specific chain ID
+    /// @param _chainId The chain ID to check
+    /// @return governanceDelegation The governance delegation contract address
+    function getGovernanceDelegation(uint256 _chainId) external view returns (address) {
+        return governanceDelegations[_chainId];
     }
 
     //-------------------------------- Getters end --------------------------------//
