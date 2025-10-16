@@ -11,7 +11,6 @@
   derive-server,
   init-params-decoder,
   kernels,
-  pcr-utils,
   compose ? ./. + "/docker-compose.yml",
   dockerImages ? [],
 }: let
@@ -29,8 +28,6 @@
   deriveServer = "${derive-server}/bin/kms-derive-server";
   initParamsDecoder = "${init-params-decoder}/bin/init-params-decoder";
   vet' = "${vet}/bin/vet";
-  pcrExtender = "${pcr-utils}/bin/pcr-extender";
-  pcrLocker = "${pcr-utils}/bin/pcr-locker";
   kernel = kernels.kernel;
   kernelConfig = kernels.kernelConfig;
   nsmKo = kernels.nsmKo;
@@ -79,14 +76,8 @@ in {
     kernel = kernel;
     kernelConfig = kernelConfig;
     nsmKo = nsmKo;
-    cmdline = (
-      if eifArch == "aarch64" then
-        "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
-      else if eifArch == "x86_64" then
-        builtins.readFile nitro.blobs.${eifArch}.cmdLine
-      else
-        abort "Unsupported architecture '${eifArch}'"
-      );
+    cmdline = builtins.readFile nitro.blobs.${eifArch}.cmdLine;
+
     entrypoint = "/app/setup.sh";
     env = "";
     copyToRoot = pkgs.buildEnv {

@@ -17,9 +17,9 @@ if [ -s /app/init-params ]; then
     cat /app/init-params-digest
 fi
 
-# extend pcr16 with the digest and lock it
-/app/pcr-extender --index 16 --contents-path /app/init-params-digest
-/app/pcr-locker --index 16
+# # extend pcr16 with the digest and lock it
+# /app/pcr-extender --index 16 --contents-path /app/init-params-digest
+# /app/pcr-locker --index 16
 
 ip=$(cat /app/ip.txt)
 
