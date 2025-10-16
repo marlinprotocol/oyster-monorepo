@@ -63,8 +63,9 @@ ipset add internal 255.255.255.255/32
 
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
-ipset add portfilter 1-21
-ipset add portfilter 23-61439
+ipset add portfilter 1024-61439
+ipset add portfilter 80
+ipset add portfilter 443
 
 # iptables rules to route traffic to a nfqueue to be picked up by the proxy
 iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
@@ -96,7 +97,7 @@ echo "status"
 
 echo "Mounting NFS to /app/nfs/"
 ip route show
-mount -vvv -t nfs4 -o nolock,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
+mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
 cat /app/nfs/test_file.txt
 
 sleep 2
