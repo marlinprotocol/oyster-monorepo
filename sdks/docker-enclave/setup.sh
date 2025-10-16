@@ -112,6 +112,11 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
 fi
 
+echo "Mounting NFS to /app/nfs/"
+mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
+cat /app/nfs/test_file.txt
+
+
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
 
