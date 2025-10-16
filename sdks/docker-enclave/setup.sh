@@ -2,8 +2,6 @@
 
 set -e
 
-# /app/vsock-to-ip-raw-incoming --vsock-addr 88:1200 --device lo
-
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
@@ -60,7 +58,6 @@ ipset add internal 233.252.0.0/24
 ipset add internal 240.0.0.0/4
 ipset add internal 255.255.255.255/32
 
-
 # create ipset with the ports supported for routing
 ipset create portfilter bitmap:port range 0-65535
 ipset add portfilter 1024-61439
@@ -93,23 +90,25 @@ echo "status"
 
 # start attestation servers
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
-# /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
+/app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
+
+sleep 2
+
+# start derive server
+/app/supervisord ctl -c /etc/supervisord.conf start derive-server
+
+sleep 10
+
+# process init params into their constituent files
+/app/init-params-decoder
 
 echo "Mounting NFS to /app/nfs/"
 ip route show
 mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
 cat /app/nfs/test_file.txt
 
-sleep 2
 
-# # start derive server
-# /app/supervisord ctl -c /etc/supervisord.conf start derive-server
-
-
-sleep 10
-
-# # process init params into their constituent files
-# /app/init-params-decoder
+sleep 5
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
