@@ -6,6 +6,10 @@ set -e
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
 
+# query job id for enclave and store
+/app/vet --url vsock://3:1300/oyster/job > /app/job.txt
+cat /app/job.txt && echo
+
 # query init params for enclave and store
 /app/vet --url vsock://3:1300/oyster/init-params > /app/init-params
 
@@ -17,32 +21,22 @@ if [ -s /app/init-params ]; then
     cat /app/init-params-digest
 fi
 
-# extend pcr16 with the digest and lock it
-/app/pcr-extender --index 16 --contents-path /app/init-params-digest
-/app/pcr-locker --index 16
-
 ip=$(cat /app/ip.txt)
 
-# set up loopback
-ip addr add 127.0.0.1/8 dev lo
-ip link set lo up
-
-# set up bridge
-ip link add name br0 type bridge
-ip addr add $ip/32 dev br0
-ip link set dev br0 mtu 9001
-ip link set dev br0 up
-
-# adding a default route via the bridge
-ip route add default dev br0 src $ip
+# setting an address for loopback
+ifconfig lo $ip mtu 9001
+ip addr add $ip dev lo
 
 # localhost dns
 echo "127.0.0.1 localhost" > /etc/hosts
 
-ip link
+ifconfig
 ip addr
-ip route
 cat /etc/hosts
+
+# adding a default route
+ip route add default dev lo src $ip
+route -n
 
 # create ipset with all "internal" (unroutable) addresses
 ipset create internal hash:net
@@ -102,15 +96,18 @@ sleep 2
 
 # start derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
+
 sleep 10
 
 # process init params into their constituent files
 /app/init-params-decoder
 
-# start derive server contract if contract address and root server config are present
-if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.json ]; then
-    /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
-fi
+echo "Mounting NFS to /app/nfs/"
+ip route show
+mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
+cat /app/nfs/test_file.txt
+
+sleep 10
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
@@ -120,6 +117,19 @@ until docker info >/dev/null 2>&1; do
     echo "[setup.sh] Waiting for Docker daemon..."
     sleep 1
 done
+
+# Load Docker images if any exist
+if [ "$(ls -A /app/docker-images 2>/dev/null)" ]; then
+    for image_tar in /app/docker-images/*.tar; do
+        if ! docker load -i "$image_tar"; then
+            echo "[setup.sh] ERROR: Failed to load Docker image from $image_tar"
+            exit 1
+        fi
+        echo "[setup.sh] Docker image loaded successfully from $image_tar."
+    done
+else
+    echo "[setup.sh] No Docker images to load"
+fi
 
 # start docker compose
 /app/supervisord ctl -c /etc/supervisord.conf start compose
