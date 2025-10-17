@@ -40,7 +40,7 @@ contract GovernanceAdminTest is GovernanceSetup {
     function test_setGovernanceEnclave_Success() public {
         GovernanceEnclave newEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
         vm.prank(admin);
-        newEnclave.initialize(admin, kmsPath, kmsRootServerPubKey, pcr0, pcr1, pcr2, maxRPCUrlsPerChain);
+        newEnclave.initialize(admin, kmsRootServerPubKey, pcr0, pcr1, pcr2, maxRPCUrlsPerChain);
         
         vm.prank(configSetter);
         governance.setGovernanceEnclave(address(newEnclave));

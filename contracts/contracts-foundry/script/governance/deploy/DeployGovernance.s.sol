@@ -134,7 +134,6 @@ contract DeployGovernance is Script {
         // Initialize
         GovernanceEnclave(address(proxy)).initialize(
             params.admin,
-            params.kmsPath,
             params.kmsRootServerPubKey,
             params.pcr0,
             params.pcr1,

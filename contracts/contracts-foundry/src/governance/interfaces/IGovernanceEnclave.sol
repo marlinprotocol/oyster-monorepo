@@ -5,7 +5,7 @@ pragma solidity 0.8.29;
 interface IGovernanceEnclave {
     function getImageId() external view returns (bytes32);
 
-    function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig)
+    function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig, bytes32 _proposalId)
         external
         view
         returns (bool);

@@ -40,7 +40,6 @@ contract GovernanceSetup is Test {
     bytes public pcr1;
     bytes public pcr2;
     bytes public kmsRootServerPubKey;
-    string public kmsPath;
 
     /* Tokens */
     MockERC20 public depositToken;
@@ -70,8 +69,7 @@ contract GovernanceSetup is Test {
         pcr1 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         pcr2 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
-        kmsRootServerPubKey = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
-        kmsPath = "governance_test";
+        kmsRootServerPubKey = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
     }
 
     function setUp() public virtual {
@@ -115,7 +113,6 @@ contract GovernanceSetup is Test {
         governanceEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
         governanceEnclave.initialize(
             admin,
-            kmsPath,
             kmsRootServerPubKey,
             pcr0,
             pcr1,

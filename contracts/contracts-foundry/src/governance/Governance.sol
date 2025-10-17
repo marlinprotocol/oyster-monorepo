@@ -543,7 +543,7 @@ contract Governance is
 
         // Verify KMS sig
         require(
-            _verifyKMSSig(proposals[proposalId].imageId, _params.enclavePubKey, _params.kmsSig),
+            _verifyKMSSig(proposals[proposalId].imageId, _params.enclavePubKey, _params.kmsSig, proposalId),
             Governance__InvalidKMSSignature()
         );
 
@@ -766,13 +766,14 @@ contract Governance is
     /// @param _imageId The image ID used in the KMS path
     /// @param _enclavePubKey The enclave public key to verify
     /// @param _kmsSig The KMS signature to verify
+    /// @param _proposalId The proposal ID used as the KMS path
     /// @return isValid True if the signature is valid, false otherwise
-    function _verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig)
+    function _verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig, bytes32 _proposalId)
         internal
         view
         returns (bool)
     {
-        return IGovernanceEnclave(governanceEnclave).verifyKMSSig(_imageId, _enclavePubKey, _kmsSig);
+        return IGovernanceEnclave(governanceEnclave).verifyKMSSig(_imageId, _enclavePubKey, _kmsSig, _proposalId);
     }
 
     //-------------------------------- Helpers end --------------------------------//

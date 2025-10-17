@@ -38,8 +38,7 @@ contract GovernanceEnclaveTest is Test {
         user = makeAddr("user");
 
         // Initialize test data
-        kmsPath = "governance_test";
-        kmsRootServerPubKey = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
+        kmsRootServerPubKey = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
         pcr0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         pcr1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
         pcr2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
@@ -52,7 +51,6 @@ contract GovernanceEnclaveTest is Test {
 
         governanceEnclave.initialize(
             admin,
-            kmsPath,
             kmsRootServerPubKey,
             pcr0,
             pcr1,
@@ -109,7 +107,6 @@ contract GovernanceEnclaveTest is Test {
     //-------------------------------- Initializer Tests --------------------------------//
 
     function test_initialize_Success() public view {
-        assertEq(governanceEnclave.kmsPath(), kmsPath);
         assertEq(governanceEnclave.kmsRootServerPubKey(), kmsRootServerPubKey);
         assertEq(governanceEnclave.maxRPCUrlsPerChain(), maxRPCUrlsPerChain);
         assertTrue(governanceEnclave.hasRole(governanceEnclave.DEFAULT_ADMIN_ROLE(), admin));
@@ -119,7 +116,6 @@ contract GovernanceEnclaveTest is Test {
         vm.expectRevert("Initializable: contract is already initialized");
         governanceEnclave.initialize(
             admin,
-            kmsPath,
             kmsRootServerPubKey,
             pcr0,
             pcr1,
@@ -136,7 +132,6 @@ contract GovernanceEnclaveTest is Test {
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__InvalidAddress.selector);
         newEnclave.initialize(
             address(0),
-            kmsPath,
             kmsRootServerPubKey,
             pcr0,
             pcr1,
@@ -146,31 +141,6 @@ contract GovernanceEnclaveTest is Test {
     }
 
     //-------------------------------- Setters Tests --------------------------------//
-
-    // ========== KMS Path Tests ==========
-
-    function test_setKMSPath_Success() public {
-        string memory newPath = "new_governance_path";
-        
-        vm.prank(admin);
-        governanceEnclave.setKMSPath(newPath);
-
-        assertEq(governanceEnclave.kmsPath(), newPath);
-    }
-
-    function test_setKMSPath_revert_WhenNotAdmin() public {
-        string memory newPath = "new_governance_path";
-        
-        vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
-        governanceEnclave.setKMSPath(newPath);
-    }
-
-    function test_setKMSPath_revert_WhenEmptyPath() public {
-        vm.prank(admin);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__InvalidKMSPath.selector);
-        governanceEnclave.setKMSPath("");
-    }
 
     // ========== KMS Root Server Key Tests ==========
 
@@ -603,6 +573,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_verifyKMSSig_WrongSigner() public view {
         bytes32 imageId = governanceEnclave.getImageId();
+        bytes32 proposalId = bytes32(uint256(1));
         
         // Sign with a different private key (not the KMS root server key)
         uint256 wrongPrivKey = 0x1234567890abcdef;
@@ -610,7 +581,8 @@ contract GovernanceEnclaveTest is Test {
             abi.encodePacked(
                 "/derive/secp256k1/public?image_id=",
                 _toHexStringWithNoPrefix(imageId),
-                "&path=governance_test"
+                "&path=",
+                _toHexStringWithNoPrefix(proposalId)
             )
         );
         bytes memory message = abi.encodePacked(bytes(uri), enclavePubKey);
@@ -618,21 +590,24 @@ contract GovernanceEnclaveTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPrivKey, messageHash);
         bytes memory wrongSig = abi.encodePacked(r, s, v);
 
-        assertFalse(governanceEnclave.verifyKMSSig(imageId, enclavePubKey, wrongSig));
+        assertFalse(governanceEnclave.verifyKMSSig(imageId, enclavePubKey, wrongSig, proposalId));
     }
 
     function test_verifyKMSSig_WrongImageId() public view {
         bytes32 imageId = governanceEnclave.getImageId();
         bytes32 wrongImageId = bytes32(uint256(imageId) + 1);
+        bytes32 proposalId = bytes32(uint256(1));
 
-        assertFalse(governanceEnclave.verifyKMSSig(wrongImageId, enclavePubKey, mockEnclave.getKmsSig()));
+        // Sign with correct imageId but verify with wrong imageId
+        assertFalse(governanceEnclave.verifyKMSSig(wrongImageId, enclavePubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId));
     }
 
     function test_verifyKMSSig_WrongPublicKey() public view {
         bytes32 imageId = governanceEnclave.getImageId();
+        bytes32 proposalId = bytes32(uint256(1));
         bytes memory wrongPubKey = hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
-        assertFalse(governanceEnclave.verifyKMSSig(imageId, wrongPubKey, mockEnclave.getKmsSig()));
+        assertFalse(governanceEnclave.verifyKMSSig(imageId, wrongPubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId));
     }
 
     function test_verifyEnclaveSig_Valid() public view {

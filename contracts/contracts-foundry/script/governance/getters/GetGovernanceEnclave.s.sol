@@ -35,14 +35,6 @@ contract GetPCRConfig is GetGovernanceEnclaveBase {
     }
 }
 
-// forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetKMSPath --rpc-url <RPC_URL> -vvv
-contract GetKMSPath is GetGovernanceEnclaveBase {
-    function run() external view {
-        string memory kmsPath = governanceEnclave.kmsPath();
-        console.log("KMS path:", kmsPath);
-    }
-}
-
 // forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetKMSRootServerPubKey --rpc-url <RPC_URL> -vvv
 contract GetKMSRootServerPubKey is GetGovernanceEnclaveBase {
     function run() external view {

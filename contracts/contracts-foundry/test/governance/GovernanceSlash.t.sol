@@ -195,6 +195,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -290,6 +291,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -401,6 +403,7 @@ contract GovernanceSlashTest is GovernanceSetup {
         
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,

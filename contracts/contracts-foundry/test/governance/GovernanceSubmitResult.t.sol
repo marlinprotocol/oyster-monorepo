@@ -71,6 +71,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -151,6 +152,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -234,6 +236,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get result from MockEnclave (70% yes, 20% no, 10% abstain, 0% veto)
         IGovernanceTypes.SubmitResultInputParams memory resultParams = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             MockEnclave.VotePercentage({
                 yes: 0.7 * 1e18,
                 no: 0.2 * 1e18,
@@ -309,6 +312,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get result from MockEnclave (60% yes, 30% no, 10% abstain, 0% veto)
         IGovernanceTypes.SubmitResultInputParams memory resultParams = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             MockEnclave.VotePercentage({
                 yes: 0.6 * 1e18,
                 no: 0.3 * 1e18,
@@ -370,6 +374,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get result from MockEnclave (80% yes, 10% no, 10% abstain, 0% veto)
         IGovernanceTypes.SubmitResultInputParams memory resultParams = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             MockEnclave.VotePercentage({
                 yes: 0.8 * 1e18,
                 no: 0.1 * 1e18,
@@ -451,6 +456,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -523,6 +529,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -598,6 +605,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -671,6 +679,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -745,6 +754,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -819,6 +829,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -894,6 +905,7 @@ contract GovernanceSubmitResultTest is GovernanceSetup {
         // Get signed result from MockEnclave
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
+            governance.getProposalImageId(proposalId),
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,

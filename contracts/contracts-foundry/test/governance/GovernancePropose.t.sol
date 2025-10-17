@@ -365,7 +365,6 @@ contract GovernanceProposeTest is GovernanceSetup {
         vm.prank(admin);
         newGovernanceEnclave.initialize(
             admin,
-            kmsPath,
             kmsRootServerPubKey,
             pcr0,
             pcr1,

@@ -32,7 +32,6 @@ contract GovernanceEnclave is
     error GovernanceEnclave__InvalidKMSRootServerPubKey();
     error GovernanceEnclave__InvalidEnclavePubKeyLength();
     error GovernanceEnclave__InvalidPCR();
-    error GovernanceEnclave__InvalidKMSPath();
     error GovernanceEnclave__SameImageId();
     error GovernanceEnclave__InvalidMaxRpcUrlsPerChain();
     error GovernanceEnclave__InvalidChainId();
@@ -70,7 +69,6 @@ contract GovernanceEnclave is
     uint256[500] private __gap0;
 
     // KMS and PCR Configuration
-    string public kmsPath;
     bytes public kmsRootServerPubKey;
     PCRConfig public pcrConfig;
 
@@ -85,7 +83,6 @@ contract GovernanceEnclave is
     // ========== Events ==========
 
     // KMS Events
-    event KMSPathSet(string kmsPath);
     event KMSRootServerPubKeySet(bytes kmsRootServerPubKey);
 
     // PCR Events
@@ -134,7 +131,6 @@ contract GovernanceEnclave is
 
     function initialize(
         address _admin,
-        string calldata _kmsPath,
         bytes calldata _kmsRootServerPubKey,
         bytes calldata _pcr0,
         bytes calldata _pcr1,
@@ -152,9 +148,6 @@ contract GovernanceEnclave is
         // Grant admin role
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
 
-        // Set KMS path
-        _setKMSPath(_kmsPath);
-
         // Set KMS root server key
         _setKMSRootServerKey(_kmsRootServerPubKey);
 
@@ -168,16 +161,6 @@ contract GovernanceEnclave is
     //-------------------------------- Initializer ends --------------------------------//
 
     //-------------------------------- Admin starts --------------------------------//
-
-    function setKMSPath(string calldata _kmsPath) external onlyAdmin {
-        _setKMSPath(_kmsPath);
-    }
-
-    function _setKMSPath(string calldata _kmsPath) internal {
-        require(bytes(_kmsPath).length > 0, GovernanceEnclave__InvalidKMSPath());
-        kmsPath = _kmsPath;
-        emit KMSPathSet(_kmsPath);
-    }
 
     /// @notice Sets the KMS Root Server public key for signature verification
     /// @dev This public key is used to verify KMS signatures during proposal result submission
@@ -395,8 +378,9 @@ contract GovernanceEnclave is
     /// @param _imageId The image ID used in the KMS path
     /// @param _enclavePubKey The enclave public key to verify
     /// @param _kmsSig The KMS signature to verify
+    /// @param _proposalId The proposal ID used as the KMS path
     /// @return isValid True if the signature is valid, false otherwise
-    function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig)
+    function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig, bytes32 _proposalId)
         public
         view
         returns (bool)
@@ -405,7 +389,7 @@ contract GovernanceEnclave is
         // Check: https://github.com/marlinprotocol/oyster-monorepo/tree/master/kms/root-server#public-endpoints
         string memory uri = string(
             abi.encodePacked(
-                "/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", kmsPath
+                "/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", _toHexStringWithNoPrefix(_proposalId)
             )
         );
 

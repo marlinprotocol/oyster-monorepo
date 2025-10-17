@@ -26,7 +26,6 @@ contract HelperConfig is Script {
     
     struct GovernanceEnclaveInitParams {
         address admin;
-        string kmsPath;
         bytes kmsRootServerPubKey;
         bytes pcr0;
         bytes pcr1;
@@ -111,7 +110,7 @@ contract ArbitrumSepoliaConfig is HelperConfig {
     address constant GOVERNANCE_TOKEN_ETHEREUM_SEPOLIA = 0x6965eC94b4a2D064276b61B35fBdba22e4f99807;
 
     // KMS Configuration
-    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
+    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
     bytes constant PCR0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     bytes constant PCR1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
     bytes constant PCR2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
@@ -134,7 +133,6 @@ contract ArbitrumSepoliaConfig is HelperConfig {
     function getGovernanceEnclaveInitParams() public pure override returns (GovernanceEnclaveInitParams memory) {
         return GovernanceEnclaveInitParams({
             admin: ADMIN,
-            kmsPath: "governance",
             kmsRootServerPubKey: KMS_ROOT_SERVER_PUB_KEY,
             pcr0: PCR0,
             pcr1: PCR1,
@@ -214,7 +212,7 @@ contract EthereumSepoliaConfig is HelperConfig {
     address constant GOVERNANCE_TOKEN_ARBITRUM_SEPOLIA = 0xCe815C7b2E4000f63146fF988F891D6335d262AE;
 
     // KMS Configuration
-    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
+    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
     bytes constant PCR0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     bytes constant PCR1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
     bytes constant PCR2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
@@ -237,7 +235,6 @@ contract EthereumSepoliaConfig is HelperConfig {
     function getGovernanceEnclaveInitParams() public pure override returns (GovernanceEnclaveInitParams memory) {
         return GovernanceEnclaveInitParams({
             admin: ADMIN,
-            kmsPath: "governance",
             kmsRootServerPubKey: KMS_ROOT_SERVER_PUB_KEY,
             pcr0: PCR0,
             pcr1: PCR1,

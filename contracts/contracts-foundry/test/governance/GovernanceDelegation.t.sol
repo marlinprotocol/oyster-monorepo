@@ -383,6 +383,7 @@ contract GovernanceDelegationTest is Test {
         address firstDelegatee, 
         address secondDelegatee
     ) public {
+        vm.assume(delegator != address(0)); // delegator cannot be address(0)
         vm.assume(firstDelegatee != secondDelegatee); // Must be different to avoid revert
         vm.assume(firstDelegatee != address(0)); // delegatee cannot be address(0)
         vm.assume(secondDelegatee != address(0)); // delegatee cannot be address(0)
