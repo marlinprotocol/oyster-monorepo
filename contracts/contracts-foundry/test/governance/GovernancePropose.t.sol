@@ -2,7 +2,6 @@
 pragma solidity 0.8.29;
 
 import {Test} from "forge-std/Test.sol";
-import {DeployGovernance} from "../../script/governance/DeployGovernance.s.sol";
 import {IGovernanceTypes} from "../../src/governance/interfaces/IGovernanceTypes.sol";
 import {IGovernanceErrors} from "../../src/governance/interfaces/IGovernanceErrors.sol";
 import {Governance} from "../../src/governance/Governance.sol";
