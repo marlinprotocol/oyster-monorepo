@@ -178,8 +178,7 @@ else
   echo "[INFO] Mounting eCryptfs filesystem..."
   
   # Mount eCryptfs with custom key
-  mount -t ecryptfs \
-    "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
+  mount -t ecryptfs $ENCRYPTED_DIR $DECRYPTED_DIR -o key=passphrase:passphrase_passwd=test123,ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_passthrough=no,ecryptfs_enable_filename_crypto=no
   
   if [ $? -ne 0 ]; then
     echo "[ERROR] Failed to mount eCryptfs" >&2
