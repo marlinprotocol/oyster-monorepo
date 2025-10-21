@@ -82,7 +82,7 @@ in {
     env = "";
     copyToRoot = pkgs.buildEnv {
       name = "image-root";
-      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq pkgs.nfs-utils pkgs.inetutils pkgs.tcpdump];
+      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq pkgs.nfs-utils pkgs.inetutils pkgs.tcpdump pkgs.curl pkgs.gocryptfs];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
   };
