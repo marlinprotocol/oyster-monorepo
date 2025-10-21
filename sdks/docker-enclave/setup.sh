@@ -104,6 +104,8 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
+curl google.com
+
 # process init params into their constituent files
 /app/init-params-decoder
 
