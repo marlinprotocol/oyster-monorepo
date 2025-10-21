@@ -151,7 +151,6 @@ echo "Derived master key (hex): $key_hex"
 
 modprobe fuse
 
-# --- Initialize if first time ---
 if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
   
