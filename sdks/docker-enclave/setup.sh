@@ -149,7 +149,7 @@ fi
 
 echo "Derived master key (hex): $key_hex"
 
-sudo modprobe fuse
+modprobe fuse
 
 # --- Initialize if first time ---
 if [ ! -f "$CONF_FILE" ]; then
