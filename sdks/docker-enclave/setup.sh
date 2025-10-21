@@ -121,8 +121,8 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
 fi
 
-echo "Mounting remote nfs directory to /app/nfs/"
-mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+# echo "Mounting remote nfs directory to /app/nfs/"
+# mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 3
 
@@ -155,10 +155,6 @@ echo -n "$key_hex" | xxd -r -p > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 
 echo "[INFO] Key saved to $KEY_FILE"
-
-# Load required kernel modules
-modprobe ecryptfs
-modprobe nfs
 
 # Create mount points if they don't exist
 mkdir -p "$ENCRYPTED_DIR"
