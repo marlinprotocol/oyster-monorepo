@@ -134,7 +134,7 @@ SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 NFS_SERVER="3.111.219.88:/home/ubuntu/nfs_test"
 ENCRYPTED_DIR="/app/nfs-encrypted"
 DECRYPTED_DIR="/app/decrypted"
-KEY_FILE="/root/.ecryptfs-nfs.key"
+KEY_FILE="/app/.ecryptfs-nfs.key"
 
 echo "[INFO] Deriving master key from enclave..."
 key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
