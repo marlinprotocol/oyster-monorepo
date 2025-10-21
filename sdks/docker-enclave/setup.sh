@@ -104,14 +104,14 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
-# Fetch raw binary key from your endpoint
-key_bin=$(curl -s http://127.0.0.1:1100/derive/secp256k1?path=nfstest)
+# # Fetch raw binary key from your endpoint
+# key_bin=$(curl -s http://127.0.0.1:1100/derive/secp256k1?path=nfstest)
 
-# Convert binary to hex
-key_hex=$(echo -n "$key_bin" | xxd -p | tr -d '\n')
+# # Convert binary to hex
+# key_hex=$(echo -n "$key_bin" | xxd -p | tr -d '\n')
 
-# Print or store master key
-echo "Derived master key (hex): $key_hex"
+# # Print or store master key
+# echo "Derived master key (hex): $key_hex"
 
 # process init params into their constituent files
 /app/init-params-decoder
@@ -122,8 +122,55 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
 fi
 
 echo "Mounting remote nfs directory to /app/nfs/"
-mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs/
-cat /app/nfs/test_file.txt
+mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+
+sleep 3
+
+#!/bin/bash
+set -euo pipefail
+
+# --- Configuration ---
+SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
+ENCRYPTED_DIR="/app/nfs-encrypted"
+DECRYPTED_DIR="/app/decrypted"
+CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
+
+echo "[INFO] Deriving master key from enclave..."
+key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
+
+if [ -z "$key_hex" ]; then
+  echo "[ERROR] Failed to derive master key from enclave service" >&2
+  exit 1
+fi
+
+if [ ${#key_hex} -ne 64 ]; then
+  echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
+fi
+
+# --- Initialize if first time ---
+if [ ! -f "$CONF_FILE" ]; then
+  echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
+  
+  # Initialize with temporary password to create config
+  gocryptfs -init "$ENCRYPTED_DIR" --plaintextnames <<<"temp-pass"
+
+  # Replace password-encrypted config with your derived key
+  echo "[INFO] Re-encrypting config using derived master key..."
+  gocryptfs -masterkey="$key_hex" -passwd "$ENCRYPTED_DIR" <<<"temp-pass"
+else
+  echo "[INFO] Existing config found. Skipping initialization."
+fi
+
+# --- Mount filesystem ---
+if mountpoint -q "$DECRYPTED_DIR"; then
+  echo "[INFO] Already mounted: $DECRYPTED_DIR"
+else
+  echo "[INFO] Mounting gocryptfs filesystem..."
+  gocryptfs -masterkey="$key_hex" "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
+  echo "[INFO] Mount successful at $DECRYPTED_DIR"
+fi
+
+echo "gocryptfs mounting done"
 
 
 # Start the Docker daemon

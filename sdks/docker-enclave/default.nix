@@ -41,7 +41,8 @@
     mkdir -p $out/app
     mkdir -p $out/etc
     mkdir -p $out/app/docker-images
-    mkdir -p $out/app/nfs
+    mkdir -p $out/app/decrypted
+    mkdir -p $out/app/nfs-encrypted
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenX25519} $out/app/keygen-x25519
     cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
