@@ -126,8 +126,7 @@ fi
 
 sleep 3
 
-#!/bin/bash
-set -euo pipefail
+lsmod | grep ecryptfs
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
