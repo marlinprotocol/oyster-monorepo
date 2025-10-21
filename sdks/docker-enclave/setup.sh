@@ -156,10 +156,6 @@ chmod 600 "$KEY_FILE"
 
 echo "[INFO] Key saved to $KEY_FILE"
 
-# Create mount points if they don't exist
-mkdir -p "$ENCRYPTED_DIR"
-mkdir -p "$DECRYPTED_DIR"
-
 # --- Mount NFS filesystem (lower directory) ---
 if mountpoint -q "$ENCRYPTED_DIR"; then
   echo "[INFO] NFS already mounted: $ENCRYPTED_DIR"
