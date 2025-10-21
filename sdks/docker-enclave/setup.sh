@@ -179,14 +179,6 @@ else
   
   # Mount eCryptfs with custom key
   mount -t ecryptfs \
-    $KEY_FILE \
-    $KEY_FILE \
-    -o key=passphrase,\
-       ecryptfs_cipher=aes,\
-       ecryptfs_key_bytes=32,\
-       ecryptfs_passthrough=n,\
-       ecryptfs_enable_filename_crypto=y,\
-       no_sig_cache \
     "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
   
   if [ $? -ne 0 ]; then
