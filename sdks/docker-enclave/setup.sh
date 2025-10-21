@@ -174,7 +174,7 @@ df -h
 
 ls -l app/
 
-mount -t ecryptfs /app/nfs-encrypted /app/decrypted -o ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_passthrough=no,ecryptfs_enable_filename_crypto=no
+mount -vvv -t ecryptfs /app/nfs-encrypted /app/decrypted -o ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_passthrough=no,ecryptfs_enable_filename_crypto=no
 
 
 # --- Mount eCryptfs on top of NFS ---
