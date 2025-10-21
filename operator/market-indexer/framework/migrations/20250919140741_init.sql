@@ -26,6 +26,7 @@ CREATE TABLE job_events (
 CREATE TABLE indexer_state (
     id INT PRIMARY KEY,
     chain_id VARCHAR(66),
+    extra_decimals BIGINT,
     last_processed_block BIGINT NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now()
 );

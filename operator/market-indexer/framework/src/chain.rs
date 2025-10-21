@@ -18,6 +18,9 @@ pub trait ChainHandler {
     /// Fetch chain ID from the RPC
     fn fetch_chain_id(&self) -> impl Future<Output = Result<String>> + Send;
 
+    /// Fetch EXTRA_DECIMALS value from the Market contract
+    fn fetch_extra_decimals(&self) -> impl Future<Output = Result<i64>> + Send;
+
     /// Fetch latest block/checkpoint/slot for the chain
     fn fetch_latest_block(&self) -> impl Future<Output = Result<u64>> + Send;
 

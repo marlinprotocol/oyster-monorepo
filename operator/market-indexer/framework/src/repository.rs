@@ -9,6 +9,50 @@ use crate::schema::JobEventRecord;
 
 const MIGRATOR: Migrator = sqlx::migrate!("../framework/migrations");
 
+const UPDATE_INDEXER_STATE_FULL: &str = r#"
+    UPDATE indexer_state
+    SET chain_id = $1,
+        extra_decimals = $2,
+        last_processed_block = $3,
+        updated_at = now()
+    WHERE id = 1
+"#;
+const UPDATE_INDEXER_STATE_PARTIAL: &str = r#"
+    UPDATE indexer_state
+    SET chain_id = $1,
+        extra_decimals = $2,
+        updated_at = now()
+    WHERE id = 1
+"#;
+const FETCH_LAST_PROCESSED_BLOCK: &str = r#"
+    SELECT last_processed_block 
+    FROM indexer_state 
+    WHERE id = 1
+"#;
+const FETCH_ACTIVE_JOBS: &str = r#"
+    SELECT job_id
+    FROM job_events
+    WHERE event_name = 'Opened'
+    EXCEPT
+    SELECT job_id
+    FROM job_events
+    WHERE event_name = 'Closed'
+"#;
+const BATCH_INSERT_JOB_EVENTS: &str = r#"
+    INSERT INTO job_events(
+        job_id, event_name, event_data
+    )
+    SELECT * FROM UNNEST(
+        $1::VARCHAR[], $2::event_name[], $3::JSONB[]
+    )
+"#;
+const UPDATE_LAST_PROCESSED_BLOCK: &str = r#"
+    UPDATE indexer_state
+    SET last_processed_block = $1, 
+        updated_at = now()
+    WHERE id = 1
+"#;
+
 #[derive(Clone, Debug)]
 pub struct Repository {
     pub pool: PgPool,
@@ -33,70 +77,48 @@ impl Repository {
             .context("Failed to apply migrations to the database")
     }
 
-    pub async fn get_active_jobs(&self) -> Result<HashSet<String>> {
-        let active_jobs: Vec<String> = sqlx::query_scalar(
-            r#"
-            SELECT job_id
-            FROM job_events
-            WHERE event_name = 'Opened'
+    pub async fn update_indexer_state(
+        &self,
+        chain_id: String,
+        extra_decimals: i64,
+        last_processed_block: Option<i64>,
+    ) -> Result<u64> {
+        let query = match last_processed_block {
+            Some(block) => sqlx::query(UPDATE_INDEXER_STATE_FULL)
+                .bind(chain_id)
+                .bind(extra_decimals)
+                .bind(block),
+            None => sqlx::query(UPDATE_INDEXER_STATE_PARTIAL)
+                .bind(chain_id)
+                .bind(extra_decimals),
+        };
 
-            EXCEPT
+        let result = query
+            .execute(&self.pool)
+            .await
+            .context("Failed to execute update query in 'indexer state' table")?;
 
-            SELECT job_id
-            FROM job_events
-            WHERE event_name = 'Closed'
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to query the active job ids from 'job_events' table")?;
-
-        let mut active_jobs_set = HashSet::with_capacity(5000);
-        active_jobs_set.extend(active_jobs);
-
-        Ok(active_jobs_set)
+        Ok(result.rows_affected())
     }
 
     pub async fn get_last_processed_block(&self) -> Result<i64> {
-        let row = sqlx::query("SELECT last_processed_block FROM indexer_state WHERE id = 1")
+        let row = sqlx::query(FETCH_LAST_PROCESSED_BLOCK)
             .fetch_one(&self.pool)
             .await
             .context("Failed to query last processed block from 'indexer_state' table")?;
         Ok(row.get::<i64, _>("last_processed_block"))
     }
 
-    pub async fn update_state_atomic(&self, block: i64) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE indexer_state
-            SET last_processed_block = $1, updated_at = now()
-            WHERE id = 1
-            "#,
-        )
-        .bind(block)
-        .execute(&self.pool)
-        .await
-        .context(
-            "Failed to execute update query for last processed block in 'indexer state' table",
-        )?;
+    pub async fn get_active_jobs(&self) -> Result<HashSet<String>> {
+        let active_jobs: Vec<String> = sqlx::query_scalar(FETCH_ACTIVE_JOBS)
+            .fetch_all(&self.pool)
+            .await
+            .context("Failed to query the active job ids from 'job_events' table")?;
 
-        Ok(result.rows_affected())
-    }
+        let mut active_jobs_set = HashSet::with_capacity(5000);
+        active_jobs_set.extend(active_jobs);
 
-    pub async fn update_chain_id(&self, chain_id: String) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE indexer_state
-            SET chain_id = $1, updated_at = now()
-            WHERE id = 1
-            "#,
-        )
-        .bind(chain_id)
-        .execute(&self.pool)
-        .await
-        .context("Failed to execute update query for chain ID in 'indexer state' table")?;
-
-        Ok(result.rows_affected())
+        Ok(active_jobs_set)
     }
 
     pub async fn insert_batch(
@@ -113,9 +135,12 @@ impl Repository {
             .insert_events(&mut tx, records.clone())
             .await
             .context("Transaction failed for batch inserting records into 'job_events' table")?;
-        let updated = self.update_state(&mut tx, block).await.context(
-            "Transaction failed for updating last processed block in 'indexer state' table",
-        )?;
+        let updated = self
+            .update_last_processed_block(&mut tx, block)
+            .await
+            .context(
+                "Transaction failed for updating last processed block in 'indexer state' table",
+            )?;
         tx.commit()
             .await
             .context("Failed to commit the batch insert transaction")?;
@@ -141,38 +166,27 @@ impl Repository {
             event_datas.push(record.event_data);
         }
 
-        let result = sqlx::query(
-            r#"
-            INSERT INTO job_events (
-                job_id, event_name, event_data
-            )
-            SELECT * FROM UNNEST(
-                $1::VARCHAR[], $2::event_name[], $3::JSONB[]
-            )
-            "#,
-        )
-        .bind(&job_ids)
-        .bind(&event_names)
-        .bind(&event_datas)
-        .execute(&mut **tx)
-        .await
-        .context("Failed to execute batch insert query for job event records")?;
+        let result = sqlx::query(BATCH_INSERT_JOB_EVENTS)
+            .bind(&job_ids)
+            .bind(&event_names)
+            .bind(&event_datas)
+            .execute(&mut **tx)
+            .await
+            .context("Failed to execute batch insert query for job event records")?;
 
         Ok(result.rows_affected())
     }
 
-    async fn update_state(&self, tx: &mut Transaction<'_, Postgres>, block: i64) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE indexer_state
-            SET last_processed_block = $1, updated_at = now()
-            WHERE id = 1
-            "#,
-        )
-        .bind(block)
-        .execute(&mut **tx)
-        .await
-        .context("Failed to execute update query for last processed block")?;
+    async fn update_last_processed_block(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        block: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(UPDATE_LAST_PROCESSED_BLOCK)
+            .bind(block)
+            .execute(&mut **tx)
+            .await
+            .context("Failed to execute update query for last processed block")?;
 
         Ok(result.rows_affected())
     }

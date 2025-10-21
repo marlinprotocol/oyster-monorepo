@@ -70,26 +70,22 @@ pub async fn run(
         .context("Failed to apply pending migrations to the DB")?;
     info!("Migrations applied");
 
-    if let Some(start_block) = start_block {
-        let updated = repo
-            .update_state_atomic(start_block)
-            .await
-            .context("Failed to update start block in the DB")?;
-
-        debug!("Start block updated: {}", updated == 1);
-    }
-
     let chain_id = rpc_client
         .fetch_chain_id()
         .await
         .context("RPC chain ID fetch failed")?;
 
-    let updated = repo
-        .update_chain_id(chain_id)
+    let extra_decimals = rpc_client
+        .fetch_extra_decimals()
         .await
-        .context("Failed to update chain ID in the DB")?;
+        .context("Market EXTRA_DECIMALS fetch failed")?;
 
-    debug!("Chain ID updated: {}", updated == 1);
+    let updated = repo
+        .update_indexer_state(chain_id, extra_decimals, start_block)
+        .await
+        .context("Failed to update indexer state in the DB")?;
+
+    info!("Indexer state updated: {}", updated == 1);
 
     if range_size == 0 {
         return Err(anyhow!("Range size must not be zero"));
