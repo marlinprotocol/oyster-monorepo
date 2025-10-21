@@ -131,9 +131,10 @@ set -euo pipefail
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
+NFS_SERVER="3.111.219.88:/home/ubuntu/nfs_test"
 ENCRYPTED_DIR="/app/nfs-encrypted"
 DECRYPTED_DIR="/app/decrypted"
-CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
+KEY_FILE="/root/.ecryptfs-nfs.key"
 
 echo "[INFO] Deriving master key from enclave..."
 key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
@@ -149,33 +150,63 @@ fi
 
 echo "Derived master key (hex): $key_hex"
 
-modprobe fuse
+# Convert hex key to binary and save to file
+echo -n "$key_hex" | xxd -r -p > "$KEY_FILE"
+chmod 600 "$KEY_FILE"
 
-if [ ! -f "$CONF_FILE" ]; then
-  echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
+echo "[INFO] Key saved to $KEY_FILE"
+
+# Load required kernel modules
+modprobe ecryptfs
+modprobe nfs
+
+# Create mount points if they don't exist
+mkdir -p "$ENCRYPTED_DIR"
+mkdir -p "$DECRYPTED_DIR"
+
+# --- Mount NFS filesystem (lower directory) ---
+if mountpoint -q "$ENCRYPTED_DIR"; then
+  echo "[INFO] NFS already mounted: $ENCRYPTED_DIR"
+else
+  echo "[INFO] Mounting NFS filesystem..."
+  mount -t nfs4 -o nolock,noresvport,vers=4 "$NFS_SERVER" "$ENCRYPTED_DIR"
   
-  # Initialize with temporary password to create config
-  echo "temp-pass" | gocryptfs -init "$ENCRYPTED_DIR" --plaintextnames
-
-  # Replace password-encrypted config with your derived key
-  echo "[INFO] Re-encrypting config using derived master key..."
-  echo "temp-pass" | gocryptfs -masterkey="$key_hex" -passwd "$ENCRYPTED_DIR"
-else
-  echo "[INFO] Existing config found. Skipping initialization."
+  if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to mount NFS" >&2
+    exit 1
+  fi
+  
+  echo "[INFO] NFS mount successful at $ENCRYPTED_DIR"
 fi
 
-
-# --- Mount filesystem ---
+# --- Mount eCryptfs on top of NFS ---
 if mountpoint -q "$DECRYPTED_DIR"; then
-  echo "[INFO] Already mounted: $DECRYPTED_DIR"
+  echo "[INFO] eCryptfs already mounted: $DECRYPTED_DIR"
 else
-  echo "[INFO] Mounting gocryptfs filesystem..."
-  gocryptfs -masterkey="$key_hex" "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
-  echo "[INFO] Mount successful at $DECRYPTED_DIR"
+  echo "[INFO] Mounting eCryptfs filesystem..."
+  
+  # Mount eCryptfs with custom key
+  mount -t ecryptfs \
+    -o key=passphrase:passphrase_passwd_file="$KEY_FILE",\
+       ecryptfs_cipher=aes,\
+       ecryptfs_key_bytes=32,\
+       ecryptfs_passthrough=n,\
+       ecryptfs_enable_filename_crypto=y,\
+       no_sig_cache \
+    "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
+  
+  if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to mount eCryptfs" >&2
+    umount "$ENCRYPTED_DIR" 2>/dev/null
+    exit 1
+  fi
+  
+  echo "[INFO] eCryptfs mount successful at $DECRYPTED_DIR"
 fi
 
-echo "gocryptfs mounting done"
-
+echo "[INFO] eCryptfs mounting done"
+echo "[INFO] Encrypted data stored in: $ENCRYPTED_DIR (NFS)"
+echo "[INFO] Decrypted data accessible at: $DECRYPTED_DIR"
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
