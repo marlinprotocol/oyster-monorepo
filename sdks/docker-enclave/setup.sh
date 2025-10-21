@@ -104,7 +104,14 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
-curl http://127.0.0.1:1100/derive/secp256k1?path=nfstest
+# Fetch raw binary key from your endpoint
+key_bin=$(curl -s http://127.0.0.1:1100/derive/secp256k1?path=nfstest)
+
+# Convert binary to hex
+key_hex=$(echo -n "$key_bin" | xxd -p | tr -d '\n')
+
+# Print or store master key
+echo "Derived master key (hex): $key_hex"
 
 # process init params into their constituent files
 /app/init-params-decoder
