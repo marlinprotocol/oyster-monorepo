@@ -170,6 +170,8 @@ else
   echo "[INFO] NFS mount successful at $ENCRYPTED_DIR"
 fi
 
+df -h
+
 # --- Mount eCryptfs on top of NFS ---
 if mountpoint -q "$DECRYPTED_DIR"; then
   echo "[INFO] eCryptfs already mounted: $DECRYPTED_DIR"
