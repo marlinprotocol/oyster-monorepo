@@ -126,8 +126,6 @@ fi
 
 sleep 3
 
-lsmod | grep ecryptfs
-
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 NFS_SERVER="3.111.219.88:/home/ubuntu/nfs_test"
