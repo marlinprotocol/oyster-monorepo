@@ -104,7 +104,7 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
-curl http://127.0.0.1:1101/derive/secp256k1?path=nfstest
+curl http://127.0.0.1:1100/derive/secp256k1?path=nfstest
 
 # process init params into their constituent files
 /app/init-params-decoder
