@@ -147,6 +147,8 @@ if [ ${#key_hex} -ne 64 ]; then
   echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
 fi
 
+echo "Derived master key (hex): $key_hex"
+
 # --- Initialize if first time ---
 if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
