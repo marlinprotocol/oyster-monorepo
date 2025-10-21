@@ -154,14 +154,15 @@ if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
   
   # Initialize with temporary password to create config
-  gocryptfs -init "$ENCRYPTED_DIR" --plaintextnames <<<"temp-pass"
+  echo "temp-pass" | gocryptfs -init "$ENCRYPTED_DIR" --plaintextnames
 
   # Replace password-encrypted config with your derived key
   echo "[INFO] Re-encrypting config using derived master key..."
-  gocryptfs -masterkey="$key_hex" -passwd "$ENCRYPTED_DIR" <<<"temp-pass"
+  echo "temp-pass" | gocryptfs -masterkey="$key_hex" -passwd "$ENCRYPTED_DIR"
 else
   echo "[INFO] Existing config found. Skipping initialization."
 fi
+
 
 # --- Mount filesystem ---
 if mountpoint -q "$DECRYPTED_DIR"; then
