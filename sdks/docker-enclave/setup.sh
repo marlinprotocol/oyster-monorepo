@@ -174,7 +174,7 @@ df -h
 
 ls -l app/
 
-mount -t ecryptfs "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -o key=passphrase:passphrase_passwd=test123
+mount -t ecryptfs "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -o key=passphrase:passphrase_passwd="test123"
 
 
 # --- Mount eCryptfs on top of NFS ---
