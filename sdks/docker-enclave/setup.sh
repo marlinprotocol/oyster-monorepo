@@ -172,6 +172,8 @@ fi
 
 df -h
 
+ls -l app/
+
 # --- Mount eCryptfs on top of NFS ---
 if mountpoint -q "$DECRYPTED_DIR"; then
   echo "[INFO] eCryptfs already mounted: $DECRYPTED_DIR"
