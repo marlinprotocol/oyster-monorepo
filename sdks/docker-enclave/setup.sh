@@ -149,8 +149,6 @@ fi
 
 echo "Derived master key (hex): $key_hex"
 
-ls -l /dev/fuse
-
 modprobe fuse
 
 # --- Initialize if first time ---
