@@ -8,8 +8,8 @@ use indexer_framework::SaturatingConvert;
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::{self, JobEvent};
 use serde::Deserialize;
+use sui_rpc::client::AuthInterceptor;
 use sui_rpc::client::v2::Client;
-use sui_rpc::client::{AuthInterceptor, ResponseExt};
 use sui_rpc::field::FieldMask;
 use sui_rpc::proto::sui::rpc::v2::{
     Checkpoint, Command, GetCheckpointRequest, GetServiceInfoRequest, MoveCall,
@@ -250,11 +250,11 @@ impl ChainHandler for SuiProvider {
         )
         .await
         .context("Request timed out for fetching chain ID")?
-        .context("Request failed for fetching chain ID")?;
+        .context("Request failed for fetching chain ID")?
+        .into_inner();
 
         service_info
-            .chain_id()
-            .map(|dig| dig.to_base58())
+            .chain_id
             .ok_or(anyhow!("RPC returned empty chain ID"))
     }
 

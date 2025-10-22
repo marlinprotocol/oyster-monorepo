@@ -80,11 +80,6 @@ pub async fn run(
     .await
     .context("Missing last processed block (possible DB corruption)")?;
 
-    info!(
-        last_processed_block_id,
-        "Resuming from last processed block"
-    );
-
     if let Some(block) = start_block {
         if block <= last_processed_block_id {
             warn!(
@@ -93,9 +88,14 @@ pub async fn run(
             );
             start_block = None;
         }else {
-            last_processed_block_id = block;
+            last_processed_block_id = block - 1;
         }
     }
+
+    info!(
+        last_processed_block_id,
+        "Resuming from last processed block"
+    );
 
     let chain_id = rpc_client
         .fetch_chain_id()
