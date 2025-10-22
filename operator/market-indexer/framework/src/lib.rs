@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use tokio::time::sleep;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, warn};
 
 use chain::{ChainHandler, transform_block_logs_into_records};
 use repository::Repository;
@@ -57,7 +57,7 @@ pub async fn run(
     db_url: String,
     rpc_client: impl ChainHandler,
     provider: String,
-    start_block: Option<i64>,
+    mut start_block: Option<i64>,
     range_size: u64,
 ) -> Result<()> {
     let repo = Repository::new(db_url)
@@ -70,27 +70,6 @@ pub async fn run(
         .context("Failed to apply pending migrations to the DB")?;
     info!("Migrations applied");
 
-    let chain_id = rpc_client
-        .fetch_chain_id()
-        .await
-        .context("RPC chain ID fetch failed")?;
-
-    let extra_decimals = rpc_client
-        .fetch_extra_decimals()
-        .await
-        .context("Market EXTRA_DECIMALS fetch failed")?;
-
-    let updated = repo
-        .update_indexer_state(chain_id, extra_decimals, start_block)
-        .await
-        .context("Failed to update indexer state in the DB")?;
-
-    info!("Indexer state updated: {}", updated == 1);
-
-    if range_size == 0 {
-        return Err(anyhow!("Range size must not be zero"));
-    }
-
     let retry_strategy = ExponentialBackoff::from_millis(500)
         .max_delay(Duration::from_secs(10))
         .map(jitter);
@@ -101,10 +80,45 @@ pub async fn run(
     .await
     .context("Missing last processed block (possible DB corruption)")?;
 
+    if let Some(block) = start_block {
+        if block <= last_processed_block_id {
+            warn!(
+                "Provided start block {} is behind the last processed block {}, starting from the later!",
+                block, last_processed_block_id
+            );
+            start_block = None;
+        }else {
+            last_processed_block_id = block - 1;
+        }
+    }
+
     info!(
         last_processed_block_id,
         "Resuming from last processed block"
     );
+
+    let chain_id = rpc_client
+        .fetch_chain_id()
+        .await
+        .context("RPC chain ID fetch failed")?;
+
+    let extra_decimals = rpc_client
+        .fetch_extra_decimals()
+        .await
+        .context("Market EXTRA_DECIMALS fetch failed")?;
+
+    let updated = Retry::spawn(retry_strategy.clone(), || async {
+        repo.update_indexer_state(chain_id.clone(), extra_decimals, start_block)
+            .await
+    })
+    .await
+    .context("Failed to update indexer state in the DB")?;
+
+    info!("Indexer state updated: {}", updated == 1);
+
+    if range_size == 0 {
+        return Err(anyhow!("Range size must not be zero"));
+    }
 
     let mut active_job_ids = Retry::spawn(retry_strategy.clone(), || async {
         repo.get_active_jobs().await

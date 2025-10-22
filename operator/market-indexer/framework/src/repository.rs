@@ -81,13 +81,13 @@ impl Repository {
         &self,
         chain_id: String,
         extra_decimals: i64,
-        last_processed_block: Option<i64>,
+        start_block: Option<i64>,
     ) -> Result<u64> {
-        let query = match last_processed_block {
+        let query = match start_block {
             Some(block) => sqlx::query(UPDATE_INDEXER_STATE_FULL)
                 .bind(chain_id)
                 .bind(extra_decimals)
-                .bind(block),
+                .bind(block - 1),
             None => sqlx::query(UPDATE_INDEXER_STATE_PARTIAL)
                 .bind(chain_id)
                 .bind(extra_decimals),

@@ -8,12 +8,15 @@ use indexer_framework::SaturatingConvert;
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::{self, JobEvent};
 use serde::Deserialize;
-use sui_rpc_api::Client;
-use sui_rpc_api::client::{AuthInterceptor, ResponseExt};
-use sui_rpc_api::proto::sui::rpc::v2beta2::GetServiceInfoRequest;
+use sui_rpc::client::AuthInterceptor;
+use sui_rpc::client::v2::Client;
+use sui_rpc::field::FieldMask;
+use sui_rpc::proto::sui::rpc::v2::{
+    Checkpoint, Command, GetCheckpointRequest, GetServiceInfoRequest, MoveCall,
+    ProgrammableTransaction, SimulateTransactionRequest, Transaction, TransactionKind,
+};
+use sui_sdk_types::{Address, CheckpointData};
 use sui_storage::blob::Blob;
-use sui_types::base_types::SuiAddress;
-use sui_types::full_checkpoint_content::CheckpointData;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -23,12 +26,15 @@ use tokio_retry::strategy::{ExponentialBackoff, jitter};
 const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
+const MODULE_NAME: &str = "market";
+const EXTRA_DECIMALS_FUNCTION_NAME: &str = "extra_decimals";
+
 /// Sui oyster market program events
 #[derive(Debug, Deserialize)]
 struct JobOpened {
     job_id: u128,
-    owner: SuiAddress,
-    provider: SuiAddress,
+    owner: Address,
+    provider: Address,
     metadata: String,
     rate: u64,
     balance: u64,
@@ -43,7 +49,7 @@ struct JobClosed {
 #[derive(Debug, Deserialize)]
 struct JobDeposited {
     job_id: u128,
-    from: SuiAddress,
+    from: Address,
     amount: u64,
 }
 
@@ -63,7 +69,7 @@ struct JobMetadataUpdated {
 #[derive(Debug, Deserialize)]
 struct JobWithdrew {
     job_id: u128,
-    to: SuiAddress,
+    to: Address,
     amount: u64,
 }
 
@@ -229,28 +235,83 @@ impl ChainHandler for SuiProvider {
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
                 .map(jitter),
-            || async {
-                timeout(
-                    DEFAULT_REQUEST_TIMEOUT,
-                    provider
-                        .raw_client()
-                        .get_service_info(GetServiceInfoRequest::default()),
-                )
-                .await
+            move || {
+                let mut provider = provider.clone();
+                async move {
+                    timeout(
+                        DEFAULT_REQUEST_TIMEOUT,
+                        provider
+                            .ledger_client()
+                            .get_service_info(GetServiceInfoRequest::default()),
+                    )
+                    .await
+                }
             },
         )
         .await
         .context("Request timed out for fetching chain ID")?
-        .context("Request failed for fetching chain ID")?;
+        .context("Request failed for fetching chain ID")?
+        .into_inner();
 
         service_info
-            .chain_id()
-            .map(|dig| dig.to_base58())
+            .chain_id
             .ok_or(anyhow!("RPC returned empty chain ID"))
     }
 
     async fn fetch_extra_decimals(&self) -> Result<i64> {
-        Ok(12)
+        let provider = self
+            .get_client()
+            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let move_call = MoveCall::const_default()
+            .with_package(self.package_id.clone())
+            .with_module(MODULE_NAME.to_string())
+            .with_function(EXTRA_DECIMALS_FUNCTION_NAME.to_string());
+        let transaction_kind = TransactionKind::const_default().with_programmable_transaction(
+            ProgrammableTransaction::const_default()
+                .with_commands(vec![Command::default().with_move_call(move_call)]),
+        );
+
+        let response = Retry::spawn(
+            ExponentialBackoff::from_millis(500)
+                .max_delay(Duration::from_secs(10))
+                .map(jitter),
+            move || {
+                let mut provider = provider.clone();
+                let request = SimulateTransactionRequest::default().with_transaction(
+                    Transaction::default()
+                        .with_kind(transaction_kind.clone())
+                        .with_sender(Address::ZERO),
+                );
+                async move {
+                    timeout(
+                        DEFAULT_REQUEST_TIMEOUT,
+                        provider.execution_client().simulate_transaction(request),
+                    )
+                    .await
+                }
+            },
+        )
+        .await
+        .context("Request timed out for fetching EXTRA_DECIMALS")?
+        .context("Request failed for fetching EXTRA_DECIMALS")?
+        .into_inner();
+
+        if response.command_outputs.is_empty() {
+            return Err(anyhow!(
+                "EXTRA_DECIMALS value not found in the RPC response"
+            ));
+        }
+
+        let return_value = &response.command_outputs[0].return_values;
+
+        if return_value.is_empty() {
+            return Err(anyhow!(
+                "EXTRA_DECIMALS value not found in the RPC response"
+            ));
+        }
+
+        Ok(bcs::from_bytes::<u8>(return_value[0].value().value())
+            .context("Failed to parse EXTRA_DECIMALS value")? as i64)
     }
 
     async fn fetch_latest_block(&self) -> Result<u64> {
@@ -261,13 +322,27 @@ impl ChainHandler for SuiProvider {
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
                 .map(jitter),
-            || async { timeout(DEFAULT_REQUEST_TIMEOUT, provider.get_latest_checkpoint()).await },
+            move || {
+                let mut provider = provider.clone();
+                async move {
+                    timeout(
+                        DEFAULT_REQUEST_TIMEOUT,
+                        provider
+                            .ledger_client()
+                            .get_checkpoint(GetCheckpointRequest::latest()),
+                    )
+                    .await
+                }
+            },
         )
         .await
         .context("Request timed out for fetching latest checkpoint")?
         .context("Request failed for fetching latest checkpoint")?;
 
-        Ok(current_checkpoint.sequence_number)
+        Ok(current_checkpoint
+            .into_inner()
+            .checkpoint()
+            .sequence_number())
     }
 
     async fn fetch_logs_and_group_by_block(
@@ -275,10 +350,9 @@ impl ChainHandler for SuiProvider {
         start_block: u64,
         end_block: u64,
     ) -> Result<BTreeMap<u64, Vec<Self::RawLog>>> {
-        let provider =
-            Arc::new(self.get_client().context(
-                "Failed to initialize gRPC client from the provided url and credentials",
-            )?);
+        let provider = self
+            .get_client()
+            .context("Failed to initialize gRPC client from the provided url and credentials")?;
         let semaphore = Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY));
         let mut set: JoinSet<Result<(u64, Vec<SuiLog>)>> = JoinSet::new();
 
@@ -296,14 +370,27 @@ impl ChainHandler for SuiProvider {
                         .max_delay(Duration::from_secs(10))
                         .take(3)
                         .map(jitter),
-                    || async {
-                        timeout(DEFAULT_REQUEST_TIMEOUT, client.get_full_checkpoint(seq_num)).await
-                    },
+                        move || {
+                            let mut client = client.clone();
+                    async move {
+                        timeout(DEFAULT_REQUEST_TIMEOUT, client
+                            .ledger_client()
+                            .get_checkpoint(GetCheckpointRequest::by_sequence_number(seq_num)
+                                .with_read_mask(FieldMask {
+                                    paths: vec!["transactions".into()]
+                                })
+                            )
+                        ).await
+                    }
+                },
                 )
                 .await
                 {
-                    Ok(checkpoint) => Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint.context(format!("gRPC request failed for fetching checkpoint data at sequence {}", seq_num))?))),
-                    Err(_) => {
+                    Ok(Ok(checkpoint)) => Ok((seq_num, checkpoint_to_sui_logs(&package_id, checkpoint
+                        .into_inner()
+                        .checkpoint()
+                        .clone()))),
+                    _ => {
                         let checkpoint = Retry::spawn(
                             ExponentialBackoff::from_millis(500)
                                 .max_delay(Duration::from_secs(10))
@@ -313,7 +400,7 @@ impl ChainHandler for SuiProvider {
                                     .timeout(DEFAULT_REQUEST_TIMEOUT)
                                     .build().context("Failed to initialize reqwest client for remote call")?;
                                 let checkpoint_url =
-                                    format!("{}/{}.chk", remote_checkpoint_url, seq_num);
+                                    format!("{}/{}.chk", remote_checkpoint_url.trim_end_matches('/'), seq_num);
 
                                 let response = remote_client.get(&checkpoint_url).send().await.context(format!("Failed to send checkpoint data request for sequence {} using remote url", seq_num))?;
                                 if response.status().is_success() {
@@ -347,6 +434,29 @@ impl ChainHandler for SuiProvider {
     }
 }
 
+fn checkpoint_to_sui_logs(package_id: &str, checkpoint: Checkpoint) -> Vec<SuiLog> {
+    let mut logs = Vec::new();
+
+    for tx in checkpoint.transactions {
+        let Some(events) = tx.events else {
+            continue;
+        };
+
+        for event in events.events {
+            if !event.package_id().eq_ignore_ascii_case(package_id) {
+                continue;
+            }
+
+            logs.push(SuiLog {
+                type_: event.event_type().to_owned(),
+                contents: event.contents().value().to_owned(),
+            });
+        }
+    }
+
+    logs
+}
+
 fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> Vec<SuiLog> {
     let mut logs = Vec::new();
 
@@ -355,8 +465,8 @@ fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> 
             continue;
         };
 
-        for event in events.data {
-            if !event.package_id.to_string().eq_ignore_ascii_case(package_id) {
+        for event in events.0 {
+            if !event.package_id.to_hex().eq_ignore_ascii_case(package_id) {
                 continue;
             }
 
