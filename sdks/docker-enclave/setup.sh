@@ -164,6 +164,7 @@ else
   echo "[INFO] Existing config found. Skipping initialization."
 fi
 
+echo "[INFO] gocryptfs init done"
 
 # --- Mount filesystem ---
 if mountpoint -q "$DECRYPTED_DIR"; then
