@@ -127,7 +127,8 @@ mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_tes
 sleep 5
 
 ls /app/nfs-encrypted
-cat /app/nfs-encrypted/test.txt
+
+echo "Hello, world" > /app/nfs-encrypted/file.txt
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
