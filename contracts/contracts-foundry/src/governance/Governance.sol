@@ -552,8 +552,8 @@ contract Governance is
             abi.encode(
                 address(this),
                 proposalTimeInfo.proposedTimestamp,
-                proposals[proposalId].networkHash,
                 proposals[proposalId].contractConfigHash,
+                proposals[proposalId].networkHash,
                 proposals[proposalId].proposalVoteInfo.voteHash
             )
         );
