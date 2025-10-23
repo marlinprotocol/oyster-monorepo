@@ -20,7 +20,8 @@ contract MockEnclave is Test {
                 "/derive/secp256k1/public?image_id=",
                 _toHexStringWithNoPrefix(_imageId),
                 "&path=",
-                _toHexStringWithNoPrefix(_proposalId)
+                _toHexStringWithNoPrefix(_proposalId),
+                "_result"
             )
         );
         bytes memory message = abi.encodePacked(bytes(uri), ENCLAVE_PUB_KEY);
@@ -36,7 +37,7 @@ contract MockEnclave is Test {
     function getEnclavePrivKey() public pure returns (bytes memory) {
         return ENCLAVE_PRIV_KEY;
     }
-    
+
     function _toHexStringWithNoPrefix(bytes32 data) internal pure returns (string memory) {
         bytes memory alphabet = "0123456789abcdef";
         bytes memory str = new bytes(64);
@@ -66,8 +67,9 @@ contract MockEnclave is Test {
         bytes32 _voteHash
     ) public pure returns (IGovernanceTypes.SubmitResultInputParams memory) {
         bytes memory resultData = _formResultData(_proposalId, _votePercentage);
-        bytes memory enclaveSig =
-            _signResultData(resultData, _contractAddress, _proposedTimestamp, _networkHash, _contractConfigHash, _voteHash);
+        bytes memory enclaveSig = _signResultData(
+            resultData, _contractAddress, _proposedTimestamp, _networkHash, _contractConfigHash, _voteHash
+        );
 
         return IGovernanceTypes.SubmitResultInputParams({
             kmsSig: getKmsSig(_imageId, _proposalId),
@@ -107,7 +109,8 @@ contract MockEnclave is Test {
         bytes32 _voteHash
     ) internal pure returns (bytes memory) {
         // Enclave will sign on this digest
-        bytes32 contractDataHash = sha256(abi.encode(_contractAddress, _proposedTimestamp, _networkHash, _contractConfigHash, _voteHash));
+        bytes32 contractDataHash =
+            sha256(abi.encode(_contractAddress, _proposedTimestamp, _contractConfigHash, _networkHash, _voteHash));
 
         // Decode resultData to get proposalId and voteDecisionResult
         (bytes32 proposalId, IGovernanceTypes.VoteDecisionResult memory voteDecisionResult) =

@@ -582,7 +582,8 @@ contract GovernanceEnclaveTest is Test {
                 "/derive/secp256k1/public?image_id=",
                 _toHexStringWithNoPrefix(imageId),
                 "&path=",
-                _toHexStringWithNoPrefix(proposalId)
+                _toHexStringWithNoPrefix(proposalId),
+                "_result"
             )
         );
         bytes memory message = abi.encodePacked(bytes(uri), enclavePubKey);

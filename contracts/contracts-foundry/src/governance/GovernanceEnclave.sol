@@ -389,7 +389,11 @@ contract GovernanceEnclave is
         // Check: https://github.com/marlinprotocol/oyster-monorepo/tree/master/kms/root-server#public-endpoints
         string memory uri = string(
             abi.encodePacked(
-                "/derive/secp256k1/public?image_id=", _toHexStringWithNoPrefix(_imageId), "&path=", _toHexStringWithNoPrefix(_proposalId)
+                "/derive/secp256k1/public?image_id=",
+                _toHexStringWithNoPrefix(_imageId),
+                "&path=",
+                _toHexStringWithNoPrefix(_proposalId),
+                "_result"
             )
         );
 
@@ -461,7 +465,11 @@ contract GovernanceEnclave is
     /// @return pcr1 The PCR1 value
     /// @return pcr2 The PCR2 value
     /// @return imageId The generated image ID from the PCR values
-    function getPCRConfig() external view returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId) {
+    function getPCRConfig()
+        external
+        view
+        returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId)
+    {
         return (pcrConfig.pcr.pcr0, pcrConfig.pcr.pcr1, pcrConfig.pcr.pcr2, pcrConfig.imageId);
     }
 
