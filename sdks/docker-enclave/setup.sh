@@ -124,10 +124,10 @@ fi
 echo "Mounting remote nfs directory to /app/nfs/"
 mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
-sleep 3
+sleep 5
 
-#!/bin/bash
-set -euo pipefail
+ls /app/nfs-encrypted
+cat /app/nfs-encrypted/test.txt
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
