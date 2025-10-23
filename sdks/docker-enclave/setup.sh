@@ -134,6 +134,7 @@ SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 ENCRYPTED_DIR="/app/nfs-encrypted"
 DECRYPTED_DIR="/app/decrypted"
 CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
+passfile="/app/pass.txt"
 
 echo "[INFO] Deriving master key from enclave..."
 key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
@@ -149,17 +150,16 @@ fi
 
 echo "Derived master key (hex): $key_hex"
 
-modprobe fuse
+# write without a trailing newline
+printf '%s' "$key_hex" > $passfile
+
 
 if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
   
   # Initialize with temporary password to create config
-  echo "temp-pass" | gocryptfs -init "$ENCRYPTED_DIR" --plaintextnames
+  gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
 
-  # Replace password-encrypted config with your derived key
-  echo "[INFO] Re-encrypting config using derived master key..."
-  echo "temp-pass" | gocryptfs -masterkey="$key_hex" -passwd "$ENCRYPTED_DIR"
 else
   echo "[INFO] Existing config found. Skipping initialization."
 fi
@@ -170,7 +170,7 @@ if mountpoint -q "$DECRYPTED_DIR"; then
   echo "[INFO] Already mounted: $DECRYPTED_DIR"
 else
   echo "[INFO] Mounting gocryptfs filesystem..."
-  gocryptfs -masterkey="$key_hex" "$ENCRYPTED_DIR" "$DECRYPTED_DIR"
+  gocryptfs "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -passfile $passfile
   echo "[INFO] Mount successful at $DECRYPTED_DIR"
 fi
 
