@@ -128,9 +128,6 @@ sleep 5
 
 id
 
-ls /app/nfs-encrypted
-
-echo "Hello, world" > /app/nfs-encrypted/file.txt
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
