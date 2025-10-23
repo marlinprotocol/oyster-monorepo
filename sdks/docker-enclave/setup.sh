@@ -126,6 +126,8 @@ mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_tes
 
 sleep 5
 
+id
+
 ls /app/nfs-encrypted
 
 echo "Hello, world" > /app/nfs-encrypted/file.txt
