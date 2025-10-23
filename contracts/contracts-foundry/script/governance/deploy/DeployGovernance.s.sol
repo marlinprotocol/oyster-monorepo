@@ -44,19 +44,19 @@ contract DeployGovernance is Script {
         vm.startBroadcast();
 
         // 1. Deploy GovernanceEnclave
-        governanceEnclaveProxy = deployGovernanceEnclave(helperConfig);
+        governanceEnclaveProxy = _deployGovernanceEnclave(helperConfig);
         console.log("");
 
         // 2. Deploy GovernanceDelegation
-        governanceDelegationProxy = deployGovernanceDelegation(helperConfig);
+        governanceDelegationProxy = _deployGovernanceDelegation(helperConfig);
         console.log("");
 
         // 3. Deploy Governance
-        governanceProxy = deployGovernance(helperConfig, governanceEnclaveProxy);
+        governanceProxy = _deployGovernance(helperConfig, governanceEnclaveProxy);
         console.log("");
 
         // 4. Post-deployment configuration
-        configureContracts(helperConfig);
+        _configureContracts(helperConfig);
 
         vm.stopBroadcast();
 
@@ -67,10 +67,10 @@ contract DeployGovernance is Script {
         console.log("Governance Proxy:", governanceProxy);
 
         // 5. Save deployed addresses
-        saveDeployedAddresses(helperConfig);
+        _saveDeployedAddresses(helperConfig);
     }
 
-    function saveDeployedAddresses(HelperConfig helperConfig) internal {
+    function _saveDeployedAddresses(HelperConfig helperConfig) internal {
         string memory chainIdStr = vm.toString(block.chainid);
         string memory root = vm.projectRoot();
         string memory dirPath = string.concat(root, "/script/governance/addresses/", chainIdStr);
@@ -117,7 +117,7 @@ contract DeployGovernance is Script {
         console.log("Deployed addresses saved to:", filePath);
     }
 
-    function deployGovernanceEnclave(HelperConfig helperConfig) internal returns (address) {
+    function _deployGovernanceEnclave(HelperConfig helperConfig) internal returns (address) {
         console.log("--- Deploying GovernanceEnclave ---");
 
         HelperConfig.GovernanceEnclaveInitParams memory params = helperConfig.getGovernanceEnclaveInitParams();
@@ -142,21 +142,12 @@ contract DeployGovernance is Script {
         );
         console.log("GovernanceEnclave Initialized");
 
-        // Set network configs
-        HelperConfig.TokenNetworkConfig[] memory networkConfigs = helperConfig.getNetworkConfigs();
-        for (uint256 i = 0; i < networkConfigs.length; i++) {
-            GovernanceEnclave(address(proxy)).setNetworkConfig(
-                networkConfigs[i].chainId,
-                networkConfigs[i].tokenAddress,
-                networkConfigs[i].rpcUrls
-            );
-            console.log("Network config set for chainId:", networkConfigs[i].chainId);
-        }
+        // Note: Network configs will be set in _configureContracts
 
         return address(proxy);
     }
 
-    function deployGovernanceDelegation(HelperConfig helperConfig) internal returns (address) {
+    function _deployGovernanceDelegation(HelperConfig helperConfig) internal returns (address) {
         console.log("--- Deploying GovernanceDelegation ---");
 
         HelperConfig.GovernanceDelegationInitParams memory params = helperConfig.getGovernanceDelegationInitParams();
@@ -177,7 +168,7 @@ contract DeployGovernance is Script {
         return address(proxy);
     }
 
-    function deployGovernance(HelperConfig helperConfig, address _governanceEnclave) internal returns (address) {
+    function _deployGovernance(HelperConfig helperConfig, address _governanceEnclave) internal returns (address) {
         console.log("--- Deploying Governance ---");
 
         HelperConfig.GovernanceInitParams memory params = helperConfig.getGovernanceInitParams();
@@ -196,7 +187,7 @@ contract DeployGovernance is Script {
             params.admin,
             params.configSetter,
             params.treasury,
-            _governanceEnclave, // Use deployed address
+            _governanceEnclave, // Use deployed GovernanceEnclave address
             params.minQuorumThreshold,
             params.proposalPassVetoThreshold,
             params.vetoSlashRate,
@@ -209,8 +200,19 @@ contract DeployGovernance is Script {
         return address(proxy);
     }
 
-    function configureContracts(HelperConfig helperConfig) internal {
+    function _configureContracts(HelperConfig helperConfig) internal {
         console.log("--- Post-Deployment Configuration ---");
+
+        // Set network configs on GovernanceEnclave
+        HelperConfig.TokenNetworkConfig[] memory networkConfigs = helperConfig.getNetworkConfigs();
+        for (uint256 i = 0; i < networkConfigs.length; i++) {
+            GovernanceEnclave(governanceEnclaveProxy).setNetworkConfig(
+                networkConfigs[i].chainId,
+                networkConfigs[i].tokenAddress,
+                networkConfigs[i].rpcUrls
+            );
+            console.log("Network config set for chainId:", networkConfigs[i].chainId);
+        }
 
         // Set token lock amounts
         HelperConfig.TokenLockConfig[] memory tokenLockConfigs = helperConfig.getTokenLockConfigs();
