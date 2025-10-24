@@ -2,6 +2,23 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-fs_permissions = [{ access = "read", path = "./"}]
+fs_permissions = [
+  { access = "read", path = "./src/" },
+  { access = "read", path = "./script/" },
+  { access = "read", path = "./lib/" },
+  { access = "read", path = "./out/" },
+  { access = "write", path = "./script/governance/addresses/" },
+]
+ffi = true
+optimizer = true
+optimizer_runs = 200
+solc_version = "0.8.29"
+via_ir = true
+# skip = ["script/**"]
+
+[etherscan]
+arbitrum_sepolia = { key = "${ARBITRUM_SEPOLIA_API_KEY}" }
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
