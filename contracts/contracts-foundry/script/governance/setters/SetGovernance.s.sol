@@ -43,9 +43,9 @@ contract SetTokenLockAmount is SetGovernanceBase {
 // forge script script/governance/setters/SetGovernance.s.sol:SetProposalTimingConfig --rpc-url <RPC_URL> --broadcast
 contract SetProposalTimingConfig is SetGovernanceBase {
     
-    uint256 constant VOTE_ACTIVATION_DELAY = 5 minutes;
-    uint256 constant VOTE_DURATION = 15 minutes;
-    uint256 constant PROPOSAL_DURATION = 30 minutes;
+    uint256 constant VOTE_ACTIVATION_DELAY = 10 seconds;  // 10 seconds
+    uint256 constant VOTE_DURATION = 150 seconds;         // 2.5 minutes
+    uint256 constant PROPOSAL_DURATION = 5 hours + 30 minutes; // 5.5 hours
     
     function run() external {
         vm.startBroadcast();
