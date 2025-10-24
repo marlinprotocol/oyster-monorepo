@@ -1,16 +1,9 @@
-use std::ops::Sub;
-use std::str::FromStr;
-
 use crate::schema::jobs;
-use crate::schema::transactions;
 use alloy::hex::ToHexExt;
-use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -18,30 +11,20 @@ use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_metadata_updated(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
-    let amount = U256::abi_decode(&log.data().data, true)?;
-    let amount = BigDecimal::from_str(&amount.to_string())?;
-
-    let block = log
-        .block_number
-        .ok_or(anyhow!("did not get block from log"))?;
-    let idx = log.log_index.ok_or(anyhow!("did not get index from log"))?;
-    let tx_hash = log
-        .transaction_hash
-        .ok_or(anyhow!("did not get tx hash from log"))?
-        .encode_hex_with_prefix();
+    let metadata = String::abi_decode(&log.data().data, true)?;
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, ?amount, "withdrawing from job");
+    info!(id, ?metadata, "updating job metadata");
 
     // target sql:
     // UPDATE jobs
-    // SET balance = balance - <amount>
+    // SET metadata = "<metadata>"
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -50,7 +33,7 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::balance.eq(jobs::balance.sub(&amount)))
+        .set(jobs::metadata.eq(&metadata))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -62,43 +45,27 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         return Err(anyhow::anyhow!("could not find job"));
     }
 
-    // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", false);
-    diesel::insert_into(transactions::table)
-        .values((
-            transactions::block.eq(block as i64),
-            transactions::idx.eq(idx as i64),
-            transactions::tx_hash.eq(tx_hash),
-            transactions::job.eq(&id),
-            transactions::amount.eq(&amount),
-            transactions::is_deposit.eq(false),
-        ))
-        .execute(conn)
-        .context("failed to create withdraw")?;
-
-    info!(id, ?amount, "withdrew from job");
+    info!(id, ?metadata, "updated job metadata");
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::Address;
     use alloy::{primitives::LogData, rpc::types::Log};
     use anyhow::Result;
     use bigdecimal::BigDecimal;
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::v1::handle_log_v1;
     use crate::schema::providers;
 
     use super::*;
 
     #[test]
-    fn test_withdraw_from_existing_job() -> Result<()> {
+    fn test_job_metadata_update() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -130,6 +97,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -150,20 +118,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
-            ))
-            .execute(conn)
-            .context("failed to create job")?;
-
-        diesel::insert_into(transactions::table)
-            .values((
-                transactions::block.eq(123),
-                transactions::idx.eq(5),
-                transactions::tx_hash
-                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                transactions::job
-                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
-                transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -190,39 +145,28 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                BigDecimal::from(10),
-                true,
-            ))
         );
 
         let log = Log {
@@ -237,21 +181,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobMetadataUpdated(bytes32,string)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
-                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
-                            .parse::<Address>()?
-                            .into_word(),
                     ],
-                    5.abi_encode().into(),
+                    "some random metadata".abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        handle_log_v1(conn, log)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -273,51 +214,29 @@ mod tests {
             Ok(vec![
                 (
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    "some metadata".to_owned(),
+                    "some random metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(15),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     false,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
-                )
-            ])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(2));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .order_by((transactions::block, transactions::idx))
-                .load(conn),
-            Ok(vec![
-                (
-                    42i64,
-                    69i64,
-                    keccak256!("some tx").encode_hex_with_prefix(),
-                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    BigDecimal::from(5),
-                    false,
-                ),
-                (
-                    123i64,
-                    5i64,
-                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    BigDecimal::from(10),
-                    true,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -326,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_from_non_existent_job() -> Result<()> {
+    fn test_job_metadata_update_for_non_existent_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -358,20 +277,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-            ))
-            .execute(conn)
-            .context("failed to create job")?;
-
-        diesel::insert_into(transactions::table)
-            .values((
-                transactions::block.eq(123),
-                transactions::idx.eq(5),
-                transactions::tx_hash
-                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                transactions::job
-                    .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
-                transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -397,27 +303,14 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             )])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
-                BigDecimal::from(10),
-                true,
-            ))
         );
 
         let log = Log {
@@ -432,21 +325,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobMetadataUpdated(bytes32,string)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
-                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
-                            .parse::<Address>()?
-                            .into_word(),
                     ],
-                    5.abi_encode().into(),
+                    "some random metadata".abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        let res = handle_log_v1(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -471,34 +361,21 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             )])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
-                BigDecimal::from(10),
-                true,
-            ))
         );
 
         Ok(())
     }
 
     #[test]
-    fn test_withdraw_from_closed_job() -> Result<()> {
+    fn test_job_metadata_update_for_closed_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -530,6 +407,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -550,20 +428,7 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
-            ))
-            .execute(conn)
-            .context("failed to create job")?;
-
-        diesel::insert_into(transactions::table)
-            .values((
-                transactions::block.eq(123),
-                transactions::idx.eq(5),
-                transactions::tx_hash
-                    .eq("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                transactions::job
-                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
-                transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(true),
+                jobs::usdc_balance.eq(BigDecimal::from(20)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -590,39 +455,28 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                BigDecimal::from(10),
-                true,
-            ))
         );
 
         let log = Log {
@@ -637,21 +491,18 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobWithdrew(bytes32,address,uint256)").into(),
+                        event!("JobMetadataUpdated(bytes32,string)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
-                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
-                            .parse::<Address>()?
-                            .into_word(),
                     ],
-                    5.abi_encode().into(),
+                    "some random metadata".abi_encode().into(),
                 )
                 .unwrap(),
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        let res = handle_log_v1(conn, log);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -677,39 +528,28 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(20),
-                    creation_now,
-                    creation_now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(20)),
+                    Some(creation_now),
+                    Some(creation_now),
                     true,
+                    Some(BigDecimal::from(20)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
-        );
-
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            transactions::table
-                .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                BigDecimal::from(10),
-                true,
-            ))
         );
 
         Ok(())

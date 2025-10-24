@@ -58,8 +58,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     );
 
     // target sql:
-    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed)
-    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false);
+    // INSERT INTO jobs (id, metadata, owner, provider, rate, balance, last_settled, created, is_closed, usdc_balance)
+    // VALUES ("<id>", "<metadata>", "<owner>", "<provider>", "<rate>", "<balance>", "<timestamp>", "<timestamp>", false, "<balance>");
     diesel::insert_into(jobs::table)
         .values((
             jobs::id.eq(&id),
@@ -71,13 +71,14 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::last_settled.eq(&timestamp),
             jobs::created.eq(&timestamp),
             jobs::is_closed.eq(false),
+            jobs::usdc_balance.eq(&balance),
         ))
         .execute(conn)
         .context("failed to create job")?;
 
     // target sql:
-    // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", true);
+    // INSERT INTO transactions (block, idx, job, value, tx_type, is_usdc)
+    // VALUES (block, idx, "<job>", "<value>", "deposit", true);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -85,7 +86,8 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(&id),
             transactions::amount.eq(&balance),
-            transactions::is_deposit.eq(true),
+            transactions::tx_type.eq("deposit"),
+            transactions::is_usdc.eq(true),
         ))
         .execute(conn)
         .context("failed to create deposit")?;
@@ -111,8 +113,8 @@ mod tests {
     use diesel::QueryDsl;
     use ethp::{event, keccak256};
 
-    use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::handlers::v1::handle_log_v1;
 
     use super::*;
 
@@ -163,8 +165,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        handle_log_v1(conn, log)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
@@ -175,11 +177,13 @@ mod tests {
                 "some metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(1),
-                BigDecimal::from(2),
-                now,
-                now,
+                Some(BigDecimal::from(1)),
+                Some(BigDecimal::from(2)),
+                Some(now),
+                Some(now),
                 false,
+                Some(BigDecimal::from(2)),
+                Some(BigDecimal::from(0)),
             ))
         );
 
@@ -194,7 +198,8 @@ mod tests {
                 keccak256!("some tx").encode_hex_with_prefix(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(2),
-                true,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -226,6 +231,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -239,7 +245,8 @@ mod tests {
                 transactions::job
                     .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::tx_type.eq("deposit"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -252,11 +259,13 @@ mod tests {
                 "some other metadata".to_owned(),
                 "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                BigDecimal::from(3),
-                BigDecimal::from(21),
-                original_now,
-                original_now,
+                Some(BigDecimal::from(3)),
+                Some(BigDecimal::from(21)),
+                Some(original_now),
+                Some(original_now),
                 false,
+                Some(BigDecimal::from(21)),
+                Some(BigDecimal::from(0)),
             ))
         );
 
@@ -271,7 +280,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -312,8 +322,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        handle_log_v1(conn, log)?;
 
         // checks
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
@@ -328,22 +338,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -361,7 +375,8 @@ mod tests {
                     keccak256!("some tx").encode_hex_with_prefix(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(2),
-                    true,
+                    "deposit".to_owned(),
+                    Some(true),
                 ),
                 (
                     123i64,
@@ -369,7 +384,8 @@ mod tests {
                     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     BigDecimal::from(10),
-                    false,
+                    "deposit".to_owned(),
+                    Some(true),
                 )
             ])
         );
@@ -402,6 +418,7 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(21)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -421,6 +438,7 @@ mod tests {
                 jobs::last_settled.eq(&now),
                 jobs::created.eq(&now),
                 jobs::is_closed.eq(false),
+                jobs::usdc_balance.eq(BigDecimal::from(2)),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -434,7 +452,8 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::tx_type.eq("deposit"),
+                transactions::is_usdc.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -451,22 +470,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -482,7 +505,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 
@@ -518,8 +542,8 @@ mod tests {
             },
         };
 
-        // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        // use handle_log_v1 instead of concrete handler to test dispatch
+        let res = handle_log_v1(conn, log);
 
         // checks
         assert_eq!(
@@ -538,22 +562,26 @@ mod tests {
                     "some metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(1),
-                    BigDecimal::from(2),
-                    now,
-                    now,
+                    Some(BigDecimal::from(1)),
+                    Some(BigDecimal::from(2)),
+                    Some(now),
+                    Some(now),
                     false,
+                    Some(BigDecimal::from(2)),
+                    Some(BigDecimal::from(0)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                     "some other metadata".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    BigDecimal::from(3),
-                    BigDecimal::from(21),
-                    original_now,
-                    original_now,
+                    Some(BigDecimal::from(3)),
+                    Some(BigDecimal::from(21)),
+                    Some(original_now),
+                    Some(original_now),
                     false,
+                    Some(BigDecimal::from(21)),
+                    Some(BigDecimal::from(0)),
                 )
             ])
         );
@@ -569,7 +597,8 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                "deposit".to_owned(),
+                Some(true),
             ))
         );
 

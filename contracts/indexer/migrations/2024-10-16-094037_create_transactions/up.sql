@@ -4,7 +4,7 @@ CREATE TABLE transactions (
   tx_hash CHAR(66) NOT NULL,
   job CHAR(66) NOT NULL REFERENCES jobs (id),
   amount NUMERIC NOT NULL,
-  is_deposit BOOL NOT NULL,
+  tx_type VARCHAR NOT NULL CHECK (tx_type IN ('deposit', 'withdraw', 'settle', 'rate_revision')),
   PRIMARY KEY(block, idx)
 );
 
