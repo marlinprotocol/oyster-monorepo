@@ -21,8 +21,8 @@ interface IGovernanceErrors {
     error Governance__InvalidKMSSignature();
     error Governance__MaxRpcUrlsPerChainReached();
     error Governance__NoSupportedChainConfigured();
-    error Governance__NotConfigSetterRole();
-    error Governance__NotDefaultAdmin();
+    error Governance__OnlyConfigSetter();
+    error Governance__OnlyDefaultAdmin();
     error Governance__NoValueToRefund();
     error Governance__NotRefundableProposal();
     error Governance__NotResultSubmissionPhase();

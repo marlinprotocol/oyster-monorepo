@@ -157,7 +157,7 @@ contract GovernanceEnclaveTest is Test {
         bytes memory newKey = hex"abcdef1234567890";
         
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.setKMSRootServerKey(newKey);
     }
 
@@ -185,7 +185,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_setPCRConfig_revert_WhenNotAdmin() public {
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.setPCRConfig(pcr0, pcr1, pcr2);
     }
 
@@ -214,7 +214,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_setMaxRPCUrlsPerChain_revert_WhenNotAdmin() public {
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.setMaxRPCUrlsPerChain(20);
     }
 
@@ -238,7 +238,7 @@ contract GovernanceEnclaveTest is Test {
         string[] memory rpcUrls = _createRpcUrls(1);
 
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.setNetworkConfig(TEST_CHAIN_ID, makeAddr("token"), rpcUrls);
     }
 
@@ -297,7 +297,7 @@ contract GovernanceEnclaveTest is Test {
         string[] memory newRpcUrls = _createRpcUrls(1);
 
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.addRpcUrls(TEST_CHAIN_ID, newRpcUrls);
     }
 
@@ -348,7 +348,7 @@ contract GovernanceEnclaveTest is Test {
         string[] memory newRpcUrls = _createRpcUrls(1);
 
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.updateRpcUrlsAtIndexes(TEST_CHAIN_ID, indexes, newRpcUrls);
     }
 
@@ -401,7 +401,7 @@ contract GovernanceEnclaveTest is Test {
         indexes[0] = 0;
 
         vm.prank(user);
-        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyAdmin.selector);
+        vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.removeRpcUrlsAtIndexes(TEST_CHAIN_ID, indexes);
     }
 

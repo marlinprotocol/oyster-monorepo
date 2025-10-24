@@ -61,12 +61,12 @@ contract Governance is
     uint256[50] private __gap1;
 
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), Governance__NotDefaultAdmin());
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), Governance__OnlyDefaultAdmin());
         _;
     }
 
     modifier onlyConfigSetter() {
-        require(hasRole(CONFIG_SETTER_ROLE, _msgSender()), Governance__NotConfigSetterRole());
+        require(hasRole(CONFIG_SETTER_ROLE, _msgSender()), Governance__OnlyConfigSetter());
         _;
     }
 

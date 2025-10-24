@@ -52,7 +52,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         address newEnclave = makeAddr("newEnclave");
         
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setGovernanceEnclave(newEnclave);
     }
 
@@ -89,7 +89,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         address newDelegation = makeAddr("newDelegation");
         
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.addGovernanceDelegation(chainId, newDelegation);
     }
 
@@ -170,7 +170,7 @@ contract GovernanceAdminTest is GovernanceSetup {
 
     function test_removeGovernanceDelegation_revert_when_NonConfigSetter() public {
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.removeGovernanceDelegation(0);
     }
 
@@ -224,7 +224,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         uint256 newAmount = 200 * 1e18;
 
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setTokenLockAmount(newToken, newAmount);
     }
 
@@ -252,7 +252,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         uint256 newThreshold = 0.5 * 1e18;
 
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setProposalPassVetoThreshold(newThreshold);
     }
 
@@ -277,7 +277,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         uint256 newThreshold = 0.1 * 1e18;
 
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setMinQuorumThreshold(newThreshold);
     }
 
@@ -302,7 +302,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         uint256 newRate = 0.1 * 1e18;
 
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setVetoSlashRate(newRate);
     }
 
@@ -338,7 +338,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         address newTreasury = makeAddr("newTreasury");
 
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setTreasury(newTreasury);
     }
 
@@ -366,7 +366,7 @@ contract GovernanceAdminTest is GovernanceSetup {
 
     function test_setProposalTimingConfig_revert_when_FromNonConfigSetter() public {
         vm.prank(admin);
-        vm.expectRevert(IGovernanceErrors.Governance__NotConfigSetterRole.selector);
+        vm.expectRevert(IGovernanceErrors.Governance__OnlyConfigSetter.selector);
         governance.setProposalTimingConfig(10 * 60, 20 * 60, 60 * 60);
     }
 

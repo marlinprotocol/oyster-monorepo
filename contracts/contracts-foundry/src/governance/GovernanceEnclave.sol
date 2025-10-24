@@ -26,7 +26,7 @@ contract GovernanceEnclave is
     using ECDSA for bytes32;
 
     // ========== Errors ==========
-    error GovernanceEnclave__OnlyAdmin();
+    error GovernanceEnclave__OnlyDefaultAdmin();
     error GovernanceEnclave__InvalidAddress();
     error GovernanceEnclave__InvalidPubKeyLength();
     error GovernanceEnclave__InvalidKMSRootServerPubKey();
@@ -100,7 +100,7 @@ contract GovernanceEnclave is
     // ========== Modifiers ==========
 
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), GovernanceEnclave__OnlyAdmin());
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), GovernanceEnclave__OnlyDefaultAdmin());
         _;
     }
 

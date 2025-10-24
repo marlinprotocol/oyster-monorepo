@@ -21,7 +21,7 @@ contract GovernanceDelegation is
     ReentrancyGuardUpgradeable
 {
 
-    error GovernanceDelegation__NotDefaultAdmin();
+    error GovernanceDelegation__OnlyDefaultAdmin();
     error GovernanceDelegation__DelegationAlreadySet();
     error GovernanceDelegation__InvalidAddress();
     
@@ -31,7 +31,7 @@ contract GovernanceDelegation is
 
     //-------------------------------- Modifiers start --------------------------------//
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), GovernanceDelegation__NotDefaultAdmin());
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), GovernanceDelegation__OnlyDefaultAdmin());
         _;
     }
     //-------------------------------- Modifiers end --------------------------------//
