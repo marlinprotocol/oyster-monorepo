@@ -10,6 +10,23 @@ This repository contains an indexer for the Oyster marketplace contract on Arb o
 cargo build --release
 ```
 
+## Reproducible builds
+
+Reproducible builds can be done using Nix. The monorepo provides a Nix flake which includes this project and can be used to trigger builds:
+
+```bash
+nix build -v .#<flavor>.operator.arb-indexer.<output>
+```
+
+Supported flavors:
+- `gnu`
+- `musl`
+
+Supported outputs:
+- `default`, same as `compressed`
+- `uncompressed`
+- `compressed`, using `upx`
+
 ## Usage
 
 ### Environment file
