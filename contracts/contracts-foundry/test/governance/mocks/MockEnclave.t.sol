@@ -75,7 +75,8 @@ contract MockEnclave is Test {
             kmsSig: getKmsSig(_imageId, _proposalId),
             enclavePubKey: ENCLAVE_PUB_KEY,
             enclaveSig: enclaveSig,
-            resultData: resultData
+            resultData: resultData,
+            voteDecryptionKey: hex"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" // Mock vote decryption key
         });
     }
 

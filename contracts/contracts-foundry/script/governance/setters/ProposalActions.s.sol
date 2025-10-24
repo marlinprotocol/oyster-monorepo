@@ -150,7 +150,8 @@ contract SubmitResult is ProposalActionsBase {
             kmsSig: KMS_SIG,
             enclavePubKey: ENCLAVE_PUB_KEY,
             enclaveSig: ENCLAVE_SIG,
-            resultData: RESULT_DATA
+            resultData: RESULT_DATA,
+            voteDecryptionKey: hex"" // Empty vote decryption key for this example
         });
         
         vm.startBroadcast();

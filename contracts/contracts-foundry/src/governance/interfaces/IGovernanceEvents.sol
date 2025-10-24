@@ -69,6 +69,11 @@ interface IGovernanceEvents is IGovernanceTypes {
         VoteOutcome voteOutcome
     );
 
+    event VoteDecryptionKeyStored(
+        bytes32 indexed proposalId,
+        bytes voteDecryptionKey
+    );
+
     event ProposalExecuted(
         bytes32 indexed proposalId
     );

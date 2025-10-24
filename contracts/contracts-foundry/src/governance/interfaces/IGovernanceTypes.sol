@@ -101,5 +101,6 @@ interface IGovernanceTypes {
         bytes enclavePubKey;
         bytes enclaveSig;
         bytes resultData;
+        bytes voteDecryptionKey;
     }
 }
