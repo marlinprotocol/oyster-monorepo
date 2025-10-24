@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::rate_revisions;
 use crate::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
@@ -54,6 +55,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?block,
         "creating job"
     );
 
@@ -90,6 +92,18 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .execute(conn)
         .context("failed to create deposit")?;
 
+    // target sql:
+    // INSERT INTO rate_revisions (job_id, value, block)
+    // VALUES ("<id>", "<rate>", "<block>");
+    diesel::insert_into(rate_revisions::table)
+        .values((
+            rate_revisions::job_id.eq(&id),
+            rate_revisions::value.eq(&rate),
+            rate_revisions::block.eq(block as i64),
+        ))
+        .execute(conn)
+        .context("failed to insert rate revision")?;
+
     info!(
         id,
         owner,
@@ -98,6 +112,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?rate,
         ?balance,
         ?timestamp,
+        ?block,
         "created job"
     );
 
@@ -195,6 +210,18 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(2),
                 true,
+            ))
+        );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(1),
+                42i64,
             ))
         );
 
@@ -374,6 +401,19 @@ mod tests {
             ])
         );
 
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(1),
+                42i64,
+            )])
+        );
+
         Ok(())
     }
 
@@ -439,6 +479,16 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(rate_revisions::table)
+            .values((
+                rate_revisions::job_id
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                rate_revisions::value.eq(BigDecimal::from(1)),
+                rate_revisions::block.eq(42i64),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
             jobs::table
@@ -484,6 +534,18 @@ mod tests {
                 BigDecimal::from(10),
                 false,
             ))
+        );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(1),
+                42i64,
+            )])
         );
 
         // log under test
@@ -571,6 +633,18 @@ mod tests {
                 BigDecimal::from(10),
                 false,
             ))
+        );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(1),
+                42i64,
+            )])
         );
 
         Ok(())
