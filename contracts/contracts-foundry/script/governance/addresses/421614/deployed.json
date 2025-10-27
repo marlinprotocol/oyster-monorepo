@@ -4,11 +4,11 @@
     "proxy": "0x51De4205a95fC8B5Dc4a616E616945cfB00facfd"
   },
   "GovernanceDelegation": {
-    "implementation": "0x71Ab113766D88021Ccc333c864C3c3fdC67B02A4",
+    "implementation": "0x9bc52E83853bC7F14FBF06eAD2cEFA37ad78128c",
     "proxy": "0x9c7B433A7D8Ee1a220C062b37ad6737C051AC3e1"
   },
   "GovernanceEnclave": {
-    "implementation": "0x589daed7f23a77CeD490ff2b24C91E34c51574fa",
+    "implementation": "0xBc8B2533EcD873Dc75460892b8c56Da713C0D05D",
     "proxy": "0x8Af2Fe40cDf8cD9E0e9F0Ca5E165049769CdC788"
   },
   "tokens": {

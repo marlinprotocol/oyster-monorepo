@@ -19,7 +19,11 @@ interface IGovernanceEnclave {
 
     function getSupportedChainIdsLength() external view returns (uint256);
 
-    function getSupportedChainIds() external view returns (uint256[] memory);
+    function getAllSupportedChainIds() external view returns (uint256[] memory);
 
     function isChainSupported(uint256 _chainId) external view returns (bool);
+    
+    function getTokenNetworkConfig(uint256 _chainId) external view returns (bytes32 chainHash, address tokenAddress, string[] memory rpcUrls);
+    
+    function getPCRConfig() external view returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId);
 }

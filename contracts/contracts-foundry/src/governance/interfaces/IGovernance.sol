@@ -7,5 +7,10 @@ import {IGovernanceErrors} from "./IGovernanceErrors.sol";
 import {IGovernanceEvents} from "./IGovernanceEvents.sol";
 
 interface IGovernance is IGovernanceErrors, IGovernanceTypes, IGovernanceEvents {
-    //
+    // Delegation chain IDs
+    function getDelegationChainIdsLength() external view returns (uint256);
+    function getAllDelegationChainIds() external view returns (uint256[] memory);
+    
+    // Proposal timing config
+    function getProposalTimingConfig() external view returns (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration);
 }
