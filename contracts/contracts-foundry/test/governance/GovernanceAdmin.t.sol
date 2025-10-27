@@ -17,7 +17,7 @@ contract GovernanceAdminTest is GovernanceSetup {
     
     function test_initialConfig() public view {
         // Proposal Timing Config
-        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
+        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.getProposalTimingConfig();
         assertEq(voteActivationDelay_, voteActivationDelay, "voteActivationDelay not matching");
         assertEq(voteDuration_, voteDuration, "voteDuration not matching");
         assertEq(proposalDuration_, proposalDuration, "proposalDuration not matching");
@@ -72,7 +72,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         uint256 newChainId = 999;
         
         // Check initial state
-        assertEq(governance.getDelegationChainIds().length, 1, "Should have 1 delegation initially");
+        assertEq(governance.getDelegationChainIdsLength(), 1, "Should have 1 delegation initially");
         assertEq(governance.getGovernanceDelegation(newChainId), address(0), "Chain should not be configured");
         
         vm.prank(configSetter);
@@ -80,7 +80,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         
         // Verify delegation was added
         assertEq(governance.governanceDelegations(newChainId), address(newDelegation), "governanceDelegation not set");
-        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getDelegationChainIdsLength(), 2, "Should have 2 delegations");
         assertEq(governance.getGovernanceDelegation(newChainId), address(newDelegation), "Chain should be configured");
     }
 
@@ -130,7 +130,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.addGovernanceDelegation(newChainId, newDelegation);
         
         // Verify it was added
-        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getDelegationChainIdsLength(), 2, "Should have 2 delegations");
         assertEq(governance.getGovernanceDelegation(newChainId), newDelegation, "Chain should be configured");
         
         // Remove it (index 1 since it was added second)
@@ -138,7 +138,8 @@ contract GovernanceAdminTest is GovernanceSetup {
         governance.removeGovernanceDelegation(1);
         
         // Verify it was removed
-        assertEq(governance.getDelegationChainIds().length, 1, "Should have 1 delegation");
+        uint256[] memory chainIds = governance.getAllDelegationChainIds();
+        assertEq(chainIds.length, 1, "Should have 1 delegation");
         assertEq(governance.getGovernanceDelegation(newChainId), address(0), "Chain should not be configured");
         assertEq(governance.governanceDelegations(newChainId), address(0), "governanceDelegation should be zero");
     }
@@ -156,14 +157,15 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.stopPrank();
         
         // Now we have 3 delegations: [block.chainid, chainId1, chainId2]
-        assertEq(governance.getDelegationChainIds().length, 3, "Should have 3 delegations");
+        uint256[] memory chainIds = governance.getAllDelegationChainIds();
+        assertEq(chainIds.length, 3, "Should have 3 delegations");
         
         // Remove the middle one (index 1)
         vm.prank(configSetter);
         governance.removeGovernanceDelegation(1);
         
         // Verify: should have swapped chainId2 to index 1 and popped
-        assertEq(governance.getDelegationChainIds().length, 2, "Should have 2 delegations");
+        assertEq(governance.getDelegationChainIdsLength(), 2, "Should have 2 delegations");
         assertEq(governance.getGovernanceDelegation(chainId1), address(0), "chainId1 should not be configured");
         assertEq(governance.getGovernanceDelegation(chainId2), delegation2, "chainId2 should still be configured");
     }
@@ -175,7 +177,7 @@ contract GovernanceAdminTest is GovernanceSetup {
     }
 
     function test_removeGovernanceDelegation_revert_when_InvalidIndex() public {
-        uint256 currentLength = governance.getDelegationChainIds().length;
+        uint256 currentLength = governance.getAllDelegationChainIds().length;
         
         vm.prank(configSetter);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidAddress.selector);
@@ -186,7 +188,7 @@ contract GovernanceAdminTest is GovernanceSetup {
     
     function test_getDelegationChainIds() public {
         // Initially should have only block.chainid
-        uint256[] memory chainIds = governance.getDelegationChainIds();
+        uint256[] memory chainIds = governance.getAllDelegationChainIds();
         assertEq(chainIds.length, 1, "Should have 1 chain ID");
         assertEq(chainIds[0], block.chainid, "Should be block.chainid");
         
@@ -200,7 +202,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.stopPrank();
         
         // Verify all chains are in the array
-        chainIds = governance.getDelegationChainIds();
+        chainIds = governance.getAllDelegationChainIds();
         assertEq(chainIds.length, 3, "Should have 3 chain IDs");
         assertEq(chainIds[0], block.chainid, "First should be block.chainid");
         assertEq(chainIds[1], chainId1, "Second should be chainId1");
@@ -358,7 +360,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.prank(configSetter);
         governance.setProposalTimingConfig(newVoteActivationDelay, newVoteDuration, newProposalDuration);
 
-        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
+        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.getProposalTimingConfig();
         assertEq(voteActivationDelay_, newVoteActivationDelay, "voteActivationDelay not matching");
         assertEq(voteDuration_, newVoteDuration, "voteDuration not matching");
         assertEq(proposalDuration_, newProposalDuration, "proposalDuration not matching");
@@ -390,7 +392,7 @@ contract GovernanceAdminTest is GovernanceSetup {
         vm.prank(configSetter);
         governance.setProposalTimingConfig(newVoteActivationDelay, 0, 0);
         
-        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.proposalTimingConfig();
+        (uint256 voteActivationDelay_, uint256 voteDuration_, uint256 proposalDuration_) = governance.getProposalTimingConfig();
         assertEq(voteActivationDelay_, newVoteActivationDelay, "voteActivationDelay not updated");
         assertEq(voteDuration_, voteDuration, "voteDuration should remain unchanged");
         assertEq(proposalDuration_, proposalDuration, "proposalDuration should remain unchanged");

@@ -70,14 +70,13 @@ contract GovernanceEnclave is
 
     // KMS and PCR Configuration
     bytes public kmsRootServerPubKey;
-    PCRConfig public pcrConfig;
+    PCRConfig private pcrConfig;
 
     // Network Configuration
     bytes32 private networkHash;
     uint256[] public supportedChainIds;
     uint256 public maxRPCUrlsPerChain;
-    mapping(uint256 chainId => TokenNetworkConfig config) public tokenNetworkConfigs;
-
+    mapping(uint256 chainId => TokenNetworkConfig config) private tokenNetworkConfigs;
     uint256[50] private __gap1;
 
     // ========== Events ==========
@@ -444,9 +443,10 @@ contract GovernanceEnclave is
     /// @notice Returns the complete array of supported chain IDs
     /// @dev This allows external contracts and users to get all supported chains in a single call
     /// @return chainIds Array of all supported chain IDs
-    function getSupportedChainIds() external view returns (uint256[] memory) {
+    function getAllSupportedChainIds() external view returns (uint256[] memory) {
         return supportedChainIds;
     }
+
 
     /// @notice Checks if a specific chain ID is supported
     /// @param _chainId The chain ID to check
@@ -460,6 +460,7 @@ contract GovernanceEnclave is
     }
 
     /// @notice Returns the PCR configuration including all PCR values and the image ID
+    /// @notice Returns the complete PCR configuration
     /// @dev This allows external contracts to verify the current PCR configuration
     /// @return pcr0 The PCR0 value
     /// @return pcr1 The PCR1 value

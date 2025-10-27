@@ -1,10 +1,10 @@
 {
   "Governance": {
-    "implementation": "0xa0502959fDCa1445dC22e116964dfD71597862A1",
+    "implementation": "0x3e610c7CBCd117b9C078FE5bC120186156dDea2f",
     "proxy": "0x51De4205a95fC8B5Dc4a616E616945cfB00facfd"
   },
   "GovernanceDelegation": {
-    "implementation": "0x9bc52E83853bC7F14FBF06eAD2cEFA37ad78128c",
+    "implementation": "0x71Ab113766D88021Ccc333c864C3c3fdC67B02A4",
     "proxy": "0x9c7B433A7D8Ee1a220C062b37ad6737C051AC3e1"
   },
   "GovernanceEnclave": {

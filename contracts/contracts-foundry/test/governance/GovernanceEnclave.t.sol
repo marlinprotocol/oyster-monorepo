@@ -177,10 +177,10 @@ contract GovernanceEnclaveTest is Test {
         vm.prank(admin);
         governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2);
 
-        (GovernanceEnclave.PCR memory pcr, ) = governanceEnclave.pcrConfig();
-        assertEq(pcr.pcr0, newPcr0);
-        assertEq(pcr.pcr1, newPcr1);
-        assertEq(pcr.pcr2, newPcr2);
+        (bytes memory retPcr0, bytes memory retPcr1, bytes memory retPcr2,) = governanceEnclave.getPCRConfig();
+        assertEq(retPcr0, newPcr0);
+        assertEq(retPcr1, newPcr1);
+        assertEq(retPcr2, newPcr2);
     }
 
     function test_setPCRConfig_revert_WhenNotAdmin() public {
@@ -457,7 +457,7 @@ contract GovernanceEnclaveTest is Test {
     }
 
     function test_getSupportedChainIds_Empty() public view {
-        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         assertEq(chainIds.length, 0, "Should have no supported chains initially");
     }
 
@@ -467,7 +467,7 @@ contract GovernanceEnclaveTest is Test {
         _setupNetwork(2, 1);
         _setupNetwork(3, 1);
 
-        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         assertEq(chainIds.length, 3, "Should have 3 supported chains");
         
         // Verify chain IDs are correct (order might not be guaranteed)
@@ -491,7 +491,7 @@ contract GovernanceEnclaveTest is Test {
         _setupNetwork(1, 1);
         _setupNetwork(2, 1);
         
-        assertEq(governanceEnclave.getSupportedChainIds().length, 2, "Should have 2 chains");
+        assertEq(governanceEnclave.getAllSupportedChainIds().length, 2, "Should have 2 chains");
         
         // Remove one network by setting token to address(0)
         string[] memory emptyUrls = new string[](1);
@@ -500,7 +500,7 @@ contract GovernanceEnclaveTest is Test {
         vm.prank(admin);
         governanceEnclave.setNetworkConfig(1, address(0), emptyUrls);
         
-        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         assertEq(chainIds.length, 1, "Should have 1 chain after removal");
         assertEq(chainIds[0], 2, "Should only have chain 2");
     }

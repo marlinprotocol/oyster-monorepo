@@ -48,13 +48,13 @@ contract Governance is
 
     // Proposal Management
     mapping(address token => uint256 amount) public proposalDepositAmounts;
-    mapping(bytes32 id => Proposal) proposals;
+    mapping(bytes32 id => Proposal) private proposals;
     mapping(bytes32 id => bool) public executionQueue;
     mapping(bytes32 proposalId => bytes) public voteDecryptionKeys;
     mapping(address proposer => uint256 nonce) public proposerNonce;
 
     // Proposal Configuration
-    ProposalTimingConfig public proposalTimingConfig;
+    ProposalTimingConfig private proposalTimingConfig;
     uint256 public minQuorumThreshold;
     uint256 public proposalPassVetoThreshold;
     uint256 public vetoSlashRate;
@@ -960,10 +960,16 @@ contract Governance is
         return (proposal.voteOutcome, proposal.executed, executionQueue[_proposalId], proposal.imageId, proposal.networkHash);
     }
 
+    /// @notice Returns the number of delegation chain IDs
+    /// @return length The number of delegation chain IDs
+    function getDelegationChainIdsLength() external view returns (uint256) {
+        return delegationChainIds.length;
+    }
+
     /// @notice Returns the complete array of delegation chain IDs
     /// @dev This allows external contracts and users to get all delegation chains in a single call
     /// @return chainIds Array of all delegation chain IDs
-    function getDelegationChainIds() external view returns (uint256[] memory) {
+    function getAllDelegationChainIds() external view returns (uint256[] memory) {
         return delegationChainIds;
     }
 
@@ -972,6 +978,14 @@ contract Governance is
     /// @return governanceDelegation The governance delegation contract address
     function getGovernanceDelegation(uint256 _chainId) external view returns (address) {
         return governanceDelegations[_chainId];
+    }
+
+    /// @notice Returns the proposal timing configuration
+    /// @return voteActivationDelay The delay before voting starts
+    /// @return voteDuration The duration of the voting period
+    /// @return proposalDuration The total duration of the proposal
+    function getProposalTimingConfig() external view returns (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) {
+        return (proposalTimingConfig.voteActivationDelay, proposalTimingConfig.voteDuration, proposalTimingConfig.proposalDuration);
     }
 
     //-------------------------------- Getters end --------------------------------//
