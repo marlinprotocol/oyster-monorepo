@@ -11,6 +11,8 @@ fs_permissions = [
   { access = "read", path = "./script/governance/addresses/421614/" },
   { access = "read", path = "./script/governance/addresses/421614/address.json" },
   { access = "write", path = "./script/governance/addresses/" },
+  { access = "write", path = "./script/governance/addresses/421614/" },
+  { access = "write", path = "./script/governance/addresses/421614/deployed.json" },
 ]
 ffi = true
 optimizer = true
