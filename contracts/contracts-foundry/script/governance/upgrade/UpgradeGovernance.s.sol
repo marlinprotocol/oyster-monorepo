@@ -14,13 +14,18 @@ import {HelperConfig} from "../HelperConfig.s.sol";
  * @dev Reads existing proxy addresses from addresses/{chainId}/deployed.json and updates them
  * 
  * Usage:
- *   Upgrade all:
- *     forge script script/governance/UpgradeGovernance.s.sol:UpgradeGovernanceAll --rpc-url $RPC_URL --broadcast
+ *   Upgrade all contracts:
+ *     forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceAll --rpc-url <RPC_URL> --broadcast
  * 
  *   Upgrade individual contracts:
- *     forge script script/governance/UpgradeGovernance.s.sol:UpgradeGovernanceContract --rpc-url $RPC_URL --broadcast
- *     forge script script/governance/UpgradeGovernance.s.sol:UpgradeGovernanceEnclaveContract --rpc-url $RPC_URL --broadcast
- *     forge script script/governance/UpgradeGovernance.s.sol:UpgradeGovernanceDelegationContract --rpc-url $RPC_URL --broadcast
+ *     Governance only (vote hash logic update):
+ *       forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceContract --rpc-url <RPC_URL> --broadcast
+ *     
+ *     GovernanceEnclave only:
+ *       forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceEnclaveContract --rpc-url <RPC_URL> --broadcast
+ *     
+ *     GovernanceDelegation only:
+ *       forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceDelegationContract --rpc-url <RPC_URL> --broadcast
  */
 contract UpgradeGovernanceBase is Script {
 
@@ -153,6 +158,9 @@ contract UpgradeGovernanceBase is Script {
 
 /**
  * @notice Upgrade all Governance contracts
+ * 
+ * USAGE:
+ * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceAll --rpc-url <RPC_URL> --broadcast
  */
 contract UpgradeGovernanceAll is UpgradeGovernanceBase {
     function run() external {
@@ -180,6 +188,13 @@ contract UpgradeGovernanceAll is UpgradeGovernanceBase {
 
 /**
  * @notice Upgrade Governance contract only
+ * @dev This upgrades the Governance contract with the new vote hash calculation logic:
+ *      - voteEncrypted is first hashed with sha256()
+ *      - Then encoded with voter, delegator, delegatorChainId
+ *      - More gas efficient than encoding voteEncrypted directly
+ * 
+ * USAGE:
+ * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceContract --rpc-url <RPC_URL> --broadcast
  */
 contract UpgradeGovernanceContract is UpgradeGovernanceBase {
     function run() external {
@@ -198,6 +213,9 @@ contract UpgradeGovernanceContract is UpgradeGovernanceBase {
 
 /**
  * @notice Upgrade GovernanceEnclave contract only
+ * 
+ * USAGE:
+ * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceEnclaveContract --rpc-url <RPC_URL> --broadcast
  */
 contract UpgradeGovernanceEnclaveContract is UpgradeGovernanceBase {
     function run() external {
@@ -216,6 +234,9 @@ contract UpgradeGovernanceEnclaveContract is UpgradeGovernanceBase {
 
 /**
  * @notice Upgrade GovernanceDelegation contract only
+ * 
+ * USAGE:
+ * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceDelegationContract --rpc-url <RPC_URL> --broadcast
  */
 contract UpgradeGovernanceDelegationContract is UpgradeGovernanceBase {
     function run() external {

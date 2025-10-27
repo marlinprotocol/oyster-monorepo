@@ -40,6 +40,12 @@ contract ProposeSimple is ProposalActionsBase {
     string constant DESCRIPTION = "This is a test proposal";
     
     function run() external {
+        // Get proposer private key from .env
+        uint256 proposerKey = vm.envUint("PROPOSER_PRIVATE_KEY");
+        address proposer = vm.addr(proposerKey);
+        
+        console.log("Proposer address:", proposer);
+        
         // Prepare proposal params
         address[] memory targets = new address[](1);
         targets[0] = TARGET;
@@ -63,7 +69,7 @@ contract ProposeSimple is ProposalActionsBase {
         IERC20 depositToken = IERC20(depositTokenAddress);
         uint256 depositAmount = governance.proposalDepositAmounts(depositTokenAddress);
         
-        vm.startBroadcast();
+        vm.startBroadcast(proposerKey);
         depositToken.approve(address(governance), depositAmount);
         bytes32 proposalId = governance.propose{value: VALUE}(params);
         vm.stopBroadcast();
@@ -79,10 +85,16 @@ contract ProposeSimple is ProposalActionsBase {
 // forge script script/governance/setters/ProposalActions.s.sol:VoteOnProposal --rpc-url <RPC_URL> --broadcast
 contract VoteOnProposal is ProposalActionsBase {
     
-    bytes32 constant PROPOSAL_ID = 0x0000000000000000000000000000000000000000000000000000000000000000; // Update this
-    bytes constant VOTE_ENCRYPTED = hex"1234567890abcdef"; // Update this - encrypted vote data
+    bytes32 constant PROPOSAL_ID = 0xe1dfe1ab3b6a4a8db25211f8464de8d219a2f7eea5907f0f8d7befb561dc9153; // Proposal ID
+    bytes constant VOTE_ENCRYPTED = hex"5ebff42a9cdeb60d8c4b4f62cfead193a32cee4c4a6ffff062e2934f840c5f480fa810b63afbb8f56792c41da2023470e9"; // Encrypted vote data
     
     function run() external {
+        // Get voter private key from .env
+        uint256 voterKey = vm.envUint("VOTER1_PRIVATE_KEY");
+        address voter = vm.addr(voterKey);
+        
+        console.log("Voter address:", voter);
+        
         // Prepare vote arrays
         bytes[] memory voteEncrypteds = new bytes[](1);
         voteEncrypteds[0] = VOTE_ENCRYPTED;
@@ -93,14 +105,14 @@ contract VoteOnProposal is ProposalActionsBase {
         uint256[] memory delegatorChainIds = new uint256[](1);
         delegatorChainIds[0] = 0;
         
-        vm.startBroadcast();
+        vm.startBroadcast(voterKey);
         governance.vote(PROPOSAL_ID, voteEncrypteds, delegators, delegatorChainIds);
         vm.stopBroadcast();
         
         console.log("Vote submitted:");
         console.log("  Proposal ID:");
         console.logBytes32(PROPOSAL_ID);
-        console.log("  Voter:", msg.sender);
+        console.log("  Voter:", voter);
     }
 }
 

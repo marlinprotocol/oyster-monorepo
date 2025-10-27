@@ -54,7 +54,7 @@ contract GetMaxRPCUrlsPerChain is GetGovernanceEnclaveBase {
 // forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetSupportedChainIds --rpc-url <RPC_URL> -vvv
 contract GetSupportedChainIds is GetGovernanceEnclaveBase {
     function run() external view {
-        uint256[] memory chainIds = governanceEnclave.getSupportedChainIds();
+        uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         console.log("Supported chain IDs count:", chainIds.length);
         for (uint256 i = 0; i < chainIds.length; i++) {
             console.log("  Chain ID:", chainIds[i]);
