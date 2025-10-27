@@ -7,6 +7,7 @@ mod types;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use tokio::{join, sync::RwLock};
 use std::sync::Arc;
 
 use config::load_app_config;
@@ -18,7 +19,7 @@ use hash::{compute_result_hash, compute_vote_result_hash, serialize_vote_result}
 use server::serve_result_api;
 use types::{Args, VoteResult};
 
-use crate::governance_contract::fetch_start_timestamp;
+use crate::{governance_contract::fetch_start_timestamp, types::ApiResponse};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,59 +27,94 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Step 1: Load configuration
-    let app_config = load_app_config_with_fallback();
+    let state = Arc::new(RwLock::new(ApiResponse {
+        enclave_sig: Vec::<u8>::new().into(),
+        result_data: Vec::<u8>::new().into(),
+        in_progress: true,
+        error: None,
+    }));
 
-    // Step 2: Initialize governance
-    let contract = initialize_governance(&app_config).await?;
+    let server_task = serve_result_api(state.clone());
 
-    // Step 3: Fetch chain contexts
-    let (chain_contexts, network_hash) =
-        fetch_and_display_chain_contexts(&app_config, &contract).await?;
+    let compute_task = {
+        let state = state.clone(); // capture state for updating
+        async move {
+            let computation = async {
+                // Step 1: Load configuration
+                let app_config = load_app_config_with_fallback();
 
-    // Step 4: Setup cryptography
-    let (encryption_key, public_key) = setup_encryption(&args.derive_endpoint)?;
+                // Step 2: Initialize governance
+                let contract = initialize_governance(&app_config).await?;
 
-    // Step 5: Process proposal and tally votes
-    let proposal_id_bytes = parse_proposal_id(&app_config.proposal_id)?;
-    let start_timestamp = fetch_start_timestamp(proposal_id_bytes, &contract).await?;
+                // Step 3: Process proposal and tally votes
+                let proposal_id_bytes = parse_proposal_id(&app_config.proposal_id)?;
+                let start_timestamp = fetch_start_timestamp(proposal_id_bytes, &contract).await?;
 
-    println!(
-        "Start Timestamp: {}",
-        start_timestamp
-    );
+                // Step 4: Fetch chain contexts
+                let (chain_contexts, network_hash) =
+                    fetch_and_display_chain_contexts(&app_config, &contract, start_timestamp).await?;
 
-    let (tally, vote_hash) = tally_votes(
-        proposal_id_bytes,
-        &contract,
-        &chain_contexts,
-        &public_key,
-        &encryption_key,
-        start_timestamp,
-    )
-    .await?;
+                // Step 5: Setup cryptography
+                let (encryption_key, public_key) = setup_encryption(&args.derive_endpoint)?;
 
-    // Step 6: Display tally results and fetch supply
-    display_tally_results(&tally);
-    let supply = fetch_and_display_supply(&chain_contexts).await?;
+                let (tally, vote_hash) = tally_votes(
+                    proposal_id_bytes,
+                    &contract,
+                    &chain_contexts,
+                    &public_key,
+                    &encryption_key,
+                    start_timestamp,
+                )
+                .await?;
 
-    // Step 7: Sign and encode results
-    let signing_key =
-        fetch_signing_key(&args.derive_endpoint).context("failed to fetch signing key")?;
+                // Step 6: Display tally results and fetch supply
+                display_tally_results(&tally);
+                let supply = fetch_and_display_supply(&chain_contexts).await?;
 
-    let result = create_signed_result(
-        &app_config,
-        network_hash,
-        vote_hash,
-        &tally,
-        supply,
-        proposal_id_bytes,
-        signing_key,
-        start_timestamp,
-    )?;
+                // Step 7: Sign and encode results
+                let signing_key =
+                    fetch_signing_key(&args.derive_endpoint).context("failed to fetch signing key")?;
 
-    // Step 8: Serve API
-    serve_result_api(result).await;
+                let result = create_signed_result(
+                    &app_config,
+                    network_hash,
+                    vote_hash,
+                    &tally,
+                    supply,
+                    proposal_id_bytes,
+                    signing_key,
+                    start_timestamp,
+                )?;
+                Ok::<VoteResult, anyhow::Error>(result)
+            };
+    
+            match computation.await {
+                Ok(result) => {
+                    let mut s = state.write().await;
+                    *s = ApiResponse {
+                        enclave_sig: result.enclave_sig.clone(),
+                        result_data: result.result_data.clone(),
+                        in_progress: false,
+                        error: None,
+                    };
+                }
+                Err(e) => {
+                    let mut s = state.write().await;
+                    *s = ApiResponse {
+                        enclave_sig: Vec::<u8>::new().into(),
+                        result_data: Vec::<u8>::new().into(),
+                        in_progress: false,
+                        error: Some(e.to_string()),
+                    };
+                }
+            }
+        
+            Ok::<(), anyhow::Error>(())
+        }
+    };
+    
+    // Server keeps running, compute finishes once
+    join!(server_task, compute_task);
     Ok(())
 }
 
@@ -127,6 +163,7 @@ async fn initialize_governance(
 async fn fetch_and_display_chain_contexts(
     app_config: &config::AppConfig,
     contract: &GovernanceContract<ethers::providers::Provider<ethers::providers::Http>>,
+    start_timestamp: u64
 ) -> Result<(Vec<governance_contract::ChainContext>, [u8; 32])> {
     let gov_config = GovernanceConfig {
         rpc_url: app_config.rpc_url.clone(),
@@ -137,7 +174,7 @@ async fn fetch_and_display_chain_contexts(
         rpc_indexes: app_config.rpc_index.clone(),
     };
 
-    let (chain_contexts, network_hash) = fetch_chain_contexts(gov_config, contract).await?;
+    let (chain_contexts, network_hash) = fetch_chain_contexts(gov_config, contract, start_timestamp).await?;
 
     println!("[main] Loaded chain contexts from contract:");
     for ctx in &chain_contexts {

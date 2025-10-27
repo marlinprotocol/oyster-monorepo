@@ -61,75 +61,6 @@ pub struct InitParamsArgs {
     pub docker_compose: Option<String>,
 }
 
-// fn parse_hex_32(s: &str) -> Result<H256> {
-//     let s = s.strip_prefix("0x").unwrap_or(s);
-//     let bytes = hex::decode(s).context("invalid hex string")?;
-//     if bytes.len() != 32 {
-//         bail!("hex must be 32 bytes");
-//     }
-//     Ok(H256::from_slice(&bytes))
-// }
-
-// fn pad_u256_to_32(value: U256) -> [u8; 32] {
-//     let mut buf = [0u8; 32];
-//     value.to_big_endian(&mut buf);
-//     buf
-// }
-
-// fn compute_digest_from_params(init_params: &[String]) -> Result<H256> {
-//     let mut contract_address = None;
-//     let mut proposal_id = None;
-//     let mut start_ts = None;
-//     let mut data_hash = None;
-
-//     for param in init_params {
-//         let parts = param.splitn(5, ":").collect::<Vec<_>>();
-//         if parts.len() != 5 {
-//             bail!("invalid param format: {}", param);
-//         }
-
-//         let name = parts[0];
-//         let should_attest = parts[1] == "1";
-//         let _should_encrypt = parts[2] == "1";
-//         let param_type = parts[3];
-//         let value = parts[4];
-
-//         if !should_attest {
-//             continue;
-//         }
-
-//         match (name, param_type) {
-//             ("gov_contract", "utf8") => {
-//                 contract_address = Some(value.parse::<Address>().context("invalid address")?);
-//             }
-//             ("proposal_id", "utf8") => {
-//                 proposal_id = Some(parse_hex_32(value)?);
-//             }
-//             ("start_ts", "utf8") => {
-//                 start_ts = Some(value.parse::<U256>().context("invalid timestamp")?);
-//             }
-//             ("data_hash", "utf8") => {
-//                 data_hash = Some(parse_hex_32(value)?);
-//             }
-//             _ => {} // skip others
-//         }
-//     }
-
-//     let (contract_address, proposal_id, start_ts, data_hash) = match (contract_address, proposal_id, start_ts, data_hash) {
-//         (Some(a), Some(p), Some(t), Some(d)) => (a, p, t, d),
-//         _ => bail!("missing required attested params"),
-//     };
-
-//     let mut buf = Vec::with_capacity(20 + 32 + 32 + 32);
-//     buf.extend_from_slice(contract_address.as_bytes());
-//     buf.extend_from_slice(proposal_id.as_bytes());
-//     buf.extend_from_slice(&pad_u256_to_32(start_ts));
-//     buf.extend_from_slice(data_hash.as_bytes());
-
-//     Ok(H256::from(keccak256(&buf)))
-// }
-
-
 impl InitParamsArgs {
     pub fn load(self, preset: String, arch: Platform, debug: bool) -> Result<Option<String>> {
         // check for encoded params
@@ -145,10 +76,10 @@ impl InitParamsArgs {
             return Ok(None);
         };
 
-        // let mut init_params = self
-        //     .docker_compose
-        //     .map(|x| vec![format!("docker-compose.yml:1:0:file:{x}")])
-        //     .unwrap_or_default();
+        let mut init_params = self
+            .docker_compose
+            .map(|x| vec![format!("docker-compose.yml:1:0:file:{x}")])
+            .unwrap_or_default();
         let mut init_params = Vec::<String>::new();
 
         if let Some(address) = self.contract_address {
@@ -230,15 +161,8 @@ impl InitParamsArgs {
             })
             .finalize();
 
-        // let digest = compute_digest_from_params(&init_params)
-        //     .context("failed to compute digest from init params")?
-        //     .as_bytes()
-        //     .try_into()
-        //     .context("failed to convert digest to bytes")?;
-
         info!(digest = hex::encode(digest), "Computed digest");
 
-    
         // load pcrs
         // use pcrs of the blue base image by default
         // if debug flag is true, uses zero pcrs

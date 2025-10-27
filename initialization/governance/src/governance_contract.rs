@@ -59,9 +59,23 @@ abigen!(ERC20, "src/abis/erc20_abi.json");
 pub async fn fetch_chain_contexts(
     config: GovernanceConfig,
     contract: &GovernanceContract<Provider<Http>>,
+    start_timestamp: u64
 ) -> Result<(Vec<ChainContext>, [u8; 32])> {
+
+    let provider = contract.client();
+    let snapshot_block =
+    match find_snapshot_block(provider.clone(), start_timestamp).await {
+        Ok(b) => b,
+        Err(e) => anyhow::bail!("Failed to find snapshot block for fetching chain context: {}", e),
+    };
+
+    let block_id = ethers::types::BlockId::Number(ethers::types::BlockNumber::Number(
+        snapshot_block.as_u64().into(),
+    ));
+
     let (chain_ids_list, raw_configs): (Vec<U256>, Vec<NetworkConfig>) = contract
         .get_all_network_configs()
+        .block(block_id)
         .call()
         .await
         .context("failed to fetch network list")?;
@@ -167,7 +181,7 @@ pub async fn tally_votes(
             for url in &chain.rpc_urls {
                 let provider = match Provider::<Http>::try_from(url) {
                     Ok(p) => p,
-                    Err(_) => continue,
+                    Err(e) => anyhow::bail!("Failed to connect to rpc provider: {}", e),
                 };
                 let client = Arc::new(provider);
                 let token = ERC20::new(chain.token_address, client.clone());
@@ -175,7 +189,7 @@ pub async fn tally_votes(
                 let snapshot_block =
                     match find_snapshot_block(client.clone(), start_timestamp).await {
                         Ok(b) => b,
-                        Err(_) => continue,
+                        Err(e) => anyhow::bail!("Failed to find snapshot block for voter balance: {}", e),
                     };
 
                 let block_id = ethers::types::BlockId::Number(ethers::types::BlockNumber::Number(
@@ -192,7 +206,7 @@ pub async fn tally_votes(
                         total_power += balance;
                         break;
                     }
-                    Err(_) => continue,
+                    Err(e) => anyhow::bail!("Failed to get voter balance: {} {}", voter, e),
                 }
             }
         }

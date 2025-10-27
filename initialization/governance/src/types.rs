@@ -2,10 +2,18 @@ use clap::Parser;
 use ethers::types::Bytes;
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct VoteResult {
     pub enclave_sig: Bytes,
     pub result_data: Bytes,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ApiResponse {
+    pub enclave_sig: Bytes,
+    pub result_data: Bytes,
+    pub in_progress: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Parser)]
