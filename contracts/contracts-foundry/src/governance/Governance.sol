@@ -50,6 +50,7 @@ contract Governance is
     mapping(address token => uint256 amount) public proposalDepositAmounts;
     mapping(bytes32 id => Proposal) proposals;
     mapping(bytes32 id => bool) public executionQueue;
+    mapping(bytes32 proposalId => bytes) public voteDecryptionKeys;
     mapping(address proposer => uint256 nonce) public proposerNonce;
 
     // Proposal Configuration
@@ -509,7 +510,10 @@ contract Governance is
             });
             proposalVoteInfo.voteCount++;
 
-            proposalVoteInfo.voteHash = sha256(abi.encode(proposalVoteInfo.voteHash, sha256(_encryptedVote)));
+            // Hash Vote struct
+            bytes32 voteEncryptedHash = sha256(_encryptedVote);
+            bytes32 currentVoteHash = sha256(abi.encode(msg.sender, delegator, delegatorChainId, voteEncryptedHash));
+            proposalVoteInfo.voteHash = sha256(abi.encode(proposalVoteInfo.voteHash, currentVoteHash));
 
             emit VoteSubmitted(_proposalId, msg.sender, delegator, delegatorChainId, voteIdx, _encryptedVote);
         }
@@ -561,6 +565,10 @@ contract Governance is
         require(
             _verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, message), Governance__InvalidEnclaveSignature()
         );
+
+        // Store vote decryption key
+        voteDecryptionKeys[proposalId] = _params.voteDecryptionKey;
+        emit VoteDecryptionKeyStored(proposalId, _params.voteDecryptionKey);
 
         // Handle the result
         VoteOutcome voteOutcome = _calcVoteResult(voteDecisionResult);
