@@ -562,8 +562,9 @@ contract Governance is
             )
         );
         bytes memory message = abi.encode(contractDataHash, proposalId, voteDecisionResult);
+        bytes32 messageHash = sha256(message);
         require(
-            _verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, message), Governance__InvalidEnclaveSignature()
+            _verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, messageHash), Governance__InvalidEnclaveSignature()
         );
 
         // Store vote decryption key
@@ -761,12 +762,12 @@ contract Governance is
 
     /// @dev Verifies the signature from an enclave using the provided public key
     /// @return isValid True if the signature is valid, false otherwise
-    function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory message)
+    function _verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes32 _messageHash)
         internal
         view
         returns (bool)
     {
-        return IGovernanceEnclave(governanceEnclave).verifyEnclaveSig(_enclavePubKey, _enclaveSig, message);
+        return IGovernanceEnclave(governanceEnclave).verifyEnclaveSig(_enclavePubKey, _enclaveSig, _messageHash);
     }
 
     /// @notice Verifies a KMS signature for enclave public key derivation

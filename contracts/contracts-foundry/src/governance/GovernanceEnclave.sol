@@ -406,16 +406,13 @@ contract GovernanceEnclave is
         return messageHash.recover(_kmsSig) == _pubKeyToAddress(kmsRootServerPubKey);
     }
 
-    function verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory message)
+    function verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes32 messageHash)
         external
         pure
         returns (bool)
     {
-        // Reconstruct the message to verify
-        bytes32 digest = sha256(message);
-
         // Recover the address from the signature
-        address recoveredAddress = digest.recover(_enclaveSig);
+        address recoveredAddress = messageHash.recover(_enclaveSig);
 
         // Convert the public key to address
         address enclaveAddress = _pubKeyToAddress(_enclavePubKey);

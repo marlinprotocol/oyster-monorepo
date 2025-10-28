@@ -10,7 +10,7 @@ interface IGovernanceEnclave {
         view
         returns (bool);
 
-    function verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes memory message)
+    function verifyEnclaveSig(bytes memory _enclavePubKey, bytes memory _enclaveSig, bytes32 _messageHash)
         external
         pure
         returns (bool);
