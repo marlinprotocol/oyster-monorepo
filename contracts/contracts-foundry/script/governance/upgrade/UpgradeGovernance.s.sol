@@ -11,7 +11,7 @@ import {HelperConfig} from "../HelperConfig.s.sol";
 
 /**
  * @notice Upgrades Governance-related contracts by deploying new implementations
- * @dev Reads existing proxy addresses from addresses/{chainId}/deployed.json and updates them
+ * @dev Reads existing proxy addresses from addresses/{chainId}/address.json and updates them
  * 
  * Usage:
  *   Upgrade all contracts:
@@ -65,7 +65,7 @@ contract UpgradeGovernanceBase is Script {
         string memory chainIdStr = vm.toString(block.chainid);
         string memory root = vm.projectRoot();
         string memory dirPath = string.concat(root, "/script/governance/addresses/", chainIdStr);
-        string memory filePath = string.concat(dirPath, "/deployed.json");
+        string memory filePath = string.concat(dirPath, "/address.json");
 
         // Create directory if it doesn't exist
         string[] memory mkdirCmd = new string[](3);
@@ -194,7 +194,7 @@ contract UpgradeGovernanceAll is UpgradeGovernanceBase {
  *      - More gas efficient than encoding voteEncrypted directly
  * 
  * USAGE:
- * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceContract --rpc-url <RPC_URL> --broadcast
+ * Arbitrum Sepolia: forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceContract --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast
  */
 contract UpgradeGovernanceContract is UpgradeGovernanceBase {
     function run() external {

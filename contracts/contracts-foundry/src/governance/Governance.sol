@@ -909,20 +909,14 @@ contract Governance is
         return proposals[_proposalId].executed;
     }
 
-    /// @notice Returns the image ID associated with a proposal
+    /// @notice Returns all hash values associated with a proposal
     /// @param _proposalId The unique identifier of the proposal
-    /// @return imageId The image ID used for enclave verification
-    function getProposalImageId(bytes32 _proposalId) external view returns (bytes32) {
-        require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
-        return proposals[_proposalId].imageId;
-    }
-
-    /// @notice Returns the network hash associated with a proposal
-    /// @param _proposalId The unique identifier of the proposal
+    /// @return imageId The image ID representing the enclave configuration
     /// @return networkHash The network hash representing the state of all supported chains
-    function getProposalNetworkHash(bytes32 _proposalId) external view returns (bytes32) {
+    /// @return contractConfigHash The contract configuration hash
+    function getProposalHashes(bytes32 _proposalId) external view returns (bytes32, bytes32, bytes32) {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
-        return proposals[_proposalId].networkHash;
+        return (proposals[_proposalId].imageId, proposals[_proposalId].networkHash, proposals[_proposalId].contractConfigHash);
     }
 
     /// @notice Returns the token lock information for a specific proposal

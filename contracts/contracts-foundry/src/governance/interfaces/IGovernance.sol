@@ -13,4 +13,7 @@ interface IGovernance is IGovernanceErrors, IGovernanceTypes, IGovernanceEvents 
     
     // Proposal timing config
     function getProposalTimingConfig() external view returns (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration);
+    
+    // Proposal hashes
+    function getProposalHashes(bytes32 _proposalId) external view returns (bytes32 imageId, bytes32 networkHash, bytes32 contractConfigHash);
 }
