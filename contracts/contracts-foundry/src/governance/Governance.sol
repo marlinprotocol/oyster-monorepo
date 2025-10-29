@@ -597,7 +597,7 @@ contract Governance is
 
         uint256 valueSum = _getValueSum(_proposalId);
         require(valueSum > 0, Governance__NoValueToRefund());
-        _refundValue(_proposalId, valueSum);
+        _refundETH(_proposalId, valueSum);
 
         // Clear the values array to prevent multiple refunds
         delete proposals[_proposalId].proposalInfo.values;
@@ -616,10 +616,10 @@ contract Governance is
             _unlockDepositAndRefund(_proposalId);
         } else if (_voteOutcome == VoteOutcome.Failed) {
             _unlockDepositAndRefund(_proposalId);
-            _refundValue(_proposalId, _getValueSum(_proposalId));
+            _refundETH(_proposalId, _getValueSum(_proposalId));
         } else if (_voteOutcome == VoteOutcome.Vetoed) {
             _slashDeposit(_proposalId);
-            _refundValue(_proposalId, _getValueSum(_proposalId));
+            _refundETH(_proposalId, _getValueSum(_proposalId));
         }
     }
 
@@ -632,12 +632,12 @@ contract Governance is
     }
 
     /// @dev Refunds the ETH value sent with the proposal to the proposer
-    function _refundValue(bytes32 _proposalId, uint256 _amount) internal {
+    function _refundETH(bytes32 _proposalId, uint256 _value) internal {
         // Note: This will not revert even if the proposer is a contract without a payable fallback or receive function
-        (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: _amount}("");
+        (bool ok,) = payable(proposals[_proposalId].proposalInfo.proposer).call{value: _value}("");
         ok;
 
-        emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, _amount);
+        emit ValueRefunded(_proposalId, proposals[_proposalId].proposalInfo.proposer, _value);
     }
 
     /// @dev Queues a passed proposal for execution
