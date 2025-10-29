@@ -126,7 +126,7 @@ mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_tes
 
 sleep 5
 
-grep CONFIG_FUSE_FS /boot/config-$(uname -r)
+cat /proc/filesystems | grep fuse
 
 # --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
