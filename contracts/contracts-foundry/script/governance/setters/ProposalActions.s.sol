@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
-import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {Governance} from "../../../src/governance/Governance.sol";
 import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTypes.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {GovernanceAddresses} from "../GovernanceAddresses.s.sol";
 
-contract ProposalActionsBase is Script {
+contract ProposalActionsBase is GovernanceAddresses {
     
     Governance public governance;
     address public depositTokenAddress;
     address public governanceTokenAddress;
 
     constructor() {
-        // Read deployed addresses from JSON
-        string memory chainIdStr = vm.toString(block.chainid);
-        string memory root = vm.projectRoot();
-        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, "/address.json");
-        string memory json = vm.readFile(filePath);
-        
-        address governanceProxy = vm.parseJsonAddress(json, ".Governance.proxy");
+        address governanceProxy = vm.parseJsonAddress(addressesJson, ".Governance.proxy");
         governance = Governance(governanceProxy);
-        depositTokenAddress = vm.parseJsonAddress(json, ".tokens.deposit");
-        governanceTokenAddress = vm.parseJsonAddress(json, ".tokens.governance");
+        depositTokenAddress = vm.parseJsonAddress(addressesJson, ".tokens.deposit");
+        governanceTokenAddress = vm.parseJsonAddress(addressesJson, ".tokens.governance");
         
         console.log("Loaded Governance proxy:", governanceProxy);
     }
@@ -82,15 +76,15 @@ contract ProposeSimple is ProposalActionsBase {
     }
 }
 
-// forge script script/governance/setters/ProposalActions.s.sol:VoteOnProposal --rpc-url <RPC_URL> --broadcast
+// Arbitrum Sepolia: forge script script/governance/setters/ProposalActions.s.sol:VoteOnProposal --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast
 contract VoteOnProposal is ProposalActionsBase {
     
-    bytes32 constant PROPOSAL_ID = 0xe1dfe1ab3b6a4a8db25211f8464de8d219a2f7eea5907f0f8d7befb561dc9153; // Proposal ID
-    bytes constant VOTE_ENCRYPTED = hex"5ebff42a9cdeb60d8c4b4f62cfead193a32cee4c4a6ffff062e2934f840c5f480fa810b63afbb8f56792c41da2023470e9"; // Encrypted vote data
+    bytes32 constant PROPOSAL_ID = 0xbb8b1531a5e00ba9520bdf1569e6ef22519a4728e7e4ae074d7516013d6147bf; // Proposal ID
+    bytes constant VOTE_ENCRYPTED = hex"49802f3b216c51f53b2b629b7ea3c7612bcac94b5857d68bdee07506bd29a46d7b5b4ee0f00527be2e404f1c3cbfbe5b4d"; // Encrypted vote data
     
     function run() external {
         // Get voter private key from .env
-        uint256 voterKey = vm.envUint("VOTER1_PRIVATE_KEY");
+        uint256 voterKey = vm.envUint("VOTER2_PRIVATE_KEY");
         address voter = vm.addr(voterKey);
         
         console.log("Voter address:", voter);
@@ -151,22 +145,28 @@ contract VoteWithDelegation is ProposalActionsBase {
 // forge script script/governance/setters/ProposalActions.s.sol:SubmitResult --rpc-url <RPC_URL> --broadcast
 contract SubmitResult is ProposalActionsBase {
     
-    bytes32 constant PROPOSAL_ID = 0x0000000000000000000000000000000000000000000000000000000000000000; // Update this
-    bytes constant KMS_SIG = hex""; // Update with valid signature
-    bytes constant ENCLAVE_PUB_KEY = hex""; // Update this
-    bytes constant ENCLAVE_SIG = hex""; // Update with valid signature
-    bytes constant RESULT_DATA = hex""; // Update with encoded result data
+    bytes32 constant PROPOSAL_ID = 0xbb8b1531a5e00ba9520bdf1569e6ef22519a4728e7e4ae074d7516013d6147bf;
+    bytes constant KMS_SIG = hex"0edc2fb19ee5289cd340de45837492db18ee2dcfeb1f239f054c83c61f7263e805d5ec44b3708e586e601288711c489b794409c9a956dffaa533ea065d0515801c";
+    bytes constant ENCLAVE_PUB_KEY = hex"e0f22b3ff7d8166bf594c5964f6941148ca104d20b815e991801c347f52f1a3afdb836ef320be83a1e8e75f63d226b8c015ab47b0b4416625a8136dac4ab5eef";
+    bytes constant ENCLAVE_SIG = hex"d891f4d3a7153337baee1690735fa6851e2fd2583e25267577dffecc55cf2c606f3e515795898b958f4efd8aeaad6a6fbe798754f7dcfaa65be601e29c94d4e81c";
+    bytes constant RESULT_DATA = hex"bb8b1531a5e00ba9520bdf1569e6ef22519a4728e7e4ae074d7516013d6147bf00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004985bfed478f8900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009d8c5221070f61523a4";
     
     function run() external {
+        // Get proposer private key from .env
+        uint256 proposerKey = vm.envUint("PROPOSER_PRIVATE_KEY");
+        address proposer = vm.addr(proposerKey);
+        
+        console.log("Submitter (proposer) address:", proposer);
+        
         IGovernanceTypes.SubmitResultInputParams memory params = IGovernanceTypes.SubmitResultInputParams({
             kmsSig: KMS_SIG,
             enclavePubKey: ENCLAVE_PUB_KEY,
             enclaveSig: ENCLAVE_SIG,
             resultData: RESULT_DATA,
-            voteDecryptionKey: hex"" // Empty vote decryption key for this example
+            voteDecryptionKey: hex"f004c7da556aa686267442958b1969f56fd4f03aa56c3797ff1ce2773a52067b"
         });
         
-        vm.startBroadcast();
+        vm.startBroadcast(proposerKey);
         governance.submitResult(params);
         vm.stopBroadcast();
         

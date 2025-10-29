@@ -12,7 +12,7 @@ contract GetGovernanceDelegationBase is Script {
     constructor() {
         string memory chainIdStr = vm.toString(block.chainid);
         string memory root = vm.projectRoot();
-        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, "/address.json");
+        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, ".json");
         string memory json = vm.readFile(filePath);
         
         address governanceDelegationProxy = vm.parseJsonAddress(json, ".GovernanceDelegation.proxy");

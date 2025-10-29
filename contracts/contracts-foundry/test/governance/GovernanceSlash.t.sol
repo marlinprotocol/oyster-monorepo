@@ -193,9 +193,10 @@ contract GovernanceSlashTest is GovernanceSetup {
         });
         
         // Get signed result from MockEnclave
+        (bytes32 imageId,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
-            governance.getProposalImageId(proposalId),
+            imageId,
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -289,9 +290,10 @@ contract GovernanceSlashTest is GovernanceSetup {
         });
         
         // Get signed result from MockEnclave
+        (bytes32 imageId2,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
-            governance.getProposalImageId(proposalId),
+            imageId2,
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,
@@ -401,9 +403,10 @@ contract GovernanceSlashTest is GovernanceSetup {
             noWithVeto: 0.05 * 1e18 // 5%
         });
         
+        (bytes32 imageId3,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
-            governance.getProposalImageId(proposalId),
+            imageId3,
             votePercentage,
             address(governance),
             timeInfo.proposedTimestamp,

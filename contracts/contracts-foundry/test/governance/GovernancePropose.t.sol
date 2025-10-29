@@ -675,7 +675,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
     function test_getProposalImageId_ReturnsImageId() public {
         bytes32 testProposalId = _createSimpleProposal();
-        bytes32 imageId = governance.getProposalImageId(testProposalId);
+        (bytes32 imageId,,) = governance.getProposalHashes(testProposalId);
         bytes32 expectedImageId = governanceEnclave.getImageId();
         assertEq(imageId, expectedImageId, "Image ID should match");
     }
@@ -683,12 +683,12 @@ contract GovernanceProposeTest is GovernanceSetup {
     function test_getProposalImageId_RevertsForNonExistentProposal() public {
         bytes32 nonExistentId = keccak256("non-existent");
         vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
-        governance.getProposalImageId(nonExistentId);
+        governance.getProposalHashes(nonExistentId);
     }
 
     function test_getProposalNetworkHash_ReturnsNetworkHash() public {
         bytes32 testProposalId = _createSimpleProposal();
-        bytes32 networkHash = governance.getProposalNetworkHash(testProposalId);
+        (,bytes32 networkHash,) = governance.getProposalHashes(testProposalId);
         bytes32 expectedNetworkHash = governanceEnclave.getNetworkHash();
         assertEq(networkHash, expectedNetworkHash, "Network hash should match");
     }
@@ -696,7 +696,7 @@ contract GovernanceProposeTest is GovernanceSetup {
     function test_getProposalNetworkHash_RevertsForNonExistentProposal() public {
         bytes32 nonExistentId = keccak256("non-existent");
         vm.expectRevert(abi.encodeWithSignature("Governance__ProposalDoesNotExist()"));
-        governance.getProposalNetworkHash(nonExistentId);
+        governance.getProposalHashes(nonExistentId);
     }
 
     function test_getTokenLockInfo_ReturnsCorrectInfo() public {

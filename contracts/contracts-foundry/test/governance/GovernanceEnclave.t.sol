@@ -614,8 +614,9 @@ contract GovernanceEnclaveTest is Test {
     function test_verifyEnclaveSig_Valid() public view {
         bytes memory message = abi.encode("test message", uint256(12345));
         bytes memory enclaveSig = _signWithEnclaveKey(message);
+        bytes32 messageHash = keccak256(message);
 
-        assertTrue(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, message));
+        assertTrue(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, messageHash));
     }
 
     function test_verifyEnclaveSig_WrongSigner() public view {
@@ -626,8 +627,9 @@ contract GovernanceEnclaveTest is Test {
         bytes32 digest = sha256(message);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPrivKey, digest);
         bytes memory wrongSig = abi.encodePacked(r, s, v);
+        bytes32 messageHash = keccak256(message);
 
-        assertFalse(governanceEnclave.verifyEnclaveSig(enclavePubKey, wrongSig, message));
+        assertFalse(governanceEnclave.verifyEnclaveSig(enclavePubKey, wrongSig, messageHash));
     }
 
     function test_verifyEnclaveSig_WrongMessage() public view {
@@ -636,20 +638,23 @@ contract GovernanceEnclaveTest is Test {
 
         // Try to verify with a different message
         bytes memory differentMessage = abi.encode("different message", uint256(67890));
-        assertFalse(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, differentMessage));
+        bytes32 differentMessageHash = keccak256(differentMessage);
+        assertFalse(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, differentMessageHash));
     }
 
     function test_verifyEnclaveSig_WrongPublicKey() public view {
         bytes memory message = abi.encode("test message", uint256(12345));
         bytes memory enclaveSig = _signWithEnclaveKey(message);
         bytes memory wrongPubKey = hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        bytes32 messageHash = keccak256(message);
 
-        assertFalse(governanceEnclave.verifyEnclaveSig(wrongPubKey, enclaveSig, message));
+        assertFalse(governanceEnclave.verifyEnclaveSig(wrongPubKey, enclaveSig, messageHash));
     }
 
     function test_verifyEnclaveSig_Fuzz(bytes memory message) public view {
         bytes memory enclaveSig = _signWithEnclaveKey(message);
-        assertTrue(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, message));
+        bytes32 messageHash = keccak256(message);
+        assertTrue(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, messageHash));
     }
 }
 

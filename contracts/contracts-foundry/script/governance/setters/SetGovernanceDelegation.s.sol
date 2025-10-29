@@ -1,22 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.29;
 
-import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {GovernanceDelegation} from "../../../src/governance/GovernanceDelegation.sol";
+import {GovernanceAddresses} from "../GovernanceAddresses.s.sol";
 
-contract SetGovernanceDelegationBase is Script {
+contract SetGovernanceDelegationBase is GovernanceAddresses {
     
     GovernanceDelegation public governanceDelegation;
 
     constructor() {
-        // Read deployed addresses from JSON
-        string memory chainIdStr = vm.toString(block.chainid);
-        string memory root = vm.projectRoot();
-        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, "/address.json");
-        string memory json = vm.readFile(filePath);
-        
-        address governanceDelegationProxy = vm.parseJsonAddress(json, ".GovernanceDelegation.proxy");
+        address governanceDelegationProxy = vm.parseJsonAddress(addressesJson, ".GovernanceDelegation.proxy");
         governanceDelegation = GovernanceDelegation(governanceDelegationProxy);
         
         console.log("Loaded GovernanceDelegation proxy:", governanceDelegationProxy);

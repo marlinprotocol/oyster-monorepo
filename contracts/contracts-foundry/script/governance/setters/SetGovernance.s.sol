@@ -44,7 +44,7 @@ contract SetTokenLockAmount is SetGovernanceBase {
 contract SetProposalTimingConfig is SetGovernanceBase {
     
     uint256 constant VOTE_ACTIVATION_DELAY = 10 seconds;  // 10 seconds
-    uint256 constant VOTE_DURATION = 10 minutes;          // 10 minutes
+    uint256 constant VOTE_DURATION = 5 minutes;           // 5 minutes
     uint256 constant PROPOSAL_DURATION = 5 hours + 30 minutes; // 5.5 hours
     
     function run() external {

@@ -4,19 +4,13 @@ pragma solidity 0.8.29;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {GovernanceEnclave} from "../../../src/governance/GovernanceEnclave.sol";
+import {GovernanceAddresses} from "../GovernanceAddresses.s.sol";
 
-contract SetGovernanceEnclaveBase is Script {
+contract SetGovernanceEnclaveBase is GovernanceAddresses {
     
     GovernanceEnclave public governanceEnclave;
-
     constructor() {
-        // Read deployed addresses from JSON
-        string memory chainIdStr = vm.toString(block.chainid);
-        string memory root = vm.projectRoot();
-        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, "/address.json");
-        string memory json = vm.readFile(filePath);
-        
-        address governanceEnclaveProxy = vm.parseJsonAddress(json, ".GovernanceEnclave.proxy");
+        address governanceEnclaveProxy = vm.parseJsonAddress(addressesJson, ".GovernanceEnclave.proxy");
         governanceEnclave = GovernanceEnclave(governanceEnclaveProxy);
         
         console.log("Loaded GovernanceEnclave proxy:", governanceEnclaveProxy);

@@ -4,6 +4,7 @@ pragma solidity 0.8.29;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {Governance} from "../../../src/governance/Governance.sol";
+import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTypes.sol";
 
 contract GetGovernanceBase is Script {
     
@@ -12,7 +13,7 @@ contract GetGovernanceBase is Script {
     constructor() {
         string memory chainIdStr = vm.toString(block.chainid);
         string memory root = vm.projectRoot();
-        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, "/address.json");
+        string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, ".json");
         string memory json = vm.readFile(filePath);
         
         address governanceProxy = vm.parseJsonAddress(json, ".Governance.proxy");
@@ -162,6 +163,47 @@ contract GetPaused is GetGovernanceBase {
     function run() external view {
         bool isPaused = governance.paused();
         console.log("Governance paused:", isPaused);
+    }
+}
+
+// forge script script/governance/getters/GetGovernance.s.sol:GetProposalHashes --rpc-url <RPC_URL> -vvv
+contract GetProposalHashes is GetGovernanceBase {
+    
+    bytes32 constant PROPOSAL_ID = 0xbb8b1531a5e00ba9520bdf1569e6ef22519a4728e7e4ae074d7516013d6147bf;
+    
+    function run() external view {
+        console.log("=== Proposal Hashes Debug ===");
+        console.log("Proposal ID:");
+        console.logBytes32(PROPOSAL_ID);
+        
+        // Get proposal hashes
+        (bytes32 imageId, bytes32 networkHash, bytes32 contractConfigHash) = governance.getProposalHashes(PROPOSAL_ID);
+        
+        console.log("Image ID:");
+        console.logBytes32(imageId);
+        console.log("Network Hash:");
+        console.logBytes32(networkHash);
+        console.log("Contract Config Hash:");
+        console.logBytes32(contractConfigHash);
+        
+        // Get proposal timing info
+        (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) = governance.getProposalTimingConfig();
+        console.log("Vote Activation Delay:", voteActivationDelay);
+        console.log("Vote Duration:", voteDuration);
+        console.log("Proposal Duration:", proposalDuration);
+        
+        // Get proposal time info
+        IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(PROPOSAL_ID);
+        console.log("Proposed Timestamp:");
+        console.log(timeInfo.proposedTimestamp);
+        console.log("Vote Activation Timestamp:");
+        console.log(timeInfo.voteActivationTimestamp);
+        console.log("Vote Deadline Timestamp:");
+        console.log(timeInfo.voteDeadlineTimestamp);
+        console.log("Proposal Deadline Timestamp:");
+        console.log(timeInfo.proposalDeadlineTimestamp);
+        
+        console.log("================================");
     }
 }
 

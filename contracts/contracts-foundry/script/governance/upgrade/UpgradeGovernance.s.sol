@@ -215,7 +215,7 @@ contract UpgradeGovernanceContract is UpgradeGovernanceBase {
  * @notice Upgrade GovernanceEnclave contract only
  * 
  * USAGE:
- * forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceEnclaveContract --rpc-url <RPC_URL> --broadcast
+ * Arbitrum Sepolia: forge script script/governance/upgrade/UpgradeGovernance.s.sol:UpgradeGovernanceEnclaveContract --rpc-url $ARBITRUM_SEPOLIA_RPC_URL --broadcast
  */
 contract UpgradeGovernanceEnclaveContract is UpgradeGovernanceBase {
     function run() external {
