@@ -45,6 +45,7 @@ interface IGovernanceEvents is IGovernanceTypes {
 
     event ProposalCreated(
         bytes32 indexed proposalId,
+        address propose,
         uint256 nonce,
         address[] targets,
         uint256[] values,

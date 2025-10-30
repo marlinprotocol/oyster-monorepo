@@ -364,9 +364,11 @@ contract Governance is
             proposalId, _params.targets, _params.values, _params.calldatas, _params.title, _params.description
         );
 
+        address _msgSender = _msgSender();
         emit ProposalCreated(
             proposalId,
-            proposerNonce[msg.sender],
+            _msgSender,
+            proposerNonce[_msgSender],
             _params.targets,
             _params.values,
             _params.calldatas,
@@ -375,7 +377,7 @@ contract Governance is
             proposals[proposalId].proposalTimeInfo
         );
 
-        proposerNonce[msg.sender] += 1;
+        proposerNonce[_msgSender] += 1;
         return proposalId;
     }
 
