@@ -170,8 +170,9 @@ cat /app/pass.txt
 # gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
 export CRYFS_FRONTEND=noninteractive
+export CRYFS_PASSWORD="test123"
 
-echo "test124" | cryfs $ENCRYPTED_DIR $DECRYPTED_DIR
+cryfs $ENCRYPTED_DIR $DECRYPTED_DIR
 
 sleep 5
 
