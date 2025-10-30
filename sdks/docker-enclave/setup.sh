@@ -176,7 +176,7 @@ echo "gocryptfs mounting done"
 
 df -h
 
-echo "hello world" >> /app/decrypted/test.txt
+echo "Hello from the other sideeeeeeeeeeeeeeeeeeee" >> /app/decrypted/test.txt
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
