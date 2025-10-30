@@ -122,7 +122,7 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
 fi
 
 echo "Mounting remote nfs directory to /app/nfs/"
-mount -vvv -t nfs4 -o lock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 5
 
@@ -171,6 +171,7 @@ sleep 2
 
 df -h
 
+ls -l /app/decrypted
 echo "Hello from the other sideeeeeeeeeeeeeeeeeeee" > /app/decrypted/test.txt
 
 ls /app/decrypted
