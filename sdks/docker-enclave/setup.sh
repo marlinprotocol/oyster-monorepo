@@ -171,6 +171,10 @@ sleep 2
 
 df -h
 
+sleep 3
+
+df -h
+
 ls -l /app/decrypted
 echo "Hello from the other sideeeeeeeeeeeeeeeeeeee" > /app/decrypted/test.txt
 
