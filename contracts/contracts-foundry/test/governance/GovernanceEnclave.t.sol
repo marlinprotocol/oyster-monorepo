@@ -97,7 +97,7 @@ contract GovernanceEnclaveTest is Test {
 
     /// @dev Helper function to sign a message with enclave private key
     function _signWithEnclaveKey(bytes memory message) internal view returns (bytes memory) {
-        bytes32 digest = sha256(message);
+        bytes32 digest = keccak256(message);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(enclavePrivKey, digest);
         return abi.encodePacked(r, s, v);
     }
