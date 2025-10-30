@@ -169,7 +169,7 @@ echo "[INFO] gocryptfs init done"
 echo "[INFO] Mounting gocryptfs filesystem..."
 gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
-sleep 10
+sleep 5
 
 df -h
 
