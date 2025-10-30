@@ -174,6 +174,8 @@ fi
 
 echo "gocryptfs mounting done"
 
+df -h
+
 echo "hello world" >> /app/decrypted/test.txt
 
 # Start the Docker daemon
