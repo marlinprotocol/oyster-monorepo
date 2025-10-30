@@ -169,7 +169,9 @@ cat /app/pass.txt
 # echo "[INFO] Mounting gocryptfs filesystem..."
 # gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
-cryfs --help
+export CRYFS_FRONTEND=noninteractive
+
+echo "test124" | cryfs $ENCRYPTED_DIR $DECRYPTED_DIR
 
 sleep 5
 
