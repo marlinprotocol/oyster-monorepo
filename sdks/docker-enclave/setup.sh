@@ -171,6 +171,7 @@ cat /app/pass.txt
 
 export CRYFS_FRONTEND=noninteractive
 export CRYFS_PASSWORD="test123"
+export HOME=/app
 
 cryfs /app/nfs-encrypted /app/decrypted
 
