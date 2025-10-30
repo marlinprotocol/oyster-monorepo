@@ -164,20 +164,14 @@ fi
 echo "[INFO] gocryptfs init done"
 
 # --- Mount filesystem ---
-if mountpoint -q "$DECRYPTED_DIR"; then
-  echo "[INFO] Already mounted: $DECRYPTED_DIR"
-else
-  echo "[INFO] Mounting gocryptfs filesystem..."
-  gocryptfs -passfile $passfile -speed "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
-  echo "[INFO] Mount successful at $DECRYPTED_DIR"
-fi
+echo "[INFO] Mounting gocryptfs filesystem..."
+gocryptfs -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
-echo "gocryptfs mounting done"
+sleep 2
 
 df -h
 
 echo "Hello from the other sideeeeeeeeeeeeeeeeeeee" > /app/decrypted/test.txt
-echo "Letsgoooo" > /app/decrypted/lg.txt
 
 ls /app/decrypted
 
