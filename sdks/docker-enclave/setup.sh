@@ -174,6 +174,8 @@ fi
 
 echo "gocryptfs mounting done"
 
+mkdir -p /app/decrypted/data
+
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
 
