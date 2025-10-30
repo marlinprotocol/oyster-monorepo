@@ -12,9 +12,15 @@ solc_version = "0.8.29"
 via_ir = true
 # skip = ["script/**"]
 
+[fuzz]
+runs = 1000
+
 [etherscan]
-arbitrum_sepolia = { key = "${ARBITRUM_SEPOLIA_API_KEY}" }
+arbitrum_sepolia = { key = "${ETHERSCAN_API_KEY}" }
 sepolia = { key = "${ETHERSCAN_API_KEY}" }
 
+[rpc_endpoints]
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
+sepolia = "${ETHEREUM_SEPOLIA_RPC_URL}"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
