@@ -175,11 +175,12 @@ sleep 3
 
 df -h
 
-ls -l /app/decrypted
+mkdir -p /app/decrypted/data
 touch /app/decrypted/data/test.txt
 echo "Hello world!" > /app/decrypted/data/test.txt
 
 ls /app/decrypted
+ls /app/decrypted/data
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
