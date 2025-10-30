@@ -172,7 +172,7 @@ cat /app/pass.txt
 export CRYFS_FRONTEND=noninteractive
 export CRYFS_PASSWORD="test123"
 
-cryfs $ENCRYPTED_DIR $DECRYPTED_DIR
+cryfs /app/nfs-encrypted /app/decrypted
 
 sleep 5
 
