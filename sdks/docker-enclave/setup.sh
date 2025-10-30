@@ -177,7 +177,7 @@ sleep 5
 
 df -h
 
-echo "Hello world!" >> /app/decrypted/test.txt
+# echo "Hi there" >> /app/decrypted/test.txt
 
 ls /app/decrypted
 
