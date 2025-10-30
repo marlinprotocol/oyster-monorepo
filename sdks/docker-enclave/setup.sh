@@ -168,14 +168,13 @@ if mountpoint -q "$DECRYPTED_DIR"; then
   echo "[INFO] Already mounted: $DECRYPTED_DIR"
 else
   echo "[INFO] Mounting gocryptfs filesystem..."
-  gocryptfs -daemonize "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -passfile $passfile
+  gocryptfs "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -passfile $passfile
   echo "[INFO] Mount successful at $DECRYPTED_DIR"
 fi
 
 echo "gocryptfs mounting done"
 
 echo "hello world" > /app/decrypted/test.txt
-
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
