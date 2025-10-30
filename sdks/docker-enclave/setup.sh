@@ -167,7 +167,7 @@ echo "[INFO] gocryptfs init done"
 
 # --- Mount filesystem ---
 echo "[INFO] Mounting gocryptfs filesystem..."
-gocryptfs -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
+gocryptfs -fusedebug -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
 sleep 2
 
