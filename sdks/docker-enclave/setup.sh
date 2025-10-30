@@ -150,9 +150,6 @@ echo "Derived master key (hex): $key_hex"
 # write without a trailing newline
 printf '%s' "$key_hex" > $passfile
 
-cat /app/pass.txt
-
-
 # if [ ! -f "$CONF_FILE" ]; then
 #   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
   
@@ -170,10 +167,9 @@ cat /app/pass.txt
 # gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
 export CRYFS_FRONTEND=noninteractive
-export CRYFS_PASSWORD="test123"
 export HOME=/app
 
-cryfs /app/nfs-encrypted /app/decrypted
+echo "test123" | cryfs /app/nfs-encrypted /app/decrypted
 
 sleep 5
 
