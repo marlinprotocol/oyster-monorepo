@@ -7,4 +7,4 @@ services:
     init: true
     network_mode: host
     volumes:
-      - /app/decrypted/data:/app/nfs/
+      - /app/decrypted:/app/nfs/
