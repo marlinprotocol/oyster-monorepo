@@ -150,6 +150,8 @@ echo "Derived master key (hex): $key_hex"
 # write without a trailing newline
 printf '%s' "$key_hex" > $passfile
 
+cat /app/pass.txt
+
 
 if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
@@ -171,16 +173,9 @@ sleep 2
 
 df -h
 
-sleep 3
-
-df -h
-
-mkdir -p /app/decrypted/data
-touch /app/decrypted/data/test.txt
-echo "Hello world!" > /app/decrypted/data/test.txt
+echo "Hello world!" > /app/decrypted/test.txt
 
 ls /app/decrypted
-ls /app/decrypted/data
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
