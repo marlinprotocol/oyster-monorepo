@@ -176,7 +176,8 @@ sleep 3
 df -h
 
 ls -l /app/decrypted
-touch /app/decrypted/test.txt
+touch /app/decrypted/data/test.txt
+echo "Hello world!" > /app/decrypted/data/test.txt
 
 ls /app/decrypted
 
