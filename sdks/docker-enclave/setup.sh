@@ -168,7 +168,7 @@ if mountpoint -q "$DECRYPTED_DIR"; then
   echo "[INFO] Already mounted: $DECRYPTED_DIR"
 else
   echo "[INFO] Mounting gocryptfs filesystem..."
-  gocryptfs "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -passfile $passfile
+  gocryptfs -daemonize "$ENCRYPTED_DIR" "$DECRYPTED_DIR" -passfile $passfile
   echo "[INFO] Mount successful at $DECRYPTED_DIR"
 fi
 
