@@ -104,15 +104,6 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
-# # Fetch raw binary key from your endpoint
-# key_bin=$(curl -s http://127.0.0.1:1100/derive/secp256k1?path=nfstest)
-
-# # Convert binary to hex
-# key_hex=$(echo -n "$key_bin" | xxd -p | tr -d '\n')
-
-# # Print or store master key
-# echo "Derived master key (hex): $key_hex"
-
 # process init params into their constituent files
 /app/init-params-decoder
 
@@ -121,16 +112,16 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
 fi
 
+# --- NFS + encfs setup ---
+
 echo "Mounting remote nfs directory to /app/nfs/"
 mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 5
 
-# --- Configuration ---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 ENCRYPTED_DIR="/app/nfs-encrypted"
 DECRYPTED_DIR="/app/decrypted"
-CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
 passfile="/app/pass.txt"
 
 echo "[INFO] Deriving master key from enclave..."
@@ -145,10 +136,11 @@ if [ ${#key_hex} -ne 64 ]; then
   echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
 fi
 
-echo "Derived master key (hex): $key_hex"
-
 # write without a trailing newline
-printf '%s' "$key_hex" > $passfile
+printf '%s' "$key_hex" > /app/pass.txt
+
+# encfs mount
+echo "Initializing encryption for the mounted NFS directory using encfs..."
 
 echo "p" | encfs --extpass='cat /app/pass.txt' "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
@@ -156,9 +148,7 @@ sleep 5
 
 df -h
 
-echo "Hello world!" >> /app/decrypted/test.txt
-
-ls /app/decrypted
+echo "encfs encryption enabled"
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
