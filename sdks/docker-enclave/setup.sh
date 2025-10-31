@@ -150,30 +150,30 @@ echo "Derived master key (hex): $key_hex"
 # write without a trailing newline
 printf '%s' "$key_hex" > $passfile
 
-cat /app/pass.txt
 
-
-if [ ! -f "$CONF_FILE" ]; then
-  echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
+# if [ ! -f "$CONF_FILE" ]; then
+#   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
   
-  # Initialize with temporary password to create config
-  gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
+#   # Initialize with temporary password to create config
+#   gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
 
-else
-  echo "[INFO] Existing config found. Skipping initialization."
-fi
+# else
+#   echo "[INFO] Existing config found. Skipping initialization."
+# fi
 
-echo "[INFO] gocryptfs init done"
+# echo "[INFO] gocryptfs init done"
 
-# --- Mount filesystem ---
-echo "[INFO] Mounting gocryptfs filesystem..."
-gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
+# # --- Mount filesystem ---
+# echo "[INFO] Mounting gocryptfs filesystem..."
+# gocryptfs -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
+
+echo "p" | encfs --extpass='cat /app/pass.txt' "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
 
 sleep 5
 
 df -h
 
-echo "Hello world!" >> /app/nfs-encrypted/test.txt
+echo "Hello world!" >> /app/decrypted/test.txt
 
 ls /app/decrypted
 
