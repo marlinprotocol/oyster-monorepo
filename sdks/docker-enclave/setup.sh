@@ -124,6 +124,8 @@ fi
 echo "Mounting remote nfs directory to /app/nfs/"
 mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
+echo "NFS test!" >> /app/nfs-encrypted/nfs-test.txt
+
 sleep 5
 
 # --- Configuration ---
