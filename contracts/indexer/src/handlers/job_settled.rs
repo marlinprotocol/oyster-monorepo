@@ -2,10 +2,12 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::settlement_history;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -21,16 +23,27 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     let id = log.topics()[1].encode_hex_with_prefix();
     let (amount, timestamp) = <(U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
-    let (amount, timestamp) = (
+    let (amount, timestamp, timestamp_epoch) = (
         BigDecimal::from_str(&amount.to_string())?,
         std::time::SystemTime::UNIX_EPOCH
             + std::time::Duration::from_secs(timestamp.into_limbs()[0]),
+        BigDecimal::from_str(&timestamp.to_string())?,
     );
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, ?amount, ?timestamp, "settling job");
+    info!(
+        id,
+        ?amount,
+        ?timestamp_epoch,
+        ?timestamp,
+        ?block,
+        "settling job"
+    );
 
     // target sql:
     // UPDATE jobs
@@ -59,6 +72,16 @@ pub fn handle_job_settled(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we error out for now, can consider just moving on
         return Err(anyhow::anyhow!("could not find job"));
     }
+
+    diesel::insert_into(settlement_history::table)
+        .values((
+            settlement_history::id.eq(&id),
+            settlement_history::amount.eq(&amount),
+            settlement_history::timestamp.eq(timestamp_epoch),
+            settlement_history::block.eq(block as i64),
+        ))
+        .execute(conn)
+        .context("failed to insert settlement history")?;
 
     info!(id, ?amount, ?timestamp, "settled job");
 

@@ -1,10 +1,12 @@
 use std::str::FromStr;
 
 use crate::schema::jobs;
+use crate::schema::rate_revisions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -26,11 +28,14 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
     let id = log.topics()[1].encode_hex_with_prefix();
     let rate = U256::abi_decode(&log.data().data, true)?;
     let rate = BigDecimal::from_str(&rate.to_string())?;
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
 
-    info!(id, ?rate, "finalizing job rate revision");
+    info!(id, ?rate, ?block, "finalizing job rate revision");
 
     // target sql:
     // UPDATE jobs
@@ -54,6 +59,18 @@ pub fn handle_job_revise_rate_finalized(conn: &mut PgConnection, log: Log) -> Re
         // we error out for now, can consider just moving on
         return Err(anyhow::anyhow!("could not find job"));
     }
+
+    // target sql:
+    // INSERT INTO rate_revisions (job_id, value, block)
+    // VALUES ("<id>", "<rate>", "<block>");
+    diesel::insert_into(rate_revisions::table)
+        .values((
+            rate_revisions::job_id.eq(&id),
+            rate_revisions::value.eq(&rate),
+            rate_revisions::block.eq(block as i64),
+        ))
+        .execute(conn)
+        .context("failed to insert rate revision")?;
 
     info!(id, ?rate, "finalized job rate revision");
 
@@ -241,6 +258,18 @@ mod tests {
             ])
         );
 
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            rate_revisions::table
+                .select(rate_revisions::all_columns)
+                .load(conn),
+            Ok(vec![(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(5),
+                42i64,
+            )])
+        );
+
         Ok(())
     }
 
@@ -365,6 +394,8 @@ mod tests {
                 false,
             )])
         );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
@@ -536,6 +567,8 @@ mod tests {
                 )
             ])
         );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
