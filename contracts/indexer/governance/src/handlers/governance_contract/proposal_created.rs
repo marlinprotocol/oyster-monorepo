@@ -35,18 +35,31 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
         targets,
         values,
         calldatas,
-        title,
-        description,
+        title_bytes,
+        description_bytes,
         (start_timestamp, vote_activation_timestamp, vote_deadline, proposal_deadline),
     ) = <(
         U256,
         Vec<Address>,
         Vec<U256>,
         Vec<Bytes>,
-        String,
-        String,
+        Bytes,
+        Bytes,
         (U256, U256, U256, U256),
     )>::abi_decode_sequence(&log.data().data, true)?;
+
+    // Convert bytes -> UTF-8 and strip NULs and control chars
+    fn sanitize_bytes_to_string(input: &Bytes) -> String {
+        let s = String::from_utf8_lossy(input).into_owned();
+        s.chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .collect::<String>()
+            .trim_matches('\0')
+            .to_string()
+    }
+
+    let title = sanitize_bytes_to_string(&title_bytes);
+    let description = sanitize_bytes_to_string(&description_bytes);
     let (nonce, start_timestamp, proposal_deadline, vote_activation_timestamp, vote_deadline) = (
         BigDecimal::from_str(&nonce.to_string())?,
         BigDecimal::from_str(&start_timestamp.to_string())?,
