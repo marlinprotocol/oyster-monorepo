@@ -94,6 +94,10 @@ contract HelperConfig is Script {
     function getGovernanceTokenAddress() public pure virtual returns (address) {
         revert("HelperConfig: Must be overridden");
     }
+
+    function getAdmin() public pure virtual returns (address) {
+        revert("HelperConfig: Must be overridden");
+    }
 }
 
 /**
@@ -196,6 +200,10 @@ contract ArbitrumSepoliaConfig is HelperConfig {
     function getGovernanceTokenAddress() public pure override returns (address) {
         return GOVERNANCE_TOKEN_ARBITRUM_SEPOLIA;
     }
+
+    function getAdmin() public pure override returns (address) {
+        return ADMIN;
+    }
 }
 
 /**
@@ -297,6 +305,10 @@ contract EthereumSepoliaConfig is HelperConfig {
 
     function getGovernanceTokenAddress() public pure override returns (address) {
         return GOVERNANCE_TOKEN_ETHEREUM_SEPOLIA;
+    }
+
+    function getAdmin() public pure override returns (address) {
+        return ADMIN;
     }
 }
 
