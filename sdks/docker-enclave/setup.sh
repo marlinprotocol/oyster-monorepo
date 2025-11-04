@@ -167,7 +167,7 @@ echo "[INFO] gocryptfs init done"
 
 # --- Mount filesystem ---
 echo "[INFO] Mounting gocryptfs filesystem..."
-gocryptfs -fg -debug -passfile $passfile "$ENCRYPTED_DIR" "$DECRYPTED_DIR" 
+/app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
 
 sleep 5
 
