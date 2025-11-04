@@ -121,6 +121,8 @@ sleep 5
 
 ls /app
 
+ls /app/init-params
+
 # ---Configuration for fetching KMS key---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 ENCRYPTED_DIR="/app/nfs-encrypted"
