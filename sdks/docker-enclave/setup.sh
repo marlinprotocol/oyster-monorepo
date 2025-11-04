@@ -126,11 +126,11 @@ DECRYPTED_DIR="/app/decrypted"
 CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
 passfile="/app/pass.txt"
 
-echo "[INFO] Deriving master key from enclave..."
+echo "[INFO] Deriving hex key from enclave..."
 key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
 
 if [ -z "$key_hex" ]; then
-  echo "[ERROR] Failed to derive master key from enclave service" >&2
+  echo "[ERROR] Failed to derive hex key from enclave service" >&2
   exit 1
 fi
 
@@ -156,7 +156,9 @@ echo "[INFO] gocryptfs init done"
 
 #--extracting the master key
 
-gocryptfs-xray -dumpmasterkey /app/nfs-encrypted/gocryptfs.conf
+echo "[INFO] extracting the master key with xray"
+
+echo "09f493b3ebc6cfc22b372eff673a887f9586a01d761914db2013548a627bad72" | gocryptfs-xray -dumpmasterkey /app/nfs-encrypted/gocryptfs.conf
 
 # --- mount with gocryptfs using supervisord---
 echo "[INFO] Mounting gocryptfs filesystem..."
