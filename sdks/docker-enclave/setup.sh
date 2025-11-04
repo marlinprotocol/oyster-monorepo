@@ -115,7 +115,7 @@ fi
 ## NFS+goCryptfs setup for persistent storage
 
 echo "Mounting remote nfs directory to /app/nfs/"
-mount -t nfs4 -o lock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+mount -t nfs4 -o lock,noresvport,vers=4.2 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 5
 
