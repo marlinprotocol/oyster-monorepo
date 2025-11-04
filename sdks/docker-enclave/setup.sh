@@ -114,15 +114,17 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
-echo "Mounting remote nfs directory to /app/nfs/"
+echo "Mounting remote nfs directory to /app/nfs-encrypted"
 mount -t nfs4 -o lock,noresvport,vers=4.2 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 5
 
+ls /app
+
 # ---Configuration for fetching KMS key---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 ENCRYPTED_DIR="/app/nfs-encrypted"
-DECRYPTED_DIR="/app/decrypted"
+# DECRYPTED_DIR="/app/decrypted"
 CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
 passfile="/app/pass.txt"
 
@@ -138,7 +140,7 @@ if [ ${#key_hex} -ne 64 ]; then
   echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
 fi
 
-echo "Derived master key (hex): $key_hex"
+echo "Derived key (hex): $key_hex"
 
 printf '%s' "$key_hex" > $passfile
 
@@ -153,12 +155,6 @@ else
 fi
 
 echo "[INFO] gocryptfs init done"
-
-#--extracting the master key
-
-echo "[INFO] extracting the master key with xray"
-
-echo "09f493b3ebc6cfc22b372eff673a887f9586a01d761914db2013548a627bad72" | gocryptfs-xray -dumpmasterkey /app/nfs-encrypted/gocryptfs.conf
 
 # --- mount with gocryptfs using supervisord---
 echo "[INFO] Mounting gocryptfs filesystem..."
