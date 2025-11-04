@@ -104,15 +104,6 @@ sleep 2
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 sleep 10
 
-# # Fetch raw binary key from your endpoint
-# key_bin=$(curl -s http://127.0.0.1:1100/derive/secp256k1?path=nfstest)
-
-# # Convert binary to hex
-# key_hex=$(echo -n "$key_bin" | xxd -p | tr -d '\n')
-
-# # Print or store master key
-# echo "Derived master key (hex): $key_hex"
-
 # process init params into their constituent files
 /app/init-params-decoder
 
@@ -121,12 +112,14 @@ if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.
     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
 fi
 
+## NFS+goCryptfs setup for persistent storage
+
 echo "Mounting remote nfs directory to /app/nfs/"
-mount -vvv -t nfs4 -o nolock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+mount -t nfs4 -o lock,noresvport,vers=4 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
 
 sleep 5
 
-# --- Configuration ---
+# ---Configuration for fetching KMS key---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
 ENCRYPTED_DIR="/app/nfs-encrypted"
 DECRYPTED_DIR="/app/decrypted"
@@ -147,11 +140,7 @@ fi
 
 echo "Derived master key (hex): $key_hex"
 
-# write without a trailing newline
 printf '%s' "$key_hex" > $passfile
-
-cat /app/pass.txt
-
 
 if [ ! -f "$CONF_FILE" ]; then
   echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
@@ -165,15 +154,11 @@ fi
 
 echo "[INFO] gocryptfs init done"
 
-# --- Mount filesystem ---
+# --- mount with gocryptfs using supervisord---
 echo "[INFO] Mounting gocryptfs filesystem..."
 /app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
 
 sleep 5
-
-df -h
-
-ls /app/decrypted
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
