@@ -154,6 +154,10 @@ fi
 
 echo "[INFO] gocryptfs init done"
 
+#--extracting the master key
+
+gocryptfs-xray -dumpmasterkey /app/nfs-encrypted/gocryptfs.conf
+
 # --- mount with gocryptfs using supervisord---
 echo "[INFO] Mounting gocryptfs filesystem..."
 /app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
