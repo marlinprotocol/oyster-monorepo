@@ -173,8 +173,6 @@ sleep 5
 
 df -h
 
-echo "Hello world!" >> /app/decrypted/test.txt
-
 ls /app/decrypted
 
 # Start the Docker daemon
