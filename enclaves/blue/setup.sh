@@ -75,6 +75,8 @@ iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --ma
 iptables -t nat -vL
 iptables -vL
 
+echo "Hello, world!"
+
 # Run supervisor first, no programs should be running yet
 cat /etc/supervisord.conf
 /app/supervisord &
