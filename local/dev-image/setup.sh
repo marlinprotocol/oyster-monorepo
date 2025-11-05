@@ -28,6 +28,8 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
+echo "HIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"
+
 # start mock derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 
