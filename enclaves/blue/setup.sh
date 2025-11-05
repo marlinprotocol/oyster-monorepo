@@ -2,6 +2,8 @@
 
 set -e
 
+echo "Hello!"
+
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
