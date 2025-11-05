@@ -1,0 +1,20 @@
+pub const SUI_GRPC_URL: &str = "https://fullnode.mainnet.sui.io:443";
+
+pub const OYSTER_MARKET_PACKAGE_ID: &str =
+    "0xc94d6d2b8f439ade046beb8653d486d8933ebf182a9d89671211a5488e938fbf";
+pub const OYSTER_MARKET_PACKAGE_INITIAL_VERSION: u64 = 659453522;
+pub const OYSTER_MARKET_CONFIG_ID: &str =
+    "0xff07832e8feb6a4b586e739c45e817c5a2ec24f2f43c761213ff3f38e4666c44";
+pub const OYSTER_MARKET_PLACE_ID: &str =
+    "0xdc8e19e13b9b9a4cee05e075db3c3f76afbe177118f35d396c6e78f821939816";
+pub const OYSTER_MARKET_LOCK_DATA_ID: &str =
+    "0x1dd804d0a70c76987da96105acde207479a6f0282b6851055918a37521b9f6d4";
+
+pub const USDC_PACKAGE_ID: &str =
+    "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7";
+pub const SUI_CLOCK_ID: &str = "0x6";
+pub const SUI_CLOCK_INITIAL_VERSION: u64 = 1;
+
+// TODO: FILL
+pub const DEFAULT_OPERATOR_ADDRESS: &str = "";
+pub const DEFAULT_OPERATOR_REGION: &str = "";
