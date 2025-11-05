@@ -33,7 +33,8 @@ static DEPOSIT_REFUNDED: [u8; 32] = event!("DepositRefunded(bytes32,address,uint
 static DEPOSIT_SLASHED: [u8; 32] = event!("DepositSlashed(bytes32,address,uint256)");
 
 // vote logs
-static VOTE_SUBMITTED: [u8; 32] = event!("VoteSubmitted(bytes32,uint256,address,bytes)");
+static VOTE_SUBMITTED: [u8; 32] =
+    event!("VoteSubmitted(bytes32,address,address,uint256,uint256,bytes)");
 
 // result logs
 static RESULT_SUBMITTED: [u8; 32] =
