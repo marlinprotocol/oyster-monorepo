@@ -28,6 +28,7 @@ Options:
   -g, --grpc-url <GRPC_URL>                            gRPC URL
       --grpc-username <GRPC_USERNAME>                  gRPC URL auth username
       --grpc-password <GRPC_PASSWORD>                  gRPC URL auth password
+      --grpc-token <GRPC_TOKEN>                        gRPC URL auth token
   -r, --remote-checkpoint-url <REMOTE_CHECKPOINT_URL>  Remote checkpoint url
   -p, --package-id <PACKAGE_ID>                        Market program package ID
       --provider <PROVIDER>                            Provider address
