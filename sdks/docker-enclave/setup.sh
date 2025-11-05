@@ -114,6 +114,17 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
+PATH_TO_CHECK="/app/init-params"
+
+# Check if the path exists AND is a directory
+if [ -d "$PATH_TO_CHECK" ]; then
+    echo "'$PATH_TO_CHECK' exists and is a directory."
+elif [ -e "$PATH_TO_CHECK" ]; then
+    echo "'$PATH_TO_CHECK' exists, but it is NOT a directory (it's likely a file)."
+else
+    echo "'$PATH_TO_CHECK' does not exist."
+fi
+
 REMOTE_DIR_INIT_PARAMS_PATH="/app/init-params/remote-directory"
 
 echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
