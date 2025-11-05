@@ -116,7 +116,7 @@ fi
 
 REMOTE_DIR_INIT_PARAMS_PATH = /app/init-params/remote-directory
 
-echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
+echo "3.111.219.88:/home/ubuntu/nfs_test" > /app/init-params/remote-directory
 
 # Check if the file exists before attempting to read it
 if [ ! -f "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
