@@ -8,6 +8,7 @@ use commands::{
 };
 
 mod args;
+mod chain;
 mod commands;
 mod configs;
 mod types;

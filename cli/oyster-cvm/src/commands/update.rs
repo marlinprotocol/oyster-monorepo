@@ -1,11 +1,13 @@
+use std::str::FromStr;
+
 use crate::args::init_params::InitParamsArgs;
+use crate::args::wallet::WalletArgs;
+use crate::chain::adapter::JobTransactionKind;
+use crate::chain::{ChainType, get_chain_adapter};
 use crate::types::Platform;
-use crate::utils::provider::create_provider;
-use crate::{args::wallet::WalletArgs, configs};
-use alloy::primitives::Address;
-use alloy::sol;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
+use sui_sdk_types::Address;
 use tracing::info;
 
 /// Update existing deployments
@@ -21,6 +23,22 @@ pub struct UpdateArgs {
 
     #[command(flatten)]
     wallet: WalletArgs,
+
+    /// Chain (e.g. arb, sui, bsc)
+    #[arg(long)]
+    chain: ChainType,
+
+    /// RPC URL (optional)
+    #[arg(long)]
+    rpc: Option<String>,
+
+    /// Auth token (optional for sui rpc)
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// Gas coin ID for Sui chain transactions
+    #[arg(long)]
+    gas_coin: Option<String>,
 
     /// New URL of the enclave image
     #[arg(long)]
@@ -43,33 +61,35 @@ pub struct UpdateArgs {
     init_params: InitParamsArgs,
 }
 
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
-
 pub async fn update_job(args: UpdateArgs) -> Result<()> {
     let wallet_private_key = &args.wallet.load_required()?;
     let job_id = args.job_id;
     let debug = args.debug;
     let image_url = args.image_url;
 
-    let provider = create_provider(&args.deployment, wallet_private_key)
+    let mut chain_adapter = get_chain_adapter(
+        args.chain,
+        args.rpc,
+        args.auth_token,
+        None,
+        args.gas_coin
+            .map(|coin| Address::from_str(&coin))
+            .transpose()?,
+    );
+
+    let provider = chain_adapter
+        .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
-    let market_address = match args.deployment.as_ref() {
-        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        _ => Err(anyhow!("unknown deployment"))?,
+    let Some(job_data) = chain_adapter
+        .get_job_data_if_exists(job_id.clone(), &provider)
+        .await?
+    else {
+        return Err(anyhow!("Job {} does not exist", job_id));
     };
-    let market = OysterMarket::new(market_address, provider);
 
-    let mut metadata = serde_json::from_str::<serde_json::Value>(
-        &market.jobs(job_id.parse()?).call().await?.metadata,
-    )?;
+    let mut metadata = serde_json::from_str::<serde_json::Value>(&job_data.metadata)?;
     info!(
         "Original metadata: {}",
         serde_json::to_string_pretty(&metadata)?
@@ -100,14 +120,19 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
         serde_json::to_string_pretty(&metadata)?
     );
 
-    let tx_hash = market
-        .jobMetadataUpdate(job_id.parse()?, serde_json::to_string(&metadata)?)
-        .send()
-        .await?
-        .watch()
+    let job_update_transaction = chain_adapter
+        .create_job_transaction(
+            JobTransactionKind::Update {
+                job_id,
+                metadata: serde_json::to_string(&metadata)?,
+            },
+            None,
+            &provider,
+        )
         .await?;
-
-    info!("Metadata update transaction: {:?}", tx_hash);
+    let _ = chain_adapter
+        .send_transaction(false, job_update_transaction, &provider)
+        .await?;
 
     Ok(())
 }

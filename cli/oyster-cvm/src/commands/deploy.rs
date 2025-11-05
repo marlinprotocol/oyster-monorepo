@@ -1,26 +1,22 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
+    chain::{ChainType, adapter::JobTransactionKind, get_chain_adapter},
     commands::log::{LogArgs, stream_logs},
-    configs,
+    configs::{arb, bsc, sui},
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
-        provider::create_provider,
-        usdc::{approve_usdc, format_usdc},
+        format_usdc,
     },
 };
 
-use alloy::{
-    primitives::{Address, B256 as H256, U256, keccak256},
-    providers::{Provider, WalletProvider},
-    sol,
-};
+use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
-use std::time::Duration as StdDuration;
+use std::{str::FromStr, time::Duration as StdDuration};
+use sui_sdk_types::Address;
 use tokio::net::TcpStream;
 use tracing::info;
 
@@ -33,20 +29,6 @@ const ATTESTATION_RETRIES: u32 = 20;
 const ATTESTATION_INTERVAL: u64 = 15;
 const TCP_CHECK_RETRIES: u32 = 20;
 const TCP_CHECK_INTERVAL: u64 = 15;
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    USDC,
-    "src/abis/token_abi.json"
-);
-
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
 
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
@@ -63,20 +45,40 @@ pub struct DeployArgs {
     #[arg(long, default_value = "arm64")]
     arch: Platform,
 
+    /// Chain (e.g. arb, sui, bsc)
+    #[arg(long)]
+    chain: ChainType,
+
     #[command(flatten)]
     wallet: WalletArgs,
 
+    /// RPC URL (optional)
+    #[arg(long)]
+    rpc: Option<String>,
+
+    /// Auth token (optional for sui rpc)
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// USDC coin ID for Sui chain based enclave payment
+    #[arg(long)]
+    usdc_coin: Option<String>,
+
+    /// Gas coin ID for Sui chain transactions
+    #[arg(long)]
+    gas_coin: Option<String>,
+
     /// Operator address
-    #[arg(long, default_value = "0xe10fa12f580e660ecd593ea4119cebc90509d642")]
-    operator: String,
+    #[arg(long)]
+    operator: Option<String>,
 
     /// URL of the enclave image
     #[arg(long)]
     image_url: Option<String>,
 
     /// Region for deployment
-    #[arg(long, default_value = "ap-south-1")]
-    region: String,
+    #[arg(long)]
+    region: Option<String>,
 
     /// Instance type (e.g. "r6g.large")
     #[arg(long)]
@@ -150,10 +152,27 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     tracing::info!("Starting deployment...");
 
-    let provider = create_provider(&args.deployment, &args.wallet.load_required()?).await?;
+    let (operator, region) = parse_values(&args.chain, args.operator, args.region);
+
+    let mut chain_adapter = get_chain_adapter(
+        args.chain,
+        args.rpc,
+        args.auth_token,
+        args.usdc_coin
+            .map(|coin| Address::from_str(&coin))
+            .transpose()?,
+        args.gas_coin
+            .map(|coin| Address::from_str(&coin))
+            .transpose()?,
+    );
+
+    let provider = chain_adapter
+        .create_provider_with_wallet(&args.wallet.load_required()?)
+        .await?;
 
     // Get CP URL using the configured provider
-    let cp_url = get_operator_cp(&args.deployment, &args.operator, provider.clone())
+    let cp_url = chain_adapter
+        .get_operator_cp(&operator, &provider)
         .await
         .context("Failed to get CP URL")?;
     info!("CP URL for operator: {}", cp_url);
@@ -165,15 +184,8 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .context("Failed to fetch operator spec")?;
 
     // Validate region is supported
-    if !operator_spec
-        .allowed_regions
-        .iter()
-        .any(|r| r == &args.region)
-    {
-        return Err(anyhow!(
-            "Region '{}' not supported by operator",
-            args.region
-        ));
+    if !operator_spec.allowed_regions.iter().any(|r| r == &region) {
+        return Err(anyhow!("Region '{}' not supported by operator", region));
     }
 
     let instance_type =
@@ -188,9 +200,10 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             })?;
 
     // Fetch operator min rates with early validation
-    let selected_instance =
-        find_minimum_rate_instance(&operator_spec, &args.region, &instance_type)
-            .context("Configuration not supported by operator")?;
+    let selected_instance = find_minimum_rate_instance(&operator_spec, &region, &instance_type)
+        .context("Configuration not supported by operator")?;
+
+    let extra_decimals = chain_adapter.fetch_extra_decimals(&provider).await?;
 
     // Calculate costs
     // SAFETY: will be some value if simulation is not opted
@@ -199,12 +212,16 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         &selected_instance,
         duration_seconds,
         args.bandwidth,
-        &args.region,
+        &region,
         &cp_url,
+        extra_decimals,
     )
     .await?;
 
-    info!("Total cost: {:.6} USDC", format_usdc(total_cost));
+    info!(
+        "Total cost: {:.6} USDC",
+        format_usdc(total_cost, extra_decimals)
+    );
     info!(
         "Total rate: {:.6} USDC/hour",
         (total_rate.to::<u128>() * 3600) as f64 / 1e18
@@ -230,7 +247,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     // Create metadata
     let metadata = create_metadata(
         &selected_instance.instance,
-        &args.region,
+        &region,
         selected_instance.memory,
         selected_instance.cpu,
         &image_url,
@@ -243,25 +260,33 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .unwrap_or("".into()),
     );
 
-    // Approve USDC and create job
-    approve_usdc(&args.deployment, total_cost, provider.clone()).await?;
+    // Approve USDC
+    let funds = chain_adapter.prepare_funds(total_cost, &provider).await?;
+
+    let job_create_transaction = chain_adapter
+        .create_job_transaction(
+            JobTransactionKind::Create {
+                metadata,
+                operator,
+                rate: total_rate,
+                balance: total_cost,
+            },
+            Some(funds),
+            &provider,
+        )
+        .await?;
 
     // Create job
-    let job_id = create_new_oyster_job(
-        &args.deployment,
-        metadata,
-        args.operator.parse()?,
-        total_rate,
-        total_cost,
-        provider.clone(),
-    )
-    .await?;
+    let job_id = chain_adapter
+        .send_transaction(true, job_create_transaction, &provider)
+        .await?
+        .ok_or(anyhow!("Failed to get the Job ID"))?;
     info!("Job created with ID: {:?}", job_id);
 
     info!("Waiting for 3 minutes for enclave to start...");
     tokio::time::sleep(StdDuration::from_secs(180)).await;
 
-    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
+    let ip_address = wait_for_ip_address(&cp_url, job_id, &region).await?;
     info!("IP address obtained: {}", ip_address);
 
     if !check_reachability(&ip_address).await {
@@ -339,28 +364,27 @@ async fn create_new_oyster_job(
     if !receipt.status() {
         return Err(anyhow!("Transaction failed - check contract interaction"));
     }
+}
 
-    // Calculate event signature hash
-    let job_opened_signature = "JobOpened(bytes32,string,address,address,uint256,uint256,uint256)";
-    let job_opened_topic = keccak256(job_opened_signature.as_bytes());
-
-    // Look for JobOpened event
-    for log in receipt.inner.logs().iter() {
-        if log.topics()[0] == job_opened_topic {
-            info!("Found JobOpened event");
-            return Ok(log.topics()[1]);
-        }
+fn parse_values(
+    chain: &ChainType,
+    operator: Option<String>,
+    region: Option<String>,
+) -> (String, String) {
+    match chain {
+        ChainType::Arbitrum => (
+            operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string()),
+            region.unwrap_or(arb::DEFAULT_OPERATOR_REGION.to_string()),
+        ),
+        ChainType::BSC => (
+            operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
+            region.unwrap_or(bsc::DEFAULT_OPERATOR_REGION.to_string()),
+        ),
+        ChainType::Sui => (
+            operator.unwrap_or(sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
+            region.unwrap_or(sui::DEFAULT_OPERATOR_REGION.to_string()),
+        ),
     }
-
-    // If we can't find the JobOpened event
-    info!("No JobOpened event found. All topics:");
-    for log in receipt.inner.logs().iter() {
-        info!("Event topics: {:?}", log.topics());
-    }
-
-    Err(anyhow!(
-        "Could not find JobOpened event in transaction receipt"
-    ))
 }
 
 async fn fetch_operator_spec(url: &str) -> Result<Operator> {
@@ -370,7 +394,102 @@ async fn fetch_operator_spec(url: &str) -> Result<Operator> {
     Ok(operator)
 }
 
-async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<String> {
+fn find_minimum_rate_instance(
+    operator: &Operator,
+    region: &str,
+    instance: &str,
+) -> Result<InstanceRate> {
+    operator
+        .min_rates
+        .iter()
+        .find(|rate_card| rate_card.region == region)
+        .ok_or_else(|| anyhow!("No rate card found for region: {}", region))?
+        .rate_cards
+        .iter()
+        .filter(|rate| rate.instance == instance)
+        .min_by(|a, b| {
+            let a_rate =
+                U256::from_str_radix(a.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
+            let b_rate =
+                U256::from_str_radix(b.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
+            a_rate.cmp(&b_rate)
+        })
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "No matching instance rate found for region: {}, instance: {}",
+                region,
+                instance
+            )
+        })
+}
+
+async fn calculate_total_cost(
+    instance_rate: &InstanceRate,
+    duration: u64,
+    bandwidth: u32,
+    region: &str,
+    cp_url: &str,
+    extra_decimals: i64,
+) -> Result<(U256, U256)> {
+    let instance_secondly_rate_usdc =
+        U256::from_str_radix(instance_rate.min_rate.trim_start_matches("0x"), 16)?;
+
+    let instance_cost_scaled = U256::from(duration)
+        .checked_mul(instance_secondly_rate_usdc)
+        .context("Failed to multiply duration and instance rate")?;
+
+    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
+    let bandwidth_cost_scaled = U256::from(
+        calculate_bandwidth_cost(
+            &bandwidth.to_string(),
+            "KBps",
+            bandwidth_rate_region,
+            duration,
+        )
+        .context("Failed to calculate bandwidth cost")?,
+    );
+
+    let bandwidth_rate_scaled = bandwidth_cost_scaled
+        .checked_div(U256::from(duration))
+        .context("Failed to divide bandwidth cost by duration")?;
+    let total_cost_scaled = (instance_cost_scaled
+        .checked_add(bandwidth_cost_scaled)
+        .context("Failed to add instance and bandwidth costs")?
+        .checked_div(U256::from(10).pow(U256::from(extra_decimals))))
+    .context("Failed to divide total cost by 1e12")?;
+    let total_rate_scaled = instance_secondly_rate_usdc
+        .checked_add(bandwidth_rate_scaled)
+        .context("Failed to add instance and bandwidth rates")?;
+
+    Ok((total_cost_scaled, total_rate_scaled))
+}
+
+fn create_metadata(
+    instance: &str,
+    region: &str,
+    memory: u32,
+    vcpu: u32,
+    url: &str,
+    name: &str,
+    debug: bool,
+    init_params: &str,
+) -> String {
+    serde_json::json!({
+        "instance": instance,
+        "region": region,
+        "memory": memory,
+        "vcpu": vcpu,
+        "url": url,
+        "name": name,
+        "family": "tuna",
+        "debug": debug,
+        "init_params": init_params,
+    })
+    .to_string()
+}
+
+async fn wait_for_ip_address(url: &str, job_id: String, region: &str) -> Result<String> {
     let client = reqwest::Client::new();
     let mut last_response = String::new();
 
@@ -497,119 +616,4 @@ async fn check_reachability(ip: &str) -> bool {
     }
 
     false
-}
-
-fn create_metadata(
-    instance: &str,
-    region: &str,
-    memory: u32,
-    vcpu: u32,
-    url: &str,
-    name: &str,
-    debug: bool,
-    init_params: &str,
-) -> String {
-    serde_json::json!({
-        "instance": instance,
-        "region": region,
-        "memory": memory,
-        "vcpu": vcpu,
-        "url": url,
-        "name": name,
-        "family": "tuna",
-        "debug": debug,
-        "init_params": init_params,
-    })
-    .to_string()
-}
-
-fn find_minimum_rate_instance(
-    operator: &Operator,
-    region: &str,
-    instance: &str,
-) -> Result<InstanceRate> {
-    operator
-        .min_rates
-        .iter()
-        .find(|rate_card| rate_card.region == region)
-        .ok_or_else(|| anyhow!("No rate card found for region: {}", region))?
-        .rate_cards
-        .iter()
-        .filter(|rate| rate.instance == instance)
-        .min_by(|a, b| {
-            let a_rate =
-                U256::from_str_radix(a.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
-            let b_rate =
-                U256::from_str_radix(b.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
-            a_rate.cmp(&b_rate)
-        })
-        .cloned()
-        .ok_or_else(|| {
-            anyhow!(
-                "No matching instance rate found for region: {}, instance: {}",
-                region,
-                instance
-            )
-        })
-}
-
-async fn calculate_total_cost(
-    instance_rate: &InstanceRate,
-    duration: u64,
-    bandwidth: u32,
-    region: &str,
-    cp_url: &str,
-) -> Result<(U256, U256)> {
-    let instance_secondly_rate_usdc =
-        U256::from_str_radix(instance_rate.min_rate.trim_start_matches("0x"), 16)?;
-
-    let instance_cost_scaled = U256::from(duration)
-        .checked_mul(instance_secondly_rate_usdc)
-        .context("Failed to multiply duration and instance rate")?;
-
-    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
-    let bandwidth_cost_scaled = U256::from(
-        calculate_bandwidth_cost(
-            &bandwidth.to_string(),
-            "KBps",
-            bandwidth_rate_region,
-            duration,
-        )
-        .context("Failed to calculate bandwidth cost")?,
-    );
-
-    let bandwidth_rate_scaled = bandwidth_cost_scaled
-        .checked_div(U256::from(duration))
-        .context("Failed to divide bandwidth cost by duration")?;
-    let total_cost_scaled = (instance_cost_scaled
-        .checked_add(bandwidth_cost_scaled)
-        .context("Failed to add instance and bandwidth costs")?
-        .checked_div(U256::from(1e12)))
-    .context("Failed to divide total cost by 1e12")?;
-    let total_rate_scaled = instance_secondly_rate_usdc
-        .checked_add(bandwidth_rate_scaled)
-        .context("Failed to add instance and bandwidth rates")?;
-
-    Ok((total_cost_scaled, total_rate_scaled))
-}
-
-async fn get_operator_cp(
-    deployment: &str,
-    provider_address: &str,
-    provider: impl Provider + WalletProvider,
-) -> Result<String> {
-    let market_address = match deployment {
-        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        _ => Err(anyhow!("unknown deployment"))?,
-    };
-    let provider_address = Address::from_str(provider_address)?;
-
-    // Create contract instance
-    let market = OysterMarket::new(market_address, provider);
-
-    // Call providers function to get CP URL
-    let cp_url = market.providers(provider_address).call().await?;
-
-    Ok(cp_url)
 }
