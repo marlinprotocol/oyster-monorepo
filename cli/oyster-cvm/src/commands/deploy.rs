@@ -2,7 +2,7 @@ use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     chain::{ChainType, adapter::JobTransactionKind, get_chain_adapter},
     commands::log::{LogArgs, stream_logs},
-    configs::{arb, bsc, sui},
+    configs::{arb, bsc},
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
@@ -77,8 +77,8 @@ pub struct DeployArgs {
     image_url: Option<String>,
 
     /// Region for deployment
-    #[arg(long)]
-    region: Option<String>,
+    #[arg(long, default_value = "ap-south-1")]
+    region: String,
 
     /// Instance type (e.g. "r6g.large")
     #[arg(long)]
@@ -152,7 +152,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     tracing::info!("Starting deployment...");
 
-    let (operator, region) = parse_values(&args.chain, args.operator, args.region);
+    let operator = parse_operator(&args.chain, args.operator)?;
 
     let mut chain_adapter = get_chain_adapter(
         args.chain,
@@ -184,8 +184,15 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .context("Failed to fetch operator spec")?;
 
     // Validate region is supported
-    if !operator_spec.allowed_regions.iter().any(|r| r == &region) {
-        return Err(anyhow!("Region '{}' not supported by operator", region));
+    if !operator_spec
+        .allowed_regions
+        .iter()
+        .any(|r| r == &args.region)
+    {
+        return Err(anyhow!(
+            "Region '{}' not supported by operator",
+            args.region
+        ));
     }
 
     let instance_type =
@@ -200,8 +207,9 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             })?;
 
     // Fetch operator min rates with early validation
-    let selected_instance = find_minimum_rate_instance(&operator_spec, &region, &instance_type)
-        .context("Configuration not supported by operator")?;
+    let selected_instance =
+        find_minimum_rate_instance(&operator_spec, &args.region, &instance_type)
+            .context("Configuration not supported by operator")?;
 
     let extra_decimals = chain_adapter.fetch_extra_decimals(&provider).await?;
 
@@ -212,7 +220,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         &selected_instance,
         duration_seconds,
         args.bandwidth,
-        &region,
+        &args.region,
         &cp_url,
         extra_decimals,
     )
@@ -247,7 +255,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     // Create metadata
     let metadata = create_metadata(
         &selected_instance.instance,
-        &region,
+        &args.region,
         selected_instance.memory,
         selected_instance.cpu,
         &image_url,
@@ -286,7 +294,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     info!("Waiting for 3 minutes for enclave to start...");
     tokio::time::sleep(StdDuration::from_secs(180)).await;
 
-    let ip_address = wait_for_ip_address(&cp_url, job_id, &region).await?;
+    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
     info!("IP address obtained: {}", ip_address);
 
     if !check_reachability(&ip_address).await {
@@ -329,61 +337,11 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
     simulate(simulate_args).await
 }
 
-async fn create_new_oyster_job(
-    deployment: &str,
-    metadata: String,
-    provider_addr: Address,
-    rate: U256,
-    balance: U256,
-    provider: impl Provider + WalletProvider + Clone,
-) -> Result<H256> {
-    let market_address = match deployment {
-        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        _ => Err(anyhow!("unknown deployment"))?,
-    };
-
-    // Load OysterMarket contract using Alloy
-    let market = OysterMarket::new(market_address, provider.clone());
-
-    // Create job_open call
-    let tx_hash = market
-        .jobOpen(metadata, provider_addr, rate, balance)
-        .send()
-        .await?
-        .watch()
-        .await?;
-    info!("Job creation transaction: {:?}", tx_hash);
-
-    let receipt = provider
-        .get_transaction_receipt(tx_hash)
-        .await?
-        .ok_or_else(|| anyhow!("Transaction receipt not found"))?;
-
-    // Add logging to check transaction status
-    if !receipt.status() {
-        return Err(anyhow!("Transaction failed - check contract interaction"));
-    }
-}
-
-fn parse_values(
-    chain: &ChainType,
-    operator: Option<String>,
-    region: Option<String>,
-) -> (String, String) {
+fn parse_operator(chain: &ChainType, operator: Option<String>) -> Result<String> {
     match chain {
-        ChainType::Arbitrum => (
-            operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string()),
-            region.unwrap_or(arb::DEFAULT_OPERATOR_REGION.to_string()),
-        ),
-        ChainType::BSC => (
-            operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
-            region.unwrap_or(bsc::DEFAULT_OPERATOR_REGION.to_string()),
-        ),
-        ChainType::Sui => (
-            operator.unwrap_or(sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
-            region.unwrap_or(sui::DEFAULT_OPERATOR_REGION.to_string()),
-        ),
+        ChainType::Arbitrum => Ok(operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string())),
+        ChainType::BSC => Ok(operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string())),
+        ChainType::Sui => Ok(operator.ok_or_else(|| anyhow!("Operator address not provided!"))?),
     }
 }
 

@@ -5,9 +5,9 @@ use alloy::{
     network::EthereumWallet,
     primitives::{Address, FixedBytes, U256, keccak256},
     providers::{
-        Identity, Provider, ProviderBuilder, RootProvider, WalletProvider,
+        Provider, ProviderBuilder, RootProvider, WalletProvider,
         fillers::{
-            BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller, SimpleNonceManager,
             WalletFiller,
         },
     },
@@ -41,8 +41,11 @@ sol!(
 pub type EvmProvider = FillProvider<
     JoinFill<
         JoinFill<
-            Identity,
-            JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+            JoinFill<
+                JoinFill<alloy::providers::Identity, GasFiller>,
+                NonceFiller<SimpleNonceManager>,
+            >,
+            ChainIdFiller,
         >,
         WalletFiller<EthereumWallet>,
     >,
