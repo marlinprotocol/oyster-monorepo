@@ -114,7 +114,7 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
-PATH_TO_CHECK="/app/init-params"
+PATH_TO_CHECK="/init-params"
 
 # Check if the path exists AND is a directory
 if [ -d "$PATH_TO_CHECK" ]; then
