@@ -114,9 +114,9 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
-REMOTE_DIR_INIT_PARAMS_PATH = /app/init-params/remote-directory
+REMOTE_DIR_INIT_PARAMS_PATH="/app/init-params/remote-directory"
 
-echo "3.111.219.88:/home/ubuntu/nfs_test" > /app/init-params/remote-directory
+echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
 
 # Check if the file exists before attempting to read it
 if [ ! -f "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
