@@ -31,8 +31,6 @@ echo "status"
 # start mock derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
 
-echo "hello world"
-
 if [ -e "/app/docker-compose.yml" ]; then 
     # Wait for Docker daemon to be ready
     until docker info >/dev/null 2>&1; do
@@ -56,7 +54,5 @@ if [ -e "/app/docker-compose.yml" ]; then
     # start docker compose
     /app/supervisord ctl -c /etc/supervisord.conf start compose
 fi    
-
-echo "HIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"
 
 wait $SUPERVISOR_PID

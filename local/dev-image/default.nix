@@ -42,7 +42,7 @@ in {
 
     copyToRoot = pkgs.buildEnv {
       name = "image-root";
-      paths = [ app pkgs.docker pkgs.busybox pkgs.cacert pkgs.nfs-utils pkgs.inetutils pkgs.curl pkgs.gocryptfs ];
+      paths = [ app pkgs.docker pkgs.busybox pkgs.cacert ];
       pathsToLink = ["/bin" "/app" "/etc" "/tmp" ];
     };
 
