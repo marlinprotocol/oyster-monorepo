@@ -114,7 +114,7 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
-REMOTE_DIR_INIT_PARAMS_PATH="/init-params/remote-directory"
+REMOTE_DIR_INIT_PARAMS_PATH="/init-params/remote-directory-path"
 
 echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
 
