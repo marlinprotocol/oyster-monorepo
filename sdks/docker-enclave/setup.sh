@@ -114,14 +114,26 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
+REMOTE_DIR_INIT_PARAMS_PATH = /app/init-params/remote-directory
+
+echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
+
+# Check if the file exists before attempting to read it
+if [ ! -f "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
+    echo "Error: File not found at $REMOTE_DIR_INIT_PARAMS_PATH"
+    exit 1
+fi
+
+REMOTE_DIR=$(cat "$REMOTE_DIR_INIT_PARAMS_PATH")
+
 echo "Mounting remote nfs directory to /app/nfs-encrypted"
-mount -t nfs4 -o lock,noresvport,vers=4.2 3.111.219.88:/home/ubuntu/nfs_test /app/nfs-encrypted
+mount -t nfs4 -o lock,noresvport,vers=4.2 $REMOTE_DIR /app/nfs-encrypted
 
 sleep 5
 
 ls /app
 
-cat /app/init-params
+ls /app/init-params
 
 # ---Configuration for fetching KMS key---
 SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
