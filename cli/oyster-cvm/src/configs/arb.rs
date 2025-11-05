@@ -7,4 +7,3 @@ pub const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
 
 // Default operators
 pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xe10fa12f580e660ecd593ea4119cebc90509d642";
-pub const DEFAULT_OPERATOR_REGION: &str = "ap-south-1";
