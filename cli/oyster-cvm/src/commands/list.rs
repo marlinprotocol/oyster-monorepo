@@ -2,9 +2,9 @@ use crate::configs::global::INDEXER_URL;
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use clap::Args;
-use prettytable::{row, Table};
+use prettytable::{Table, row};
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
