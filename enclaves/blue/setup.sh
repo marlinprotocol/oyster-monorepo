@@ -2,8 +2,6 @@
 
 set -e
 
-echo "Starting oyster setup"
-
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
@@ -76,8 +74,6 @@ ipset add portfilter 443
 iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --match-set internal dst -j NFQUEUE --queue-num 0
 iptables -t nat -vL
 iptables -vL
-
-echo "Hello, world!"
 
 # Run supervisor first, no programs should be running yet
 cat /etc/supervisord.conf
