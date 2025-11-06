@@ -118,65 +118,55 @@ fi
 
 ## NFS+goCryptfs setup for persistent storage
 
-REMOTE_DIR_INIT_PARAMS_PATH="/init-params/remote-directory-path"
+REMOTE_DIR_INIT_PARAMS_PATH="/init-params/nfs-remote-directory-path"
 
-echo "3.111.219.88:/home/ubuntu/nfs_test" > $REMOTE_DIR_INIT_PARAMS_PATH
+if [ -s "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
+    REMOTE_DIR=$(cat "$REMOTE_DIR_INIT_PARAMS_PATH")
+    echo "Remote NFS directory path: $REMOTE_DIR"
+    echo "Mounting remote nfs directory to /app/nfs-encrypted"
+    mount -t nfs4 -o lock,noresvport,vers=4.2 $REMOTE_DIR /app/nfs-encrypted
+    sleep 5
+    ls /init-params
 
-# Check if the file exists before attempting to read it
-if [ ! -f "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
-    echo "Error: File not found at $REMOTE_DIR_INIT_PARAMS_PATH"
-    exit 1
-fi
+    # ---Configuration for fetching KMS key---
+    SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
+    ENCRYPTED_DIR="/app/nfs-encrypted"
+    CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
+    passfile="/app/pass.txt"
 
-REMOTE_DIR=$(cat "$REMOTE_DIR_INIT_PARAMS_PATH")
+    echo "[INFO] Deriving hex key from enclave..."
+    key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
 
-echo "Mounting remote nfs directory to /app/nfs-encrypted"
-mount -t nfs4 -o lock,noresvport,vers=4.2 $REMOTE_DIR /app/nfs-encrypted
+    if [ -z "$key_hex" ]; then
+      echo "[ERROR] Failed to derive hex key from enclave service" >&2
+      exit 1
+    fi
 
-sleep 5
+    if [ ${#key_hex} -ne 64 ]; then
+      echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
+    fi
 
-ls /init-params
+    echo "Derived key (hex): $key_hex"
 
-# ---Configuration for fetching KMS key---
-SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
-ENCRYPTED_DIR="/app/nfs-encrypted"
-# DECRYPTED_DIR="/app/decrypted"
-CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
-passfile="/app/pass.txt"
+    printf '%s' "$key_hex" > $passfile
 
-echo "[INFO] Deriving hex key from enclave..."
-key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
+    if [ ! -f "$CONF_FILE" ]; then
+      echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
+      # Initialize with temporary password to create config
+      gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
+    else
+      echo "[INFO] Existing config found. Skipping initialization."
+    fi
 
-if [ -z "$key_hex" ]; then
-  echo "[ERROR] Failed to derive hex key from enclave service" >&2
-  exit 1
-fi
+    echo "[INFO] gocryptfs init done"
 
-if [ ${#key_hex} -ne 64 ]; then
-  echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
-fi
-
-echo "Derived key (hex): $key_hex"
-
-printf '%s' "$key_hex" > $passfile
-
-if [ ! -f "$CONF_FILE" ]; then
-  echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
-  
-  # Initialize with temporary password to create config
-  gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
-
+    # --- mount with gocryptfs using supervisord---
+    echo "[INFO] Mounting gocryptfs filesystem..."
+    /app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
+    sleep 5
 else
-  echo "[INFO] Existing config found. Skipping initialization."
+    echo "No remote directory path found"
 fi
-
-echo "[INFO] gocryptfs init done"
-
-# --- mount with gocryptfs using supervisord---
-echo "[INFO] Mounting gocryptfs filesystem..."
-/app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
-
-sleep 5
 
 # Start the Docker daemon
 /app/supervisord ctl -c /etc/supervisord.conf start docker
