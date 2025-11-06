@@ -2,6 +2,8 @@
 
 set -e
 
+echo "Starting oyster setup"
+
 # query ip of instance and store
 /app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
 cat /app/ip.txt && echo
@@ -75,6 +77,8 @@ iptables -A OUTPUT -p tcp -s $ip -m set --match-set portfilter src -m set ! --ma
 iptables -t nat -vL
 iptables -vL
 
+echo "Hello, world!"
+
 # Run supervisor first, no programs should be running yet
 cat /etc/supervisord.conf
 /app/supervisord &
@@ -110,6 +114,58 @@ sleep 10
 # start derive server contract if contract address and root server config are present
 if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.json ]; then
     /app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
+fi
+
+## NFS+goCryptfs setup for persistent storage
+
+REMOTE_DIR_INIT_PARAMS_PATH="/init-params/nfs-remote-directory-path"
+
+if [ -s "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
+    REMOTE_DIR=$(cat "$REMOTE_DIR_INIT_PARAMS_PATH")
+    echo "Remote NFS directory path: $REMOTE_DIR"
+    echo "Mounting remote nfs directory to /app/nfs-encrypted"
+    mount -t nfs4 -o lock,noresvport,vers=4.2 $REMOTE_DIR /app/nfs-encrypted
+    sleep 5
+    ls /init-params
+
+    # ---Configuration for fetching KMS key---
+    SERVER_URL="http://127.0.0.1:1100/derive/secp256k1?path=nfstest"
+    ENCRYPTED_DIR="/app/nfs-encrypted"
+    CONF_FILE="$ENCRYPTED_DIR/gocryptfs.conf"
+    passfile="/app/pass.txt"
+
+    echo "[INFO] Deriving hex key from enclave..."
+    key_hex=$(curl -s "$SERVER_URL" | xxd -p | tr -d '\n')
+
+    if [ -z "$key_hex" ]; then
+      echo "[ERROR] Failed to derive hex key from enclave service" >&2
+      exit 1
+    fi
+
+    if [ ${#key_hex} -ne 64 ]; then
+      echo "[WARN] Derived key length is ${#key_hex} hex chars (expected 64)"
+    fi
+
+    echo "Derived key (hex): $key_hex"
+
+    printf '%s' "$key_hex" > $passfile
+
+    if [ ! -f "$CONF_FILE" ]; then
+      echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
+      # Initialize with temporary password to create config
+      gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
+    else
+      echo "[INFO] Existing config found. Skipping initialization."
+    fi
+
+    echo "[INFO] gocryptfs init done"
+
+    # --- mount with gocryptfs using supervisord---
+    echo "[INFO] Mounting gocryptfs filesystem..."
+    /app/supervisord ctl -c /etc/supervisord.conf start gocryptfs
+    sleep 5
+else
+    echo "No remote directory path found"
 fi
 
 # Start the Docker daemon
