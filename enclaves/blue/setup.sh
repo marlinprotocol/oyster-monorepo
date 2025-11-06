@@ -148,7 +148,6 @@ if [ -s "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
 
     if [ ! -f "$CONF_FILE" ]; then
       echo "[INFO] No gocryptfs.conf found. Initializing new filesystem..."
-      # Initialize with temporary password to create config
       gocryptfs -init "$ENCRYPTED_DIR" -passfile $passfile
     else
       echo "[INFO] Existing config found. Skipping initialization."
