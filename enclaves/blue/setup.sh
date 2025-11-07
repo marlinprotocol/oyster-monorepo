@@ -118,6 +118,8 @@ REMOTE_DIR_INIT_PARAMS_PATH="/init-params/nfs-remote-directory-path"
 
 if [ -s "$REMOTE_DIR_INIT_PARAMS_PATH" ]; then
     REMOTE_DIR=$(cat "$REMOTE_DIR_INIT_PARAMS_PATH")
+    echo "Make sure to whitelist the enclave IP on the NFS server for access"
+    sleep 60
     echo "Remote NFS directory path: $REMOTE_DIR"
     echo "Mounting remote nfs directory to /app/nfs-encrypted"
     mount -t nfs4 -o lock,noresvport,vers=4.2 $REMOTE_DIR /app/nfs-encrypted
