@@ -11,7 +11,7 @@ import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTy
 
 contract PopulateProposal is Script {
     
-    Governance gov = Governance(0x800E2486D128E6B0a543ddfCd783de22341B84fE);
+    Governance gov = Governance(0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48);
 
     function run() external {
         ConfigFactory factory = new ConfigFactory();
@@ -19,7 +19,7 @@ contract PopulateProposal is Script {
 
         vm.startBroadcast();
         if(block.chainid == 421614){
-            for (uint i = 0; i < 10; i++) {
+            for (uint i = 10; i < 11; i++) {
                 _populate_proposal(helperConfig, string(abi.encode("title", i+1)), string(abi.encode("description", i+1)));
             }
         }else{

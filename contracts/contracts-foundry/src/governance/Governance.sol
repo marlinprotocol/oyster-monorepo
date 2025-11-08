@@ -896,6 +896,20 @@ contract Governance is
         voteHash = proposalVoteInfo.voteHash;
     }
 
+    /// @notice Returns vote information for a specific proposal
+    /// @dev Returns a specific votes
+    /// @param _proposalId The unique identifier of the proposal
+    /// @param idx The index of the vote
+    /// @return vote Specific cast for the proposal
+    function getSingleVoteInfo(bytes32 _proposalId, uint256 idx)
+        external
+        view
+        returns (Vote memory)
+    {
+        ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
+        return proposalVoteInfo.votes[idx];
+    }
+
     /// @notice Returns the vote outcome of a specific proposal
     /// @param _proposalId The unique identifier of the proposal
     /// @return voteOutcome The outcome of the proposal (Pending, Passed, Failed, or Vetoed)
