@@ -1,4 +1,4 @@
-use crate::handler::{__path_hello_handler, __path_status};
+use crate::handler::{__path_hello_handler, __path_proposal_encryption_key, __path_status};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -8,7 +8,7 @@ use utoipa_swagger_ui::SwaggerUi;
     description = "APIs to fetch the result of proposals from the governance enclaves",
     license(name = "MIT License", url = "https://opensource.org/licenses/MIT")
 ))]
-#[openapi(paths(hello_handler, status))]
+#[openapi(paths(hello_handler, status, proposal_encryption_key))]
 struct ApiDoc;
 
 pub fn get_swagger() -> SwaggerUi {

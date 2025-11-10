@@ -179,3 +179,28 @@ where
         Ok(submit_result_input)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy::sol_types::SolValue;
+    use anyhow::Result;
+
+    use crate::vote_result::ContractDataPreimage;
+
+    #[tokio::test]
+    async fn test_contract_preimage_encoding_no_top_level_params() -> Result<()> {
+        let contract_data_preimage = ContractDataPreimage {
+            governance_contract_address: "0x0000123400001234000012340000123400001234".parse()?,
+            proposed_timestamp: "172919243".parse()?,
+            contract_config_hash:
+                "0x1827900918279009182790091827900918279009182790091827900918279009".parse()?,
+            network_hash: "0x8913bdce8913bdce8913bdce8913bdce8913bdce8913bdce8913bdce8913bdce"
+                .parse()?,
+            vote_hash: "0xab766334ab766334ab766334ab766334ab766334ab766334ab766334ab766334"
+                .parse()?,
+        };
+
+        println!("{:}", hex::encode(contract_data_preimage.abi_encode()));
+        Ok(())
+    }
+}

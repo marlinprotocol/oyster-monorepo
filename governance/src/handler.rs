@@ -10,6 +10,7 @@ use actix_web::{
     web::{self, Data},
 };
 use alloy::{network::Ethereum, primitives::U256, sol};
+use ecies::PublicKey as EncryptionPublicKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -166,13 +167,60 @@ async fn status<K: KMS + Send + Sync>(
 
     Ok(HttpResponse::Ok().json(json!(
         {
-            "submit_result_input_params": submit_result_input_params
+            "submit_result_input_params": submit_result_input_params,
+            "vote_snapshot": vote_factory.weighted_votes()
         }
     )))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/proposal_encryption_key",
+    request_body = ProposalHashPlaceHolder,
+    responses(
+        (status = 200, description = "Return proposal voting result"),
+    ),
+)]
+async fn proposal_encryption_key<K: KMS + Send + Sync>(
+    payload: web::Json<ProposalHash>,
+    kms: Data<K>,
+) -> actix_web::Result<impl Responder> {
+    let proposal_id = payload.proposal_id;
+
+    let governance =
+        config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    let proposal_time_info = governance
+        .get_proposal_timing_info(proposal_id)
+        .await
+        .map_err(error::ErrorInternalServerError)?;
+
+    if proposal_time_info.proposalDeadlineTimestamp == 0
+        || proposal_time_info.proposedTimestamp == 0
+        || proposal_time_info.voteActivationTimestamp == 0
+        || proposal_time_info.voteDeadlineTimestamp == 0
+    {
+        return Ok(HttpResponse::BadRequest().json(json!({"message":"invalid proposal id"})));
+    }
+
+    let pk: EncryptionPublicKey = kms
+        .get_proposal_public_key(proposal_id)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("proposal key error: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "proposal_id": proposal_id,
+            "encryption_key": format!("0x{}", hex::encode(pk.serialize()))
+        }
+    )))
+}
 pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
     web::scope("/v1")
         .route("/hello", web::get().to(hello_handler))
         .route("/status", web::post().to(status::<K>))
+        .route(
+            "/proposal_encryption_key",
+            web::post().to(proposal_encryption_key::<K>),
+        )
 }

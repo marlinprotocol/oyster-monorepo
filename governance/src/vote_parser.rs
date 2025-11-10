@@ -1,5 +1,5 @@
 use alloy::network::{Ethereum, Network};
-use alloy::primitives::{B256, U256};
+use alloy::primitives::{Address, B256, U256};
 use anyhow::{Result, anyhow};
 use ecies::SecretKey as EncryptionPrivateKey;
 use std::sync::{Arc, Mutex};
@@ -136,7 +136,11 @@ impl<N: Network> VoteParse<N> {
                         .get_delegatee(_dgtr.clone(), nearest_block_to_proposal_creation)
                         .await?;
 
-                    if delegatee_as_per_contract != decision.get_voter_address() {
+                    if delegatee_as_per_contract == Address::ZERO
+                        || delegatee_as_per_contract == decision.get_voter_address()
+                    {
+                        // this is valid vote,
+                    } else {
                         continue;
                     }
                 }
