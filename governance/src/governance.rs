@@ -7,7 +7,9 @@ use alloy::{
 use anyhow::Result;
 use url::Url;
 
-use crate::governance::IGovernance::{ProposalTimeInfo, Vote, getAllVoteInfoReturn};
+use crate::governance::IGovernance::{
+    ProposalTimeInfo, Vote, getAllVoteInfoReturn, getProposalHashesReturn,
+};
 use serde::{Deserialize, Serialize};
 
 sol! {
@@ -29,6 +31,24 @@ sol! {
             uint256 voteActivationTimestamp;
             uint256 voteDeadlineTimestamp;
             uint256 proposalDeadlineTimestamp;
+        }
+
+        #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+        struct SubmitResultInputParams {
+            bytes kmsSig;
+            bytes enclavePubKey;
+            bytes enclaveSig;
+            bytes resultData;
+            bytes voteDecryptionKey;
+        }
+
+        #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+        struct VoteDecisionResult {
+            uint256 yes;
+            uint256 no;
+            uint256 abstain;
+            uint256 noWithVeto;
+            uint256 totalVotingPower;
         }
 
         // Delegation chain IDs
@@ -57,6 +77,8 @@ sol! {
         function getSingleVoteInfo(bytes32 _proposalId, uint256 idx) external view returns (Vote memory);
 
         function getGovernanceDelegation(uint256 _chainId) external view returns (address);
+
+        function getVoteHash(bytes32 _proposalId) public view returns (bytes32);
 
         #[derive(Debug)]
         event ProposalCreated(
@@ -91,9 +113,13 @@ impl<N: Network> Governance<N> {
         })
     }
 
+    pub fn get_address(&self) -> Address {
+        self.governance
+    }
+
     pub async fn get_proposal_timing_info(&self, proposal_id: B256) -> Result<ProposalTimeInfo> {
-        let i_governance_enclave = IGovernance::new(self.governance, &self.provider);
-        return i_governance_enclave
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
             .getProposalTimeInfo(proposal_id)
             .call()
             .await
@@ -101,8 +127,8 @@ impl<N: Network> Governance<N> {
     }
 
     pub async fn get_vote_count(&self, proposal_id: B256) -> Result<U256> {
-        let i_governance_enclave = IGovernance::new(self.governance, &self.provider);
-        return i_governance_enclave
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
             .getVoteCount(proposal_id)
             .call()
             .await
@@ -110,8 +136,8 @@ impl<N: Network> Governance<N> {
     }
 
     pub async fn get_all_vote_info(&self, proposal_id: B256) -> Result<getAllVoteInfoReturn> {
-        let i_governance_enclave = IGovernance::new(self.governance, &self.provider);
-        return i_governance_enclave
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
             .getAllVoteInfo(proposal_id)
             .call()
             .await
@@ -119,8 +145,8 @@ impl<N: Network> Governance<N> {
     }
 
     pub async fn get_single_vote(&self, proposal_id: B256, idx: U256) -> Result<Vote> {
-        let i_governance_enclave = IGovernance::new(self.governance, &self.provider);
-        return i_governance_enclave
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
             .getSingleVoteInfo(proposal_id, idx)
             .call()
             .await
@@ -128,9 +154,27 @@ impl<N: Network> Governance<N> {
     }
 
     pub async fn get_delegation_contract_address(&self, chain_id: U256) -> Result<Address> {
-        let i_governance_enclave = IGovernance::new(self.governance, &self.provider);
-        return i_governance_enclave
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
             .getGovernanceDelegation(chain_id)
+            .call()
+            .await
+            .map_err(|err| anyhow::Error::new(err));
+    }
+
+    pub async fn get_proposal_hash(&self, proposal_id: B256) -> Result<getProposalHashesReturn> {
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
+            .getProposalHashes(proposal_id)
+            .call()
+            .await
+            .map_err(|err| anyhow::Error::new(err));
+    }
+
+    pub async fn get_vote_hash(&self, proposal_id: B256) -> Result<B256> {
+        let i_governance = IGovernance::new(self.governance, &self.provider);
+        return i_governance
+            .getVoteHash(proposal_id)
             .call()
             .await
             .map_err(|err| anyhow::Error::new(err));

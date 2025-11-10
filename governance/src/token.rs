@@ -18,7 +18,7 @@ sol! {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenWeight {
     delegator: Address,
-    weight: U256,
+    pub weight: U256,
     block: u64,
 }
 

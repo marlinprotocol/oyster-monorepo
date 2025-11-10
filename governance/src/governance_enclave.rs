@@ -1,9 +1,10 @@
 use alloy::{
     network::Network,
-    primitives::{Address, U256},
+    primitives::{Address, B256, U256},
     providers::RootProvider,
     sol,
 };
+
 use anyhow::Result;
 use url::Url;
 
@@ -25,6 +26,8 @@ sol! {
         function getTokenNetworkConfig(uint256 _chainId) public view returns (TokenNetworkConfig memory);
 
         function getAllSupportedChainIds() external view returns (uint256[] memory);
+
+        function getImageId() external view returns (bytes32);
     }
 }
 
@@ -53,6 +56,16 @@ impl<N: Network> GovernanceEnclave<N> {
             .call()
             .await
             .map_err(|err| anyhow::Error::new(err));
+    }
+
+    pub async fn get_image_id(&self) -> Result<B256> {
+        let i_governance_enclave = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
+        let image_id = i_governance_enclave
+            .getImageId()
+            .call()
+            .await
+            .map_err(|err| anyhow::Error::new(err))?;
+        Ok(image_id)
     }
 }
 

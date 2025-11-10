@@ -180,8 +180,6 @@ mod tests {
     use ecies::{PublicKey as EncryptionPublicKey, SecretKey as EncryptionPrivateKey};
 
     use dotenvy::dotenv;
-    use rand::RngCore;
-    use rand::rngs::OsRng;
 
     fn make_delegatee_signing_key() -> Result<SigningPrivateKey> {
         // Load .env if present (no-op in production if you don't ship it)
@@ -198,20 +196,6 @@ mod tests {
 
         let ksec = KSec::from_slice(&sk_bytes).expect("valid secp256k1 scalar");
         Ok(SigningPrivateKey::from(ksec))
-    }
-
-    fn make_random_signing_key() -> SigningPrivateKey {
-        let mut rng = OsRng; // create an instance
-
-        loop {
-            let mut sk = [0u8; 32];
-            rng.fill_bytes(&mut sk); // call on the instance
-
-            if let anyhow::Result::Ok(ksec) = KSec::from_slice(&sk) {
-                return SigningPrivateKey::from(ksec);
-            }
-            // if invalid (zero or ≥ curve order), try again
-        }
     }
 
     fn make_encryption_keypair() -> (EncryptionPrivateKey, EncryptionPublicKey) {
@@ -231,7 +215,7 @@ mod tests {
         let proposal_id = std::env::var("TEST_PROPOSAL_ID")?;
 
         // Separate keys by role
-        let signing_sk = make_random_signing_key();
+        let signing_sk = SigningPrivateKey::random();
         let (enc_sk, enc_pk) = make_encryption_keypair();
 
         let iv = mk_inferred(decision_num, 777, proposal_id.parse()?);
@@ -270,7 +254,7 @@ mod tests {
         let proposal_id = std::env::var("TEST_PROPOSAL_ID")?;
 
         let delegatee_signing_key = make_delegatee_signing_key()?;
-        let random_delegator = make_random_signing_key().address();
+        let random_delegator = SigningPrivateKey::random().address();
 
         let enc_pk = DirtyKMS::default()
             .get_proposal_public_key(proposal_id.parse()?)

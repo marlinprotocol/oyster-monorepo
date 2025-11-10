@@ -1,5 +1,8 @@
-use alloy::primitives::{B256, FixedBytes, keccak256};
+use alloy::primitives::{B256, Bytes, FixedBytes, keccak256};
+use alloy::signers::SignerSync;
+use alloy::signers::k256::sha2::{Digest, Sha256};
 use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
+use alloy::sol_types::SolValue;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use ecies::{PublicKey as EncryptionPublicKey, SecretKey as EncryptionPrivateKey};
@@ -14,6 +17,39 @@ pub trait KMS {
 
     async fn get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey>;
     async fn get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey>;
+
+    async fn get_proposal_secret_bytes(&self, proposal_hash: B256) -> Result<Bytes> {
+        let sk = self.get_proposal_secret_key(proposal_hash).await?;
+        Ok(sk.serialize().into())
+    }
+
+    async fn generate_kms_sig(
+        &self,
+        image_id: B256,
+        enclave_pubkey: Bytes,
+        proposal_id: B256,
+    ) -> Result<Bytes> {
+        let uri = format!(
+            "/derive/secp256k1/public?image_id={}&path={}_result",
+            hex::encode(image_id),
+            hex::encode(proposal_id),
+        );
+
+        let uri_bytes: Vec<u8> = uri.as_bytes().to_vec();
+        let message = (uri_bytes, enclave_pubkey.clone()).abi_encode_packed();
+        let digest: B256 = {
+            let h = Sha256::digest(&message); // returns generic-array [u8; 32]
+            B256::from_slice(&h)
+        };
+
+        let signature = self
+            .get_persistent_secret_key()
+            .await?
+            .sign_hash_sync(&digest)?
+            .as_bytes();
+
+        Ok(signature.into())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -53,5 +89,26 @@ impl KMS for DirtyKMS {
         Ok(EncryptionPublicKey::from_secret_key(
             &self.get_proposal_secret_key(proposal_hash).await?,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
+    use anyhow::Result;
+
+    use crate::kms::{DirtyKMS, KMS};
+
+    #[tokio::test]
+    async fn test_kms_sig_generation() -> Result<()> {
+        let sig = DirtyKMS::default()
+            .generate_kms_sig(
+                "ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01".parse()?,
+                SigningPrivateKey::random().public_key().to_vec().into(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".parse()?,
+            )
+            .await?;
+        println!("{}", hex::encode(sig));
+        Ok(())
     }
 }

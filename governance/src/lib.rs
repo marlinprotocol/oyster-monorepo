@@ -11,3 +11,4 @@ pub mod token;
 pub mod vote_factory;
 pub mod vote_parser;
 pub mod vote_registry;
+pub mod vote_result;

@@ -1,4 +1,10 @@
-use crate::{config, kms::KMS, vote_parser::VoteParse, vote_registry::VoteRegistry};
+use crate::{
+    config,
+    kms::KMS,
+    vote_parser::VoteParse,
+    vote_registry::VoteRegistry,
+    vote_result::{self, ContractDataPreimage},
+};
 use actix_web::{
     HttpResponse, Responder, error,
     web::{self, Data},
@@ -44,7 +50,7 @@ async fn hello_handler() -> actix_web::Result<HttpResponse> {
         (status = 200, description = "Return proposal voting result"),
     ),
 )]
-async fn status<K: KMS>(
+async fn status<K: KMS + Send + Sync>(
     payload: web::Json<ProposalHash>,
     vote_registry: Data<VoteRegistry>,
     kms: Data<K>,
@@ -99,7 +105,7 @@ async fn status<K: KMS>(
         })));
     }
 
-    let vote_parser = VoteParse::new(governance);
+    let vote_parser = VoteParse::new(governance.clone());
     let sk = kms
         .get_proposal_secret_key(proposal_id)
         .await
@@ -119,14 +125,53 @@ async fn status<K: KMS>(
         .lock()
         .map_err(|e| error::ErrorInternalServerError(format!("mutex poisoned: {e}")))?;
 
+    let governance_enclave =
+        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    let proposal_hashes = governance
+        .get_proposal_hash(proposal_id)
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+        })?;
+
+    let contract_data_preimage = ContractDataPreimage {
+        governance_contract_address: governance.get_address(),
+        proposed_timestamp: proposal_time_info.proposedTimestamp,
+        contract_config_hash: proposal_hashes._2,
+        network_hash: proposal_hashes._1,
+        vote_hash: governance
+            .get_vote_hash(proposal_id)
+            .await
+            .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?,
+    };
+
+    let voting_aggregator = vote_result::VoteAggregator::new(
+        proposal_id,
+        governance_enclave
+            .get_image_id()
+            .await
+            .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?,
+        vote_factory.weighted_votes(),
+        kms.clone().into_inner(),
+        contract_data_preimage,
+    );
+
+    let submit_result_input_params = voting_aggregator
+        .get_submit_result_input_params()
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("vote result generation error: {e}"))
+        })?;
+
     Ok(HttpResponse::Ok().json(json!(
         {
-            "weighted_votes": vote_factory.weighted_votes()
+            "submit_result_input_params": submit_result_input_params
         }
     )))
 }
 
-pub fn get_scope<K: KMS + 'static>() -> actix_web::Scope {
+pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
     web::scope("/v1")
         .route("/hello", web::get().to(hello_handler))
         .route("/status", web::post().to(status::<K>))
