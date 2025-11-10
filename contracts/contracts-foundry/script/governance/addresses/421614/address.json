@@ -1,6 +1,6 @@
 {
   "Governance": {
-    "implementation": "0x05b8B9b086Aaea7642206658b7430bb9691055C7",
+    "implementation": "0x8F4dA0d19182B3763166Beb4E90767E3Ce187968",
     "proxy": "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48"
   },
   "GovernanceDelegation": {
