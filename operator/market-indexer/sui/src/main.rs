@@ -23,6 +23,10 @@ struct Args {
     #[arg(long)]
     grpc_password: Option<String>,
 
+    /// gRPC URL auth token
+    #[arg(long)]
+    grpc_token: Option<String>,
+
     /// Remote checkpoint url
     #[arg(short, long)]
     remote_checkpoint_url: String,
@@ -69,6 +73,7 @@ async fn main() -> Result<()> {
         grpc_url: args.grpc_url,
         rpc_username: args.grpc_username,
         rpc_password: args.grpc_password,
+        rpc_token: args.grpc_token,
         package_id: args.package_id,
     };
 
