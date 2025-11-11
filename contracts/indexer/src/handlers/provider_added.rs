@@ -1,7 +1,9 @@
 use crate::schema::providers;
+use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use diesel::query_dsl::methods::FilterDsl;
@@ -18,11 +20,19 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
     let provider = Address::from_word(log.topics()[1]).to_checksum(None);
     let cp = String::abi_decode(&log.data().data, true)?;
 
+    let block = log
+        .block_number
+        .ok_or(anyhow!("did not get block from log"))?;
+    let tx_hash = log
+        .transaction_hash
+        .ok_or(anyhow!("did not get tx hash from log"))?
+        .encode_hex_with_prefix();
+
     // we want to insert if provider does not exist
     // we want to error out if provider exists and is_active is true
     // we want to update only if is_active is false
 
-    info!(provider, cp, "inserting provider");
+    info!(provider, cp, ?block, ?tx_hash, "inserting provider");
 
     // target sql:
     // INSERT INTO providers (id, cp, is_active)
@@ -37,10 +47,17 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
             providers::id.eq(&provider),
             providers::cp.eq(&cp),
             providers::is_active.eq(true),
+            providers::block.eq(block as i64),
+            providers::tx_hash.eq(&tx_hash),
         ))
         .on_conflict(providers::id)
         .do_update()
-        .set((providers::is_active.eq(true), providers::cp.eq(&cp)))
+        .set((
+            providers::is_active.eq(true),
+            providers::cp.eq(&cp),
+            providers::block.eq(block as i64),
+            providers::tx_hash.eq(&tx_hash),
+        ))
         // we want to detect if we update any rows
         // we do it by only updating rows where is_active is false
         // and later checking if any rows were updated
@@ -69,8 +86,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_utils::TestDb;
     use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::test_utils::TestDb;
 
     use super::*;
 
@@ -120,6 +137,8 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
+                42,
+                (&keccak256!("some tx")).encode_hex_with_prefix().to_owned(),
                 true
             ))
         );
@@ -139,6 +158,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(43i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -149,6 +172,8 @@ mod tests {
             Ok((
                 "0x7777777777777777777777777777777777777777".to_owned(),
                 "some other cp".to_owned(),
+                43,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                 true
             ))
         );
@@ -193,11 +218,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    43,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    (&keccak256!("some tx")).encode_hex_with_prefix().to_owned(),
                     true,
                 )
             ])
@@ -218,6 +247,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(43i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -225,6 +258,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -239,11 +276,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    43,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -293,11 +334,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    43,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -318,6 +363,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(43i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -325,6 +374,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(false),
             ))
             .execute(conn)?;
@@ -339,11 +392,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    43,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     false,
                 )
             ])
@@ -389,11 +446,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    43,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some random cp".to_owned(),
+                    42,
+                    (&keccak256!("some tx")).encode_hex_with_prefix().to_owned(),
                     true,
                 )
             ])
