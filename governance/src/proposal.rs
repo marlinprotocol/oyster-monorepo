@@ -256,6 +256,7 @@ mod tests {
         let proposal_id = std::env::var("TEST_PROPOSAL_ID")?;
 
         let delegatee_signing_key = make_delegatee_signing_key()?;
+        #[allow(unused)]
         let random_delegator = SigningPrivateKey::random().address();
 
         let enc_pk = DirtyKMS::default()
@@ -271,7 +272,7 @@ mod tests {
             .to_governance_vote(
                 delegatee_signing_key.clone(),
                 enc_pk.clone(),
-                random_delegator,
+                delegatee_signing_key.address(),
             )
             .expect("build gov vote");
 
