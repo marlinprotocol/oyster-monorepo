@@ -1,4 +1,9 @@
-use alloy::primitives::{Address, U256};
+use alloy::{
+    primitives::{Address, B256, U256},
+    signers::k256::sha2::{Digest, Sha256},
+    sol,
+    sol_types::SolValue,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -107,6 +112,57 @@ impl VoteFactory {
     pub fn len(&self) -> usize {
         self.vote_by_index.len()
     }
+
+    pub fn vote_hash(&self) -> B256 {
+        let mut init_vote_hash = B256::ZERO;
+        for (_, vote_decision) in self.vote_by_index.iter() {
+            let on_chain_vote = vote_decision.get_on_chain_vote();
+            let vote_encrypted_hash: B256 = {
+                let h = Sha256::digest(on_chain_vote.voteEncrypted.clone()); // returns generic-array [u8; 32]
+                B256::from_slice(&h)
+            };
+
+            sol! {
+                struct CurrentVoteHashInput {
+                    address voter;
+                    address delegator;
+                    uint256 chainId;
+                    bytes32 voteEncryptedHash;
+                }
+            }
+
+            let cvhi = CurrentVoteHashInput {
+                voter: on_chain_vote.voter,
+                delegator: on_chain_vote.delegator,
+                chainId: on_chain_vote.delegatorChainId,
+                voteEncryptedHash: vote_encrypted_hash,
+            };
+
+            let current_vote_hash: B256 = {
+                let h = Sha256::digest(cvhi.abi_encode()); // returns generic-array [u8; 32]
+                B256::from_slice(&h)
+            };
+
+            sol! {
+                struct FinalizeVoteHashINput {
+                    bytes32 a;
+                    bytes32 b;
+                }
+            }
+
+            let fvhi = FinalizeVoteHashINput {
+                a: init_vote_hash,
+                b: current_vote_hash,
+            };
+            init_vote_hash = {
+                let h = Sha256::digest(fvhi.abi_encode()); // returns generic-array [u8; 32]
+                B256::from_slice(&h)
+            };
+        }
+
+        init_vote_hash
+    }
+
     pub fn is_empty(&self) -> bool {
         self.vote_by_index.is_empty()
     }

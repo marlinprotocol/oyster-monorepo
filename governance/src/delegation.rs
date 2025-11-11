@@ -29,13 +29,16 @@ impl<N: Network> Delegation<N> {
     }
 
     pub async fn get_delegatee(&self, delegator: Address, block_number: u64) -> Result<Address> {
+        log::debug!("Fetching delegatee for delegator: {}", delegator);
         let i_delegation = IDelegation::new(self.delegation, &self.provider);
-        let delegator = i_delegation
+        let delegatee = i_delegation
             .getDelegator(delegator)
             .block(block_number.into())
             .call()
             .await?;
-        Ok(delegator)
+
+        log::debug!("Delegator: {} Delegatee: {}", delegator, delegatee);
+        Ok(delegatee)
     }
 
     pub async fn is_delegation_set(
@@ -44,25 +47,37 @@ impl<N: Network> Delegation<N> {
         delegatee: Address,
         block_number: u64,
     ) -> Result<bool> {
+        log::debug!(
+            "Checking delegator: {} and delegatee: {} mapping",
+            delegator,
+            delegatee
+        );
         let i_delegation = IDelegation::new(self.delegation, &self.provider);
         let is_set = i_delegation
             .isDelegationSet(delegator, delegatee)
             .block(block_number.into())
             .call()
             .await?;
+        log::debug!(
+            "Delegator: {} and delegatee: {} is_set={}",
+            delegator,
+            delegatee,
+            is_set
+        );
         Ok(is_set)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{get_config, get_governanace_delegation, latest_block};
     use alloy::{network::Ethereum, primitives::U256};
     use anyhow::Result;
-
-    use crate::config::{get_config, get_governanace_delegation, latest_block};
+    use dotenvy::dotenv;
 
     #[tokio::test]
     async fn read_info_chain_1() -> Result<()> {
+        dotenv().ok();
         let delegation = get_governanace_delegation::<Ethereum>(
             U256::from(421614),
             "0xEa2C24a2C0ed96E162481f44fe910FA0c4bab180",
@@ -74,7 +89,7 @@ mod tests {
                 latest_block::<Ethereum>(&get_config()?.gov_chain_rpc_url).await?,
             )
             .await?;
-        println!("{:?}", info);
+        log::info!("{:?}", info);
         Ok(())
     }
 }

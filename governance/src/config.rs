@@ -31,9 +31,17 @@ pub fn get_governance<N: Network>() -> Result<Governance<N>> {
         .parse()
         .with_context(|| format!("invalid governance_contract address"))?;
 
+    let _envc: Address = cfg
+        .governance_enclave
+        .parse()
+        .with_context(|| format!("invalid governance_enclave address"))?;
+
     // build the client
-    let governance: Governance<N> =
-        Governance::new(&cfg.gov_chain_rpc_url, &cfg.governance_contract)?;
+    let governance: Governance<N> = Governance::new(
+        &cfg.gov_chain_rpc_url,
+        &cfg.governance_contract,
+        &cfg.governance_enclave,
+    )?;
     Ok(governance)
 }
 
@@ -57,11 +65,11 @@ pub fn get_rpc_url(chain_id: U256) -> Result<String> {
 
     // find RPC URL for given chain_id
     let cid = chain_id.to_string();
-    println!("cid: {}", cid);
     let rpc_url = cfg
         .other_rpc_urls
         .get(&cid)
         .ok_or_else(|| anyhow!("no RPC URL found for chain_id {}", cid))?;
+    log::debug!("cid: {} rpc_url: {}", cid, rpc_url);
 
     Ok(rpc_url.clone())
 }
@@ -80,11 +88,11 @@ pub fn get_governanace_delegation<N: Network>(
 
     // find RPC URL for given chain_id
     let cid = chain_id.to_string();
-    println!("cid: {}", cid);
     let rpc_url = cfg
         .other_rpc_urls
         .get(&cid)
         .ok_or_else(|| anyhow!("no RPC URL found for chain_id {}", cid))?;
+    log::debug!("cid: {} rpc_url: {}", cid, rpc_url);
 
     // Validate the URL string
     let url = Url::parse(rpc_url)

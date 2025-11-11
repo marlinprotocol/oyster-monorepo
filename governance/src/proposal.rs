@@ -13,14 +13,24 @@ use crate::governance::IGovernance::Vote;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VoteDecision {
-    Yes((GovernanceVote, InferredVote)),
-    No((GovernanceVote, InferredVote)),
-    Abstain((GovernanceVote, InferredVote)),
-    NoWithVeto((GovernanceVote, InferredVote)),
-    Invalid(GovernanceVote),
+    Yes((GovernanceVote, InferredVote)),        //1
+    No((GovernanceVote, InferredVote)),         //2
+    NoWithVeto((GovernanceVote, InferredVote)), //3
+    Abstain((GovernanceVote, InferredVote)),    //4
+    Invalid(GovernanceVote),                    // anything else
 }
 
 impl VoteDecision {
+    pub fn get_on_chain_vote(&self) -> &GovernanceVote {
+        match self {
+            VoteDecision::Yes(a) => &a.0,
+            VoteDecision::No(a) => &a.0,
+            VoteDecision::NoWithVeto(a) => &a.0,
+            VoteDecision::Abstain(a) => &a.0,
+            VoteDecision::Invalid(a) => a,
+        }
+    }
+
     pub fn get_chain_id(&self) -> Option<U256> {
         let id = match self {
             VoteDecision::Yes(v)
@@ -121,13 +131,22 @@ impl GovernanceVote {
         sk: EncryptionPrivateKey,
         proposal_id: B256,
     ) -> Result<VoteDecision> {
+        log::debug!("Decoding governance vote: {:?}", self);
         let encrypted_vote = EncryptedVote::abi_decode(&self.voteEncrypted)?;
+        log::debug!("encrypted vote: {:?}", encrypted_vote);
         let digest = keccak256(&encrypted_vote.encrypted_vote);
+        log::debug!("digest: {:?}", hex::encode(digest));
         let sig_bytes: &Bytes = &encrypted_vote.signature; // ABI `bytes`
+        log::debug!("sig_bytes: {:?}", hex::encode(sig_bytes));
         let sig = Signature::try_from(sig_bytes.as_ref())?; // <- &[u8]
 
         let recovered = sig.recover_address_from_prehash(&digest)?;
         if recovered != self.voter {
+            log::debug!(
+                "recovered vote: {} and actual voter: {} are different. Discarding vote",
+                recovered,
+                self.voter
+            );
             return Ok(VoteDecision::Invalid(self.clone()));
         }
 
@@ -135,22 +154,47 @@ impl GovernanceVote {
         let inferred_vote = InferredVote::abi_decode(&decrypted_vote)?;
 
         if inferred_vote.proposal_hash.ne(&proposal_id) {
+            log::debug!(
+                "recovered vote proposal: {} hash doesn't match actual proposal id: {}. Discarding vote",
+                inferred_vote.proposal_hash,
+                proposal_id
+            );
             return Ok(VoteDecision::Invalid(self.clone()));
         }
 
         if inferred_vote.decision.eq(&U256::from(1)) {
+            log::debug!(
+                "Vote: {}, Delegator: {} Vote: 1",
+                self.delegator,
+                self.voter
+            );
             return Ok(VoteDecision::Yes((self.clone(), inferred_vote)));
         }
 
         if inferred_vote.decision.eq(&U256::from(2)) {
+            log::debug!(
+                "Vote: {}, Delegator: {} Vote: 2",
+                self.delegator,
+                self.voter
+            );
             return Ok(VoteDecision::No((self.clone(), inferred_vote)));
         }
 
         if inferred_vote.decision.eq(&U256::from(3)) {
+            log::debug!(
+                "Vote: {}, Delegator: {} Vote: 3",
+                self.delegator,
+                self.voter
+            );
             return Ok(VoteDecision::NoWithVeto((self.clone(), inferred_vote)));
         }
 
         if inferred_vote.decision.eq(&U256::from(4)) {
+            log::debug!(
+                "Vote: {}, Delegator: {} Vote: 4",
+                self.delegator,
+                self.voter
+            );
             return Ok(VoteDecision::Abstain((self.clone(), inferred_vote)));
         }
 
@@ -276,13 +320,14 @@ mod tests {
             )
             .expect("build gov vote");
 
-        println!("{:?}", gv);
+        log::info!("{:?}", gv);
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_fe_generated_vote() -> Result<()> {
+        dotenv().ok();
         let proposal_id =
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?;
         let vote = GovernanceVote {
@@ -302,17 +347,18 @@ mod tests {
 
         let inferred_vote = vote.to_vote_decision(sk, proposal_id);
 
-        println!("{:?}", inferred_vote);
+        log::info!("{:?}", inferred_vote);
 
         Ok(())
     }
 
     #[test]
     fn test_decode_encrypted_vote() -> Result<()> {
+        dotenv().ok();
         let enc_vote: Bytes = "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000c104aa2253867e3e5cc018411964541c92cb75a7f6af83477e452b2ad5017c566bc6ba8cea26ca7764ba1de886d00d3b7c80ad985cb0fde45b484c8ca66f3267ea72e57c8a8e06ea8beeca5ecd7c9e8a55deaf540a1b506643e3d3e7dfd176901c3f4c8b4bb20ecbf4708667efbb7acab90c3219cc21995c296bf4c95f1fd11446288ead9955b10a351cbad7a645f77ed8b873ce00f9ff03da177d3463bb21da5cc280efd2b66375313e72940da4bb9b53750741d82a6950417a14e65ee6528a852e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041d6141ed465fcd80e8146997600955f190d69b999791f83676872a307d6ab60953ad8583f9ea2c1ff5ddedcece3fdcb9457a6b0d20765833f80aa179d52269a161c00000000000000000000000000000000000000000000000000000000000000".parse()?;
         let enc_vote = EncryptedVote::abi_decode(&enc_vote)?;
 
-        println!("{:?}", enc_vote);
+        log::info!("{:?}", enc_vote);
 
         Ok(())
     }

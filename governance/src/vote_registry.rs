@@ -149,8 +149,8 @@ mod tests {
             .parse_votes(proposal_id.parse()?, vote_factory, sk)
             .await?;
 
-        println!("{}", "vote_registry");
-        println!("{:?}", vote_registry);
+        log::info!("{}", "vote_registry");
+        log::info!("{:?}", vote_registry);
 
         Ok(())
     }

@@ -12,11 +12,46 @@ use crate::config::get_config;
 pub type SigningPublicKey = FixedBytes<64>;
 #[async_trait]
 pub trait KMS {
-    async fn get_persistent_secret_key(&self) -> Result<SigningPrivateKey>;
-    async fn get_persistent_public_key(&self) -> Result<SigningPublicKey>;
+    async fn get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
+        // You can add invariants, logging, metrics, caching, etc. here
+        log::debug!("Fetching persistent secret key");
+        self._get_persistent_secret_key().await
+    }
 
-    async fn get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey>;
-    async fn get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey>;
+    async fn get_persistent_public_key(&self) -> Result<SigningPublicKey> {
+        log::debug!("Fetching persistent public key");
+        self._get_persistent_public_key().await
+    }
+
+    async fn get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
+        log::debug!(
+            "Fetching proposal secret key for proposal: {}",
+            hex::encode(proposal_hash)
+        );
+        self._get_proposal_secret_key(proposal_hash).await
+    }
+
+    async fn get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
+        log::debug!(
+            "Fetching proposal public key for proposal: {}",
+            hex::encode(proposal_hash)
+        );
+        self._get_proposal_public_key(proposal_hash).await
+    }
+
+    // ---------- required “internal” methods (override these) ----------
+
+    /// Implementors MUST return the persistent signing secret key.
+    async fn _get_persistent_secret_key(&self) -> Result<SigningPrivateKey>;
+
+    /// Implementors MUST return the persistent signing public key.
+    async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey>;
+
+    /// Implementors MUST return the per-proposal encryption secret key.
+    async fn _get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey>;
+
+    /// Implementors MUST return the per-proposal encryption public key.
+    async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey>;
 
     async fn get_proposal_secret_bytes(&self, proposal_hash: B256) -> Result<Bytes> {
         let sk = self.get_proposal_secret_key(proposal_hash).await?;
@@ -35,18 +70,23 @@ pub trait KMS {
             hex::encode(proposal_id),
         );
 
+        log::debug!("uri: {}", uri);
+
         let uri_bytes: Vec<u8> = uri.as_bytes().to_vec();
         let message = (uri_bytes, enclave_pubkey.clone()).abi_encode_packed();
         let digest: B256 = {
             let h = Sha256::digest(&message); // returns generic-array [u8; 32]
             B256::from_slice(&h)
         };
+        log::debug!("message: {}", hex::encode(digest));
 
         let signature = self
             .get_persistent_secret_key()
             .await?
             .sign_hash_sync(&digest)?
             .as_bytes();
+
+        log::debug!("kms signature: {}", hex::encode(signature));
 
         Ok(signature.into())
     }
@@ -57,17 +97,17 @@ pub struct DirtyKMS;
 
 #[async_trait]
 impl KMS for DirtyKMS {
-    async fn get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
+    async fn _get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
         let sk_hex = get_config()?.init_dirty_key;
         let raw: Vec<u8> = hex::decode(sk_hex)?;
         Ok(SigningPrivateKey::from_slice(&raw)?)
     }
 
-    async fn get_persistent_public_key(&self) -> Result<SigningPublicKey> {
+    async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey> {
         Ok(self.get_persistent_secret_key().await?.public_key())
     }
 
-    async fn get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
+    async fn _get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
         // 1) Master secret (32 bytes)
         let master = self.get_persistent_secret_key().await?;
         let master_bytes = master.to_bytes().to_vec();
@@ -85,7 +125,7 @@ impl KMS for DirtyKMS {
         Ok(enc_sk)
     }
 
-    async fn get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
+    async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
         Ok(EncryptionPublicKey::from_secret_key(
             &self.get_proposal_secret_key(proposal_hash).await?,
         ))
@@ -96,11 +136,13 @@ impl KMS for DirtyKMS {
 mod tests {
     use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
     use anyhow::Result;
+    use dotenvy::dotenv;
 
     use crate::kms::{DirtyKMS, KMS};
 
     #[tokio::test]
     async fn test_kms_sig_generation() -> Result<()> {
+        dotenv().ok();
         let sig = DirtyKMS::default()
             .generate_kms_sig(
                 "ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01".parse()?,
@@ -108,7 +150,7 @@ mod tests {
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".parse()?,
             )
             .await?;
-        println!("{}", hex::encode(sig));
+        log::info!("{}", hex::encode(sig));
         Ok(())
     }
 }

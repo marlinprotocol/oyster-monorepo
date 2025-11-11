@@ -41,12 +41,27 @@ impl<N: Network> TokenInstance<N> {
     }
 
     pub async fn get_token_weight(&self, owner: Address, block_number: u64) -> Result<TokenWeight> {
+        log::debug!(
+            "Fetching token balance: {} for address: {} at block_number: {}",
+            self.token_address,
+            owner,
+            block_number
+        );
         let token_instance = IERC20::new(self.token_address, &self.provider);
         let balance = token_instance
             .balanceOf(owner)
             .block(block_number.into())
             .call()
             .await?;
+
+        log::debug!(
+            "token balance: {} for address: {} at block_number: {} = {}",
+            self.token_address,
+            owner,
+            block_number,
+            balance
+        );
+
         Ok(TokenWeight {
             delegator: owner,
             weight: balance,

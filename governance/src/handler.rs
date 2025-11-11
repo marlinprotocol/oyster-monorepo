@@ -16,6 +16,51 @@ use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use utoipa::ToSchema;
 
+/// Fetch `proposal_time_info` and validate its timestamps.
+/// On RPC error -> map with `ErrorInternalServerError`.
+/// On invalid timestamps -> early-return 400 { "message": "invalid proposal id" }.
+///
+/// Usage:
+///   let proposal_time_info = fetch_and_check_proposal_time_info!(governance, proposal_id);
+#[macro_export]
+macro_rules! fetch_and_check_proposal_time_info {
+    ($governance:expr, $proposal_id:expr) => {{
+        let __info = $governance
+            .get_proposal_timing_info($proposal_id)
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+
+        if __info.proposalDeadlineTimestamp == 0
+            || __info.proposedTimestamp == 0
+            || __info.voteActivationTimestamp == 0
+            || __info.voteDeadlineTimestamp == 0
+        {
+            return Ok(actix_web::HttpResponse::BadRequest()
+                .json(serde_json::json!({ "message": "invalid proposal id" })));
+        }
+
+        __info
+    }};
+    // Optional arm: custom error mapper
+    ($governance:expr, $proposal_id:expr, $err_mapper:expr) => {{
+        let __info = $governance
+            .get_proposal_timing_info($proposal_id)
+            .await
+            .map_err($err_mapper)?;
+
+        if __info.proposalDeadlineTimestamp == 0
+            || __info.proposedTimestamp == 0
+            || __info.voteActivationTimestamp == 0
+            || __info.voteDeadlineTimestamp == 0
+        {
+            return Ok(actix_web::HttpResponse::BadRequest()
+                .json(serde_json::json!({ "message": "invalid proposal id" })));
+        }
+
+        __info
+    }};
+}
+
 sol! {
     #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
     struct ProposalHash {
@@ -79,18 +124,7 @@ async fn status<K: KMS + Send + Sync>(
         }
     };
 
-    let proposal_time_info = governance
-        .get_proposal_timing_info(proposal_id)
-        .await
-        .map_err(error::ErrorInternalServerError)?;
-
-    if proposal_time_info.proposalDeadlineTimestamp == 0
-        || proposal_time_info.proposedTimestamp == 0
-        || proposal_time_info.voteActivationTimestamp == 0
-        || proposal_time_info.voteDeadlineTimestamp == 0
-    {
-        return Ok(HttpResponse::BadRequest().json(json!({"message":"invalid proposal id"})));
-    }
+    let proposal_time_info = fetch_and_check_proposal_time_info!(governance, proposal_id);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -101,6 +135,7 @@ async fn status<K: KMS + Send + Sync>(
     if U256::from(now) < proposal_time_info.voteDeadlineTimestamp {
         return Ok(HttpResponse::Ok().json(json!({
             "message": "voting in progress",
+            "in_progress": true,
             "now": now.to_string(),
             "voteDeadlineTimestamp": proposal_time_info.voteDeadlineTimestamp.to_string()
         })));
@@ -129,22 +164,21 @@ async fn status<K: KMS + Send + Sync>(
     let governance_enclave =
         config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
 
-    let proposal_hashes = governance
-        .get_proposal_hash(proposal_id)
-        .await
-        .map_err(|e| {
-            error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+    let computed_contract_config_hash =
+        governance.compute_contract_data_hash().await.map_err(|e| {
+            error::ErrorInternalServerError(format!("compute contract hashes error: {e}"))
         })?;
+
+    let computed_network_hash = governance_enclave.get_network_hash().await.map_err(|e| {
+        error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+    })?;
 
     let contract_data_preimage = ContractDataPreimage {
         governance_contract_address: governance.get_address(),
         proposed_timestamp: proposal_time_info.proposedTimestamp,
-        contract_config_hash: proposal_hashes._2,
-        network_hash: proposal_hashes._1,
-        vote_hash: governance
-            .get_vote_hash(proposal_id)
-            .await
-            .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?,
+        contract_config_hash: computed_contract_config_hash,
+        network_hash: computed_network_hash,
+        vote_hash: vote_factory.vote_hash(),
     };
 
     let voting_aggregator = vote_result::VoteAggregator::new(
@@ -167,8 +201,10 @@ async fn status<K: KMS + Send + Sync>(
 
     Ok(HttpResponse::Ok().json(json!(
         {
+            "in_progress": false,
             "submit_result_input_params": submit_result_input_params,
-            "vote_snapshot": vote_factory.weighted_votes()
+            "vote_snapshot": vote_factory.weighted_votes(),
+            "vote_hash": vote_factory.vote_hash(),
         }
     )))
 }
@@ -190,18 +226,7 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
     let governance =
         config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
 
-    let proposal_time_info = governance
-        .get_proposal_timing_info(proposal_id)
-        .await
-        .map_err(error::ErrorInternalServerError)?;
-
-    if proposal_time_info.proposalDeadlineTimestamp == 0
-        || proposal_time_info.proposedTimestamp == 0
-        || proposal_time_info.voteActivationTimestamp == 0
-        || proposal_time_info.voteDeadlineTimestamp == 0
-    {
-        return Ok(HttpResponse::BadRequest().json(json!({"message":"invalid proposal id"})));
-    }
+    fetch_and_check_proposal_time_info!(governance, proposal_id);
 
     let pk: EncryptionPublicKey = kms
         .get_proposal_public_key(proposal_id)
@@ -215,6 +240,72 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
         }
     )))
 }
+
+#[utoipa::path(
+    post,
+    path = "/v1/vote_hash",
+    request_body = ProposalHashPlaceHolder,
+    responses(
+        (status = 200, description = "Return vote hash"),
+    ),
+)]
+async fn vote_hash(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
+    let proposal_id = payload.proposal_id;
+
+    let governance =
+        config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    fetch_and_check_proposal_time_info!(governance, proposal_id);
+
+    let vote_hash_on_contract = governance
+        .get_vote_hash(proposal_id)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "proposal_id": proposal_id,
+            "vote_hash_on_contract": vote_hash_on_contract
+        }
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/proposal_hashes",
+    request_body = ProposalHashPlaceHolder,
+    responses(
+        (status = 200, description = "Return proposal hashes"),
+    ),
+)]
+async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
+    let proposal_id = payload.proposal_id;
+
+    let governance =
+        config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    let governance_enclave =
+        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    fetch_and_check_proposal_time_info!(governance, proposal_id);
+
+    let computed_contract_config_hash =
+        governance.compute_contract_data_hash().await.map_err(|e| {
+            error::ErrorInternalServerError(format!("compute contract hashes error: {e}"))
+        })?;
+
+    let computed_network_hash = governance_enclave.get_network_hash().await.map_err(|e| {
+        error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+    })?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "computed_contract_config_hash": computed_contract_config_hash,
+            "computed_network_hash": computed_network_hash
+        }
+    )))
+}
+
 pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
     web::scope("/v1")
         .route("/hello", web::get().to(hello_handler))
@@ -223,4 +314,6 @@ pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
             "/proposal_encryption_key",
             web::post().to(proposal_encryption_key::<K>),
         )
+        .route("/vote_hash", web::post().to(vote_hash))
+        .route("/proposal_hashes", web::post().to(proposal_hashes))
 }

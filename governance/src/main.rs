@@ -9,7 +9,8 @@ use governance::{
 
 #[actix_web::main]
 async fn main() -> Result<()> {
-    println!("Governance Enclave Started!");
+    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+    log::info!("Governance Enclave Started!");
 
     HttpServer::new(move || {
         let vote_registry = VoteRegistry::new();
