@@ -1,6 +1,6 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    commands::log::{stream_logs, LogArgs},
+    commands::log::{LogArgs, stream_logs},
     configs::global::OYSTER_MARKET_ADDRESS,
     types::Platform,
     utils::{
@@ -12,12 +12,12 @@ use crate::{
 
 use alloy::{
     network::Ethereum,
-    primitives::{keccak256, Address, B256 as H256, U256},
+    primitives::{Address, B256 as H256, U256, keccak256},
     providers::{Provider, WalletProvider},
     sol,
     transports::http::Http,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
 use tracing::info;
 
-use super::simulate::{simulate, SimulateArgs, LOCAL_DEV_IMAGE};
+use super::simulate::{LOCAL_DEV_IMAGE, SimulateArgs, simulate};
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
@@ -79,6 +79,14 @@ pub struct DeployArgs {
     /// Instance type (e.g. "r6g.large")
     #[arg(long)]
     instance_type: Option<String>,
+
+    /// Sample value (in MB): 1024. Please ensure that the provided values are within the available system resources, keeping in mind that some resources are reserved for the host machine’s operation.
+    #[arg(long)]
+    enclave_memory: Option<u32>,
+
+    /// Sample value : 4. Please ensure that the provided values are within the available system resources, keeping in mind that some resources are reserved for the host machine’s operation.
+    #[arg(long)]
+    enclave_cpu: Option<u32>,
 
     /// Optional bandwidth in KBps (default: 10)
     #[arg(long, default_value = "10")]
@@ -224,6 +232,13 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             },
             _ => Err(anyhow!("Image URL is required")),
         })?;
+
+    // Override memory and cpu if provided
+    let selected_instance = InstanceRate {
+        memory: args.enclave_memory.unwrap_or(selected_instance.memory),
+        cpu: args.enclave_cpu.unwrap_or(selected_instance.cpu),
+        ..selected_instance
+    };
 
     // Create metadata
     let metadata = create_metadata(
