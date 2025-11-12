@@ -42,6 +42,8 @@
     mkdir -p $out/app
     mkdir -p $out/etc
     mkdir -p $out/app/docker-images
+    mkdir -p $out/app/decrypted
+    mkdir -p $out/app/nfs-encrypted
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenX25519} $out/app/keygen-x25519
     cp ${itvroProxy} $out/app/ip-to-vsock-raw-outgoing
@@ -85,7 +87,7 @@ in {
     env = "";
     copyToRoot = pkgs.buildEnv {
       name = "image-root";
-      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq];
+      paths = [app pkgs.busybox pkgs.nettools pkgs.iproute2 pkgs.iptables-legacy pkgs.ipset pkgs.cacert pkgs.docker pkgs.jq pkgs.nfs-utils pkgs.curl pkgs.gocryptfs];
       pathsToLink = ["/bin" "/app" "/etc"];
     };
   };
