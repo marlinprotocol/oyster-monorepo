@@ -9,6 +9,7 @@ actix-web = "4.11.0"
 alloy = "1.1.0"
 anyhow = "1.0.100"
 async-trait = "0.1.89"
+dotenvy = "0.15.7"
 ecies = "0.2.10"
 hex = "0.4.3"
 serde = "1.0.228"
@@ -23,7 +24,6 @@ env_logger = "0.11.8"
 actix-cors = "0.7.1"
 
 [dev-dependencies]
-dotenvy = "0.15.7"
 tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "time"] }
 
 [profile.dev]

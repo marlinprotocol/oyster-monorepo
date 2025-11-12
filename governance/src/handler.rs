@@ -81,6 +81,7 @@ struct ProposalHashPlaceHolder {
     responses(
         (status = 200, description = "Hi"),
     ),
+    tag = "Hi..."
 )]
 async fn hello_handler() -> actix_web::Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(json!({
@@ -260,44 +261,19 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
 
 #[utoipa::path(
     post,
-    path = "/v1/vote_hash",
-    request_body = ProposalHashPlaceHolder,
-    responses(
-        (status = 200, description = "Return vote hash"),
-    ),
-    tag = "Contract Read"
-)]
-async fn vote_hash(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
-    let proposal_id = payload.proposal_id;
-
-    let governance =
-        config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
-
-    fetch_and_check_proposal_time_info!(governance, proposal_id);
-
-    let vote_hash_on_contract = governance
-        .get_vote_hash_from_contract(proposal_id)
-        .await
-        .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?;
-
-    Ok(HttpResponse::Ok().json(json!(
-        {
-            "proposal_id": proposal_id,
-            "vote_hash_on_contract": vote_hash_on_contract
-        }
-    )))
-}
-
-#[utoipa::path(
-    post,
     path = "/v1/proposal_hashes",
     request_body = ProposalHashPlaceHolder,
     responses(
         (status = 200, description = "Return proposal hashes"),
     ),
-    tag = "Manual Compute"
+    tag = "Compare",
+    description = "Compare the offchain and onchain hashes"
 )]
-async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
+async fn proposal_hashes<K: KMS + Send + Sync>(
+    payload: web::Json<ProposalHash>,
+    vote_registry: Data<VoteRegistry>,
+    kms: Data<K>,
+) -> actix_web::Result<impl Responder> {
     let proposal_id = payload.proposal_id;
 
     let governance =
@@ -335,6 +311,48 @@ async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<
             error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
         })?;
 
+    #[allow(deprecated)]
+    let vote_hash_on_contract = governance
+        .get_vote_hash_from_contract(proposal_id)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?;
+
+    let factory = match vote_registry
+        .get_factory(&proposal_id)
+        .map_err(error::ErrorInternalServerError)?
+    {
+        Some(f) => f,
+        None => {
+            let pti = governance
+                .get_proposal_timing_info(proposal_id)
+                .await
+                .map_err(error::ErrorInternalServerError)?;
+            vote_registry
+                .create_factory(proposal_id, pti)
+                .map_err(error::ErrorInternalServerError)?
+        }
+    };
+
+    let vote_parser = VoteParse::new(governance.clone(), governance_enclave.clone());
+    let sk = kms
+        .get_proposal_secret_key(proposal_id)
+        .await
+        .map_err(error::ErrorInternalServerError)?;
+
+    let factory_clone = factory.clone();
+    {
+        vote_parser
+            .parse_votes(proposal_id, factory_clone, sk)
+            .await
+            .map_err(|e| error::ErrorInternalServerError(format!("mutex poisoned: {e}")))?;
+
+        drop(vote_parser);
+    }
+
+    let vote_factory = factory
+        .lock()
+        .map_err(|e| error::ErrorInternalServerError(format!("mutex poisoned: {e}")))?;
+
     Ok(HttpResponse::Ok().json(json!({
             "config_hash": {
                 "actual": proposal_hashses._2,
@@ -344,6 +362,10 @@ async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<
                 "computed": proposal_hashses._1,
                 "actual": computed_network_hash
             },
+            "vote_hash": {
+                "computed": vote_factory.vote_hash(),
+                "actual": vote_hash_on_contract
+            }
         }
     )))
 }
@@ -356,6 +378,5 @@ pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
             "/proposal_encryption_key",
             web::post().to(proposal_encryption_key::<K>),
         )
-        .route("/vote_hash", web::post().to(vote_hash))
-        .route("/proposal_hashes", web::post().to(proposal_hashes))
+        .route("/proposal_hashes", web::post().to(proposal_hashes::<K>))
 }

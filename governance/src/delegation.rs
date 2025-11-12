@@ -70,7 +70,7 @@ impl<N: Network> Delegation<N> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{get_config, get_governanace_delegation, latest_block};
+    use crate::config::{create_gov_chain_rpc_url, get_governanace_delegation, latest_block};
     use alloy::{network::Ethereum, primitives::U256};
     use anyhow::Result;
 
@@ -85,7 +85,7 @@ mod tests {
             .is_delegation_set(
                 "0000000000000000000000000000000000000001".parse()?,
                 "0000000000000000000000000000000000000001".parse()?,
-                latest_block::<Ethereum>(&get_config()?.gov_chain_rpc_url).await?,
+                latest_block::<Ethereum>(&create_gov_chain_rpc_url()?).await?,
             )
             .await?;
         println!("{:?}", info);

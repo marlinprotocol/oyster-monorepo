@@ -288,14 +288,13 @@ impl<N: Network> Governance<N> {
         Ok(init_contract_data_hash)
     }
 
+    #[deprecated(note = "This is to be only used fur debugging")]
     pub async fn get_vote_hash_from_contract(&self, proposal_id: B256) -> Result<B256> {
-        let block_number = self.get_proposal_creation_block_number(proposal_id).await?;
         log::debug!("Fetching vote hash for proposal_id: {}", proposal_id);
         let i_governance = IGovernance::new(self.governance, &self.provider);
         let vote_hash = i_governance
             .getVoteHash(proposal_id)
             .call()
-            .block(block_number.into())
             .await
             .map_err(|err| anyhow::Error::new(err))?;
 
@@ -310,7 +309,7 @@ mod tests {
     use anyhow::Result;
 
     use crate::{
-        config::{create_rpc_url, find_block_by_timestamp, get_config},
+        config::{create_gov_chain_rpc_url, create_rpc_url, find_block_by_timestamp, get_config},
         governance::{Governance, IGovernance::ProposalTimeInfo},
     };
 
@@ -322,7 +321,7 @@ mod tests {
         let proposal_id = std::env::var("TEST_PROPOSAL_ID")?;
 
         let governance = Governance::<Ethereum>::new(
-            &cfg.gov_chain_rpc_url,
+            &create_gov_chain_rpc_url()?,
             &cfg.governance_contract,
             &cfg.governance_enclave,
         )?;

@@ -5,9 +5,8 @@ use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
 use alloy::sol_types::SolValue;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use dotenvy::dotenv;
 use ecies::{PublicKey as EncryptionPublicKey, SecretKey as EncryptionPrivateKey};
-
-use crate::config::get_config;
 
 pub type SigningPublicKey = FixedBytes<64>;
 #[async_trait]
@@ -98,7 +97,8 @@ pub struct DirtyKMS;
 #[async_trait]
 impl KMS for DirtyKMS {
     async fn _get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
-        let sk_hex = get_config()?.init_dirty_key;
+        dotenv().ok();
+        let sk_hex = std::env::var("DIRTY_KMS_HEX")?;
         let raw: Vec<u8> = hex::decode(sk_hex)?;
         Ok(SigningPrivateKey::from_slice(&raw)?)
     }

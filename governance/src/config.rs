@@ -15,14 +15,14 @@ use crate::{
 
 pub const GOVERNANCE: &str = "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48";
 pub const GOVERNANCE_ENCLAVE: &str = "0xf6EF8A444c47ab142B33D0EEb60c60050916d64F";
+pub const GOV_CHAIN_BASE_RPC: &str = "https://arbitrum-sepolia.core.chainstack.com/";
 
 #[derive(Deserialize)]
 pub struct GovernanceConfig {
     pub governance_contract: String,
     pub governance_enclave: String,
-    pub gov_chain_rpc_url: String,
+    pub gov_chain_apikey: String,
     pub rpc_apikeys: HashMap<String, String>,
-    pub init_dirty_key: String,
 }
 
 pub fn get_governance<N: Network>() -> Result<Governance<N>> {
@@ -41,7 +41,7 @@ pub fn get_governance<N: Network>() -> Result<Governance<N>> {
 
     // build the client
     let governance: Governance<N> = Governance::new(
-        &cfg.gov_chain_rpc_url,
+        &create_gov_chain_rpc_url()?,
         &cfg.governance_contract,
         &cfg.governance_enclave,
     )?;
@@ -59,8 +59,23 @@ pub fn get_governance_enclave<N: Network>() -> Result<GovernanceEnclave<N>> {
 
     // build the client
     let governance_enclave: GovernanceEnclave<N> =
-        GovernanceEnclave::new(&cfg.gov_chain_rpc_url, &cfg.governance_enclave)?;
+        GovernanceEnclave::new(&create_gov_chain_rpc_url()?, &cfg.governance_enclave)?;
     Ok(governance_enclave)
+}
+
+pub fn create_gov_chain_rpc_url() -> Result<String> {
+    let rpc_apikey = get_gov_chain_rpc_apikey()?;
+    let rpc_url = format!("{}{}", GOV_CHAIN_BASE_RPC, rpc_apikey);
+
+    let url = Url::parse(rpc_url.as_ref())
+        .with_context(|| format!("invalid GOVERNANCE CHAIN URL '{}'", rpc_url))?;
+
+    Ok(url.as_str().to_string())
+}
+
+pub fn get_gov_chain_rpc_apikey() -> Result<String> {
+    let cfg = get_config().context("loading config")?;
+    Ok(cfg.gov_chain_apikey)
 }
 
 pub fn get_rpc_apikey(chain_id: U256) -> Result<String> {
@@ -120,9 +135,8 @@ pub fn get_config() -> Result<GovernanceConfig> {
 
     #[derive(Serialize, Deserialize)]
     struct Base {
-        gov_chain_rpc_url: String,
+        gov_chain_apikey: String,
         rpc_apikeys: HashMap<String, String>,
-        init_dirty_key: String,
     }
     // parse and validate
     let base_cfg: Base =
@@ -131,9 +145,8 @@ pub fn get_config() -> Result<GovernanceConfig> {
     let cfg = GovernanceConfig {
         governance_contract: GOVERNANCE.to_string(),
         governance_enclave: GOVERNANCE_ENCLAVE.to_string(),
-        gov_chain_rpc_url: base_cfg.gov_chain_rpc_url,
+        gov_chain_apikey: base_cfg.gov_chain_apikey,
         rpc_apikeys: base_cfg.rpc_apikeys,
-        init_dirty_key: base_cfg.init_dirty_key,
     };
     Ok(cfg)
 }
