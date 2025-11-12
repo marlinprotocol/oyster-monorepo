@@ -184,13 +184,11 @@ where
 mod tests {
     use alloy::sol_types::SolValue;
     use anyhow::Result;
-    use dotenvy::dotenv;
 
     use crate::vote_result::ContractDataPreimage;
 
     #[tokio::test]
     async fn test_contract_preimage_encoding_no_top_level_params() -> Result<()> {
-        dotenv().ok();
         let contract_data_preimage = ContractDataPreimage {
             governance_contract_address: "0x0000123400001234000012340000123400001234".parse()?,
             proposed_timestamp: "172919243".parse()?,
@@ -202,7 +200,7 @@ mod tests {
                 .parse()?,
         };
 
-        log::info!("{:}", hex::encode(contract_data_preimage.abi_encode()));
+        println!("{:}", hex::encode(contract_data_preimage.abi_encode()));
         Ok(())
     }
 }

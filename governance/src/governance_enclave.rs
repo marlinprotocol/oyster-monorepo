@@ -30,10 +30,12 @@ sol! {
         function getAllSupportedChainIds() external view returns (uint256[] memory);
 
         function getImageId() external view returns (bytes32);
+
+        function getNetworkHash() external view returns (bytes32);
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GovernanceEnclave<N: Network> {
     provider: RootProvider<N>,
     governance_enclave: Address,
@@ -51,12 +53,17 @@ impl<N: Network> GovernanceEnclave<N> {
         })
     }
 
-    pub async fn get_token_network_config(&self, chain_id: U256) -> Result<TokenNetworkConfig> {
+    pub async fn get_token_network_config(
+        &self,
+        chain_id: U256,
+        block_number: u64,
+    ) -> Result<TokenNetworkConfig> {
         log::debug!("Fetching token network config for chain id: {}", chain_id);
         let i_governance_enclave = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
         let token_network_config = i_governance_enclave
             .getTokenNetworkConfig(chain_id)
             .call()
+            .block(block_number.into())
             .await
             .map_err(|err| anyhow::Error::new(err))?;
 
@@ -69,12 +76,14 @@ impl<N: Network> GovernanceEnclave<N> {
         Ok(token_network_config)
     }
 
-    pub async fn get_image_id(&self) -> Result<B256> {
+    pub async fn get_image_id(&self, block_number: u64) -> Result<B256> {
         log::debug!("Fetching image id");
+
         let i_governance_enclave = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
         let image_id = i_governance_enclave
             .getImageId()
             .call()
+            .block(block_number.into())
             .await
             .map_err(|err| anyhow::Error::new(err))?;
 
@@ -82,15 +91,30 @@ impl<N: Network> GovernanceEnclave<N> {
         Ok(image_id)
     }
 
-    #[deprecated(note = "Need to compute this info more offline")]
-    pub async fn get_network_hash(&self) -> Result<B256> {
+    #[deprecated(note = "don't use this, instead compute")]
+    pub async fn get_network_hash(&self, block_number: u64) -> Result<B256> {
+        let i_governance_enclave = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
+
+        let network_hash = i_governance_enclave
+            .getNetworkHash()
+            .call()
+            .block(block_number.into())
+            .await
+            .map_err(|err| anyhow::Error::new(err))?;
+
+        Ok(network_hash)
+    }
+
+    pub async fn compute_network_hash(&self, block_number: u64) -> Result<B256> {
         let mut init_network_hash = B256::ZERO;
 
         let i_governance = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
         let network_chain_ids = i_governance.getAllSupportedChainIds().call().await?;
 
         for chain_id in network_chain_ids {
-            let token_network_config = self.get_token_network_config(chain_id).await?;
+            let token_network_config = self
+                .get_token_network_config(chain_id, block_number)
+                .await?;
             let chain_hash = token_network_config.chainHash;
             sol! {struct Input {bytes32 a; bytes32 b; }}
             let input = Input {
@@ -107,30 +131,38 @@ impl<N: Network> GovernanceEnclave<N> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::get_governance_enclave;
+    use crate::config::{find_block_by_timestamp, get_governance_enclave};
     use alloy::{network::Ethereum, primitives::U256};
     use anyhow::Result;
-    use dotenvy::dotenv;
 
     #[tokio::test]
     async fn read_info_chain_1() -> Result<()> {
-        dotenv().ok();
+        let block_number = find_block_by_timestamp::<Ethereum>(
+            "https://sepolia-rollup.arbitrum.io/rpc",
+            1762933455,
+        )
+        .await?;
         let gov_enclave = get_governance_enclave::<Ethereum>()?;
         let info = gov_enclave
-            .get_token_network_config(U256::from(421614))
+            .get_token_network_config(U256::from(421614), block_number)
             .await?;
-        log::info!("{:?}", info);
+        println!("{:?}", info);
         Ok(())
     }
 
     #[tokio::test]
     async fn read_info_chain_2() -> Result<()> {
-        dotenv().ok();
+        let block_number = find_block_by_timestamp::<Ethereum>(
+            "https://sepolia-rollup.arbitrum.io/rpc",
+            1762933455,
+        )
+        .await?;
+
         let gov_enclave = get_governance_enclave::<Ethereum>()?;
         let info = gov_enclave
-            .get_token_network_config(U256::from(11155111))
+            .get_token_network_config(U256::from(11155111), block_number)
             .await?;
-        log::info!("{:?}", info);
+        println!("{:?}", info);
         Ok(())
     }
 }

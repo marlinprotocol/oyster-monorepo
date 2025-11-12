@@ -136,13 +136,11 @@ impl KMS for DirtyKMS {
 mod tests {
     use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
     use anyhow::Result;
-    use dotenvy::dotenv;
 
     use crate::kms::{DirtyKMS, KMS};
 
     #[tokio::test]
     async fn test_kms_sig_generation() -> Result<()> {
-        dotenv().ok();
         let sig = DirtyKMS::default()
             .generate_kms_sig(
                 "ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01ABCDEF01".parse()?,
@@ -150,7 +148,7 @@ mod tests {
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".parse()?,
             )
             .await?;
-        log::info!("{}", hex::encode(sig));
+        println!("{}", hex::encode(sig));
         Ok(())
     }
 }

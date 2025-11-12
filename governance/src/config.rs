@@ -5,7 +5,7 @@ use alloy::{
     providers::{Provider, RootProvider},
 };
 use anyhow::{Context, Result, anyhow};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
 use url::Url;
 
@@ -13,12 +13,15 @@ use crate::{
     delegation::Delegation, governance::Governance, governance_enclave::GovernanceEnclave,
 };
 
+pub const GOVERNANCE: &str = "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48";
+pub const GOVERNANCE_ENCLAVE: &str = "0xf6EF8A444c47ab142B33D0EEb60c60050916d64F";
+
 #[derive(Deserialize)]
 pub struct GovernanceConfig {
     pub governance_contract: String,
     pub governance_enclave: String,
     pub gov_chain_rpc_url: String,
-    pub other_rpc_urls: HashMap<String, String>,
+    pub rpc_apikeys: HashMap<String, String>,
     pub init_dirty_key: String,
 }
 
@@ -60,43 +63,44 @@ pub fn get_governance_enclave<N: Network>() -> Result<GovernanceEnclave<N>> {
     Ok(governance_enclave)
 }
 
-pub fn get_rpc_url(chain_id: U256) -> Result<String> {
+pub fn get_rpc_apikey(chain_id: U256) -> Result<String> {
     let cfg = get_config().context("loading config")?;
 
     // find RPC URL for given chain_id
     let cid = chain_id.to_string();
-    let rpc_url = cfg
-        .other_rpc_urls
+    let rpc_apikey = cfg
+        .rpc_apikeys
         .get(&cid)
-        .ok_or_else(|| anyhow!("no RPC URL found for chain_id {}", cid))?;
-    log::debug!("cid: {} rpc_url: {}", cid, rpc_url);
+        .ok_or_else(|| anyhow!("no RPC apikey found for chain_id {}", cid))?;
+    log::debug!("cid: {} rpc_apikey: {}", cid, rpc_apikey);
 
-    Ok(rpc_url.clone())
+    Ok(rpc_apikey.clone())
+}
+
+pub fn create_rpc_url(base_url: &str, chain_id: U256) -> Result<String> {
+    let cid = chain_id.to_string();
+    let rpc_apikey = get_rpc_apikey(chain_id)?;
+    log::debug!("cid: {} rpc_apikey: {}", cid, rpc_apikey);
+
+    let rpc_url = format!("{}{}", base_url, rpc_apikey);
+
+    let url = Url::parse(rpc_url.as_ref())
+        .with_context(|| format!("invalid RPC URL '{}' for chain {}", rpc_url, cid))?;
+
+    Ok(url.as_str().to_string())
 }
 
 pub fn get_governanace_delegation<N: Network>(
     chain_id: U256,
+    base_url: &str,
     delegation_address: &str,
 ) -> Result<Delegation<N>> {
-    // load config (your earlier get_config())
-    let cfg = get_config().context("loading config")?;
-
     // parse the delegation address early
     let _addr: Address = delegation_address
         .parse()
         .context("invalid delegation_address address")?;
 
-    // find RPC URL for given chain_id
-    let cid = chain_id.to_string();
-    let rpc_url = cfg
-        .other_rpc_urls
-        .get(&cid)
-        .ok_or_else(|| anyhow!("no RPC URL found for chain_id {}", cid))?;
-    log::debug!("cid: {} rpc_url: {}", cid, rpc_url);
-
-    // Validate the URL string
-    let url = Url::parse(rpc_url)
-        .with_context(|| format!("invalid RPC URL '{}' for chain {}", rpc_url, cid))?;
+    let url = create_rpc_url(base_url, chain_id)?;
 
     // build the client
     let delegation: Delegation<N> = Delegation::new(url.as_str(), delegation_address)
@@ -114,9 +118,23 @@ pub fn get_config() -> Result<GovernanceConfig> {
         .find_map(|p| fs::read_to_string(p).ok().map(|s| (*p, s)))
         .ok_or_else(|| anyhow!("config.json not found in ./config or /config"))?;
 
+    #[derive(Serialize, Deserialize)]
+    struct Base {
+        gov_chain_rpc_url: String,
+        rpc_apikeys: HashMap<String, String>,
+        init_dirty_key: String,
+    }
     // parse and validate
-    let cfg: GovernanceConfig =
+    let base_cfg: Base =
         serde_json::from_str(&contents).with_context(|| format!("parse failed for {path}"))?;
+
+    let cfg = GovernanceConfig {
+        governance_contract: GOVERNANCE.to_string(),
+        governance_enclave: GOVERNANCE_ENCLAVE.to_string(),
+        gov_chain_rpc_url: base_cfg.gov_chain_rpc_url,
+        rpc_apikeys: base_cfg.rpc_apikeys,
+        init_dirty_key: base_cfg.init_dirty_key,
+    };
     Ok(cfg)
 }
 
@@ -180,26 +198,43 @@ pub async fn find_block_by_timestamp<N: Network>(
 async fn binary_search_block<N: Network>(
     provider: &RootProvider<N>,
     target_ts: u64,
-    mut low: u64,
-    mut high: u64,
+    low: u64,
+    high: u64, // inclusive upper bound expected by caller
 ) -> Result<u64> {
-    while low + 1 < high {
-        let mid = low + (high - low) / 2;
-        let block = provider
-            .get_block_by_number(mid.into())
-            .await
-            .map_err(|e| anyhow!("get_block({mid}) failed: {e}"))?
-            .ok_or_else(|| anyhow!("block {mid} not found"))?;
-        let ts = block.header().timestamp();
+    // Convert to [low, high+1) to do a lower_bound (first ts >= target_ts)
+    let mut l = low;
+    let mut r = high + 1;
 
-        if ts == target_ts {
-            return Ok(mid);
-        } else if ts < target_ts {
-            low = mid;
+    while l < r {
+        let mid = l + (r - l) / 2;
+        let ts = block_ts(provider, mid).await?;
+        if ts < target_ts {
+            l = mid + 1;
         } else {
-            high = mid;
+            // ts >= target_ts → shrink right, ensuring we land on the first >=
+            r = mid;
         }
     }
-    // at this point, high = low + 1, return low as the closest <= target_ts
-    Ok(low)
+
+    // l is the first index with ts >= target_ts, or high+1 if all ts < target_ts
+    if l <= high {
+        let ts_l = block_ts(provider, l).await?;
+        if ts_l == target_ts {
+            // This is the earliest block with the exact timestamp.
+            return Ok(l);
+        }
+    }
+
+    // No exact match: return the floor (largest block with ts < target_ts).
+    // If even genesis is >= target_ts, clamp to low.
+    if l == 0 { Ok(low) } else { Ok(l - 1) }
+}
+
+async fn block_ts<N: Network>(provider: &RootProvider<N>, n: u64) -> Result<u64> {
+    let b = provider
+        .get_block_by_number(n.into())
+        .await
+        .map_err(|e| anyhow!("get_block({n}) failed: {e}"))?
+        .ok_or_else(|| anyhow!("block {n} not found"))?;
+    Ok(b.header().timestamp())
 }

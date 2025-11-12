@@ -118,6 +118,7 @@ mod tests {
     use crate::{
         config,
         governance::Governance,
+        governance_enclave::GovernanceEnclave,
         kms::{DirtyKMS, KMS},
         vote_parser::VoteParse,
         vote_registry::VoteRegistry,
@@ -136,11 +137,13 @@ mod tests {
             .await?;
 
         let governance: Governance<Ethereum> = config::get_governance()?;
+        let governance_enclave: GovernanceEnclave<Ethereum> = config::get_governance_enclave()?;
+
         let proposal_time_info = governance
             .get_proposal_timing_info(proposal_id.parse()?)
             .await?;
 
-        let vote_parser = VoteParse::new(governance.clone());
+        let vote_parser = VoteParse::new(governance, governance_enclave);
 
         let vote_registry = VoteRegistry::new();
         let vote_factory =
@@ -149,8 +152,8 @@ mod tests {
             .parse_votes(proposal_id.parse()?, vote_factory, sk)
             .await?;
 
-        log::info!("{}", "vote_registry");
-        log::info!("{:?}", vote_registry);
+        println!("{}", "vote_registry");
+        println!("{:?}", vote_registry);
 
         Ok(())
     }

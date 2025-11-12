@@ -73,13 +73,12 @@ mod tests {
     use crate::config::{get_config, get_governanace_delegation, latest_block};
     use alloy::{network::Ethereum, primitives::U256};
     use anyhow::Result;
-    use dotenvy::dotenv;
 
     #[tokio::test]
     async fn read_info_chain_1() -> Result<()> {
-        dotenv().ok();
         let delegation = get_governanace_delegation::<Ethereum>(
             U256::from(421614),
+            "https://arb-sepolia.g.alchemy.com/v2/".into(),
             "0xEa2C24a2C0ed96E162481f44fe910FA0c4bab180",
         )?;
         let info: bool = delegation
@@ -89,7 +88,7 @@ mod tests {
                 latest_block::<Ethereum>(&get_config()?.gov_chain_rpc_url).await?,
             )
             .await?;
-        log::info!("{:?}", info);
+        println!("{:?}", info);
         Ok(())
     }
 }

@@ -9,8 +9,11 @@ use alloy::{
 use anyhow::Result;
 use url::Url;
 
-use crate::governance::IGovernance::{
-    ProposalTimeInfo, Vote, getAllVoteInfoReturn, getProposalHashesReturn,
+use crate::{
+    config,
+    governance::IGovernance::{
+        ProposalTimeInfo, Vote, getAllVoteInfoReturn, getProposalHashesReturn,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +106,7 @@ pub struct Governance<N: Network> {
     governance: Address,
     #[allow(unused)]
     governance_enclave: Address,
+    gov_chain_rpc_url: String,
 }
 
 impl<N: Network> Governance<N> {
@@ -116,6 +120,7 @@ impl<N: Network> Governance<N> {
 
         let governance = governance_address.parse()?;
         Ok(Self {
+            gov_chain_rpc_url: gov_chain_rpc_url.into(),
             provider,
             governance,
             governance_enclave: governance_enclave_address.parse()?,
@@ -196,15 +201,22 @@ impl<N: Network> Governance<N> {
         Ok(single_vote)
     }
 
-    pub async fn get_delegation_contract_address(&self, chain_id: U256) -> Result<Address> {
+    pub async fn get_delegation_contract_address(
+        &self,
+        chain_id: U256,
+        proposal_id: B256,
+    ) -> Result<Address> {
         log::debug!(
             "Fetching delegation contract address for chain_id: {}",
             chain_id
         );
+        let block_number = self.get_proposal_creation_block_number(proposal_id).await?;
+
         let i_governance = IGovernance::new(self.governance, &self.provider);
         let addr = i_governance
             .getGovernanceDelegation(chain_id)
             .call()
+            .block(block_number.into())
             .await
             .map_err(|err| anyhow::Error::new(err))?;
 
@@ -230,8 +242,19 @@ impl<N: Network> Governance<N> {
         Ok(hashes)
     }
 
-    #[deprecated(note = "Check this if meets all the requirements")]
-    pub async fn compute_contract_data_hash(&self) -> Result<B256> {
+    pub async fn get_proposal_creation_block_number(&self, proposal_id: B256) -> Result<u64> {
+        let proposal_time_info = self.get_proposal_timing_info(proposal_id).await?;
+        let block_number = config::find_block_by_timestamp::<N>(
+            &self.gov_chain_rpc_url,
+            proposal_time_info.proposedTimestamp.to::<u64>(),
+        )
+        .await?;
+
+        Ok(block_number)
+    }
+
+    pub async fn compute_contract_data_hash(&self, proposal_id: B256) -> Result<B256> {
+        let block_number = self.get_proposal_creation_block_number(proposal_id).await?;
         let mut init_contract_data_hash = {
             sol! {struct Input {address a; }}
             let input = Input {
@@ -241,12 +264,17 @@ impl<N: Network> Governance<N> {
             B256::from_slice(&h)
         };
         let i_governance = IGovernance::new(self.governance, &self.provider);
-        let delegation_chainids = i_governance.getAllDelegationChainIds().call().await?;
+        let delegation_chainids = i_governance
+            .getAllDelegationChainIds()
+            .call()
+            .block(block_number.into())
+            .await?;
 
         for delegation_chain in delegation_chainids {
             let delegation_contract = i_governance
                 .getGovernanceDelegation(delegation_chain)
                 .call()
+                .block(block_number.into())
                 .await?;
             sol! {struct Input {bytes32 currentHash; uint256 chainId; address delegation;}}
             let input = Input {
@@ -260,13 +288,14 @@ impl<N: Network> Governance<N> {
         Ok(init_contract_data_hash)
     }
 
-    #[deprecated(note = "don't use this, instead compute")]
-    pub async fn get_vote_hash(&self, proposal_id: B256) -> Result<B256> {
+    pub async fn get_vote_hash_from_contract(&self, proposal_id: B256) -> Result<B256> {
+        let block_number = self.get_proposal_creation_block_number(proposal_id).await?;
         log::debug!("Fetching vote hash for proposal_id: {}", proposal_id);
         let i_governance = IGovernance::new(self.governance, &self.provider);
         let vote_hash = i_governance
             .getVoteHash(proposal_id)
             .call()
+            .block(block_number.into())
             .await
             .map_err(|err| anyhow::Error::new(err))?;
 
@@ -277,19 +306,19 @@ impl<N: Network> Governance<N> {
 
 #[cfg(test)]
 mod tests {
-    use alloy::network::Ethereum;
+    use alloy::{network::Ethereum, primitives::U256};
     use anyhow::Result;
 
     use crate::{
-        config::{find_block_by_timestamp, get_config},
+        config::{create_rpc_url, find_block_by_timestamp, get_config},
         governance::{Governance, IGovernance::ProposalTimeInfo},
     };
 
     use dotenvy::dotenv;
 
     async fn timing_info() -> Result<ProposalTimeInfo> {
-        let cfg = get_config()?;
         dotenv().ok();
+        let cfg = get_config()?;
         let proposal_id = std::env::var("TEST_PROPOSAL_ID")?;
 
         let governance = Governance::<Ethereum>::new(
@@ -306,17 +335,20 @@ mod tests {
 
     #[tokio::test]
     async fn read_search_nearest_block_1() -> Result<()> {
-        dotenv().ok();
-        let cfg = get_config()?;
         let timing_info = timing_info().await?;
 
+        let rpc_url = create_rpc_url(
+            "https://arb-sepolia.g.alchemy.com/v2/".into(),
+            U256::from(421614),
+        )?;
+
         let nearest_block_to_proposal_creation = find_block_by_timestamp::<Ethereum>(
-            &cfg.other_rpc_urls.get("421614").unwrap(),
+            rpc_url.as_ref(),
             timing_info.proposedTimestamp.to::<u64>(),
         )
         .await?;
 
-        log::info!(
+        println!(
             "nearest_block_to_proposal_creation: {}",
             nearest_block_to_proposal_creation
         );
@@ -325,17 +357,19 @@ mod tests {
 
     #[tokio::test]
     async fn read_search_nearest_block_2() -> Result<()> {
-        dotenv().ok();
-        let cfg = get_config()?;
         let timing_info = timing_info().await?;
+        let rpc_url = create_rpc_url(
+            "https://arb-sepolia.g.alchemy.com/v2/".into(),
+            U256::from(11155111),
+        )?;
 
         let nearest_block_to_proposal_creation = find_block_by_timestamp::<Ethereum>(
-            &cfg.other_rpc_urls.get("11155111").unwrap(),
+            rpc_url.as_ref(),
             timing_info.proposedTimestamp.to::<u64>(),
         )
         .await?;
 
-        log::info!(
+        println!(
             "nearest_block_to_proposal_creation: {}",
             nearest_block_to_proposal_creation
         );

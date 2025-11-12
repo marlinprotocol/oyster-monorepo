@@ -5,6 +5,7 @@ use ecies::SecretKey as EncryptionPrivateKey;
 use std::sync::{Arc, Mutex};
 
 use crate::delegation::Delegation;
+use crate::governance_enclave::GovernanceEnclave;
 use crate::token::TokenInstance;
 use crate::vote_factory::WeightVoteDecision;
 use crate::{
@@ -12,15 +13,19 @@ use crate::{
     vote_factory::VoteFactory,
 };
 
-use crate::config::{find_block_by_timestamp, get_config, get_governance_enclave};
+use crate::config::{self, find_block_by_timestamp};
 
 pub struct VoteParse<N: Network> {
     governance: Governance<N>,
+    governance_enclave: GovernanceEnclave<N>,
 }
 
 impl<N: Network> VoteParse<N> {
-    pub fn new(governance: Governance<N>) -> Self {
-        Self { governance }
+    pub fn new(governance: Governance<N>, governance_enclave: GovernanceEnclave<N>) -> Self {
+        Self {
+            governance,
+            governance_enclave,
+        }
     }
 
     pub async fn get_proposal_timing_info(&self, proposal_id: B256) -> Result<ProposalTimeInfo> {
@@ -68,12 +73,17 @@ impl<N: Network> VoteParse<N> {
 
         drop(vf);
 
-        self.parse_votes_weight(vote_factory.clone()).await?;
+        self.parse_votes_weight(proposal_id, vote_factory.clone())
+            .await?;
 
         Ok(())
     }
 
-    async fn parse_votes_weight(&self, vote_factory: Arc<Mutex<VoteFactory>>) -> Result<()> {
+    async fn parse_votes_weight(
+        &self,
+        proposal_id: B256,
+        vote_factory: Arc<Mutex<VoteFactory>>,
+    ) -> Result<()> {
         // --- 1) Snapshot from vf, then drop the lock ---
         let (votes_by_chain, proposal_ts) = {
             let vf = vote_factory
@@ -91,43 +101,42 @@ impl<N: Network> VoteParse<N> {
             // vf guard is dropped here
         };
 
-        // --- 2) Do async work without holding the lock ---
-        let cfg = get_config()?;
-        let governance_enclave = get_governance_enclave::<Ethereum>()?;
+        let nearest_block_on_gov_chain = self
+            .governance
+            .get_proposal_creation_block_number(proposal_id)
+            .await?;
 
         let mut updates: Vec<WeightVoteDecision> = Vec::new();
 
         for (chain_id, address_vote_map) in votes_by_chain {
-            let chain_key = chain_id.to_string();
+            let token_network_configs = self
+                .governance_enclave
+                .get_token_network_config(chain_id, nearest_block_on_gov_chain)
+                .await?;
 
-            let rpc_url: &str = cfg
-                .other_rpc_urls
-                .get(&chain_key)
-                .map(|s| s.as_str())
-                .ok_or_else(|| {
-                    anyhow!("missing RPC URL for chain {chain_key} in other_rpc_urls")
-                })?;
+            let base_url = token_network_configs
+                .rpcUrls
+                .get(0)
+                .ok_or_else(|| anyhow!("no rpc URL found in token_network_configs"))?;
+
+            let rpc_url = config::create_rpc_url(base_url, chain_id)?;
 
             let nearest_block_to_proposal_creation =
-                find_block_by_timestamp::<Ethereum>(rpc_url, proposal_ts).await?;
+                find_block_by_timestamp::<Ethereum>(&rpc_url, proposal_ts).await?;
 
             let delegation_contract_address = self
                 .governance
-                .get_delegation_contract_address(chain_id.clone())
+                .get_delegation_contract_address(chain_id.clone(), proposal_id)
                 .await?;
 
             let delegation = Delegation::<Ethereum>::new(
-                rpc_url,
+                &rpc_url,
                 delegation_contract_address.to_string().as_ref(),
             )?;
 
-            let token_network_config = governance_enclave
-                .get_token_network_config(chain_id.clone())
-                .await?;
-
             let token_instance = TokenInstance::<Ethereum>::new(
-                rpc_url,
-                token_network_config.tokenAddress.to_string().as_ref(),
+                &rpc_url,
+                token_network_configs.tokenAddress.to_string().as_ref(),
             )?;
 
             for (delegator_or_voter, decision) in address_vote_map {

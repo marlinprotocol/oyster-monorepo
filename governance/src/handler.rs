@@ -95,6 +95,7 @@ async fn hello_handler() -> actix_web::Result<HttpResponse> {
     responses(
         (status = 200, description = "Return proposal voting result"),
     ),
+    tag = "Manual Compute"
 )]
 async fn status<K: KMS + Send + Sync>(
     payload: web::Json<ProposalHash>,
@@ -106,6 +107,9 @@ async fn status<K: KMS + Send + Sync>(
     // 1) build governance client
     let governance =
         config::get_governance::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    let governance_enclave =
+        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
 
     // 2) try to fetch existing factory; if missing, create it
     let factory = match vote_registry
@@ -141,7 +145,7 @@ async fn status<K: KMS + Send + Sync>(
         })));
     }
 
-    let vote_parser = VoteParse::new(governance.clone());
+    let vote_parser = VoteParse::new(governance.clone(), governance_enclave.clone());
     let sk = kms
         .get_proposal_secret_key(proposal_id)
         .await
@@ -161,17 +165,26 @@ async fn status<K: KMS + Send + Sync>(
         .lock()
         .map_err(|e| error::ErrorInternalServerError(format!("mutex poisoned: {e}")))?;
 
-    let governance_enclave =
-        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
-
-    let computed_contract_config_hash =
-        governance.compute_contract_data_hash().await.map_err(|e| {
+    let computed_contract_config_hash = governance
+        .compute_contract_data_hash(proposal_id)
+        .await
+        .map_err(|e| {
             error::ErrorInternalServerError(format!("compute contract hashes error: {e}"))
         })?;
 
-    let computed_network_hash = governance_enclave.get_network_hash().await.map_err(|e| {
-        error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
-    })?;
+    let nearest_block_on_gov_chain = governance
+        .get_proposal_creation_block_number(proposal_id)
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("vote result generation error: {e}"))
+        })?;
+
+    let computed_network_hash = governance_enclave
+        .compute_network_hash(nearest_block_on_gov_chain)
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+        })?;
 
     let contract_data_preimage = ContractDataPreimage {
         governance_contract_address: governance.get_address(),
@@ -181,12 +194,14 @@ async fn status<K: KMS + Send + Sync>(
         vote_hash: vote_factory.vote_hash(),
     };
 
+    let image_id = governance_enclave
+        .get_image_id(nearest_block_on_gov_chain)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+
     let voting_aggregator = vote_result::VoteAggregator::new(
         proposal_id,
-        governance_enclave
-            .get_image_id()
-            .await
-            .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?,
+        image_id,
         vote_factory.weighted_votes(),
         kms.clone().into_inner(),
         contract_data_preimage,
@@ -205,6 +220,7 @@ async fn status<K: KMS + Send + Sync>(
             "submit_result_input_params": submit_result_input_params,
             "vote_snapshot": vote_factory.weighted_votes(),
             "vote_hash": vote_factory.vote_hash(),
+            "raw_votes": vote_factory.votes()
         }
     )))
 }
@@ -216,6 +232,7 @@ async fn status<K: KMS + Send + Sync>(
     responses(
         (status = 200, description = "Return proposal voting result"),
     ),
+    tag = "Deprecated"
 )]
 async fn proposal_encryption_key<K: KMS + Send + Sync>(
     payload: web::Json<ProposalHash>,
@@ -248,6 +265,7 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
     responses(
         (status = 200, description = "Return vote hash"),
     ),
+    tag = "Contract Read"
 )]
 async fn vote_hash(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
     let proposal_id = payload.proposal_id;
@@ -258,7 +276,7 @@ async fn vote_hash(payload: web::Json<ProposalHash>) -> actix_web::Result<impl R
     fetch_and_check_proposal_time_info!(governance, proposal_id);
 
     let vote_hash_on_contract = governance
-        .get_vote_hash(proposal_id)
+        .get_vote_hash_from_contract(proposal_id)
         .await
         .map_err(|e| error::ErrorInternalServerError(format!("vote hash error: {e}")))?;
 
@@ -277,6 +295,7 @@ async fn vote_hash(payload: web::Json<ProposalHash>) -> actix_web::Result<impl R
     responses(
         (status = 200, description = "Return proposal hashes"),
     ),
+    tag = "Manual Compute"
 )]
 async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<impl Responder> {
     let proposal_id = payload.proposal_id;
@@ -289,19 +308,42 @@ async fn proposal_hashes(payload: web::Json<ProposalHash>) -> actix_web::Result<
 
     fetch_and_check_proposal_time_info!(governance, proposal_id);
 
-    let computed_contract_config_hash =
-        governance.compute_contract_data_hash().await.map_err(|e| {
+    let nearest_block_on_gov_chain = governance
+        .get_proposal_creation_block_number(proposal_id)
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("vote result generation error: {e}"))
+        })?;
+
+    let computed_contract_config_hash = governance
+        .compute_contract_data_hash(proposal_id)
+        .await
+        .map_err(|e| {
             error::ErrorInternalServerError(format!("compute contract hashes error: {e}"))
         })?;
 
-    let computed_network_hash = governance_enclave.get_network_hash().await.map_err(|e| {
-        error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
-    })?;
+    #[allow(deprecated)]
+    let proposal_hashses = governance
+        .get_proposal_hash(proposal_id)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("get contract hashes error: {e}")))?;
 
-    Ok(HttpResponse::Ok().json(json!(
-        {
-            "computed_contract_config_hash": computed_contract_config_hash,
-            "computed_network_hash": computed_network_hash
+    let computed_network_hash = governance_enclave
+        .compute_network_hash(nearest_block_on_gov_chain)
+        .await
+        .map_err(|e| {
+            error::ErrorInternalServerError(format!("fetch proposal hashes error: {e}"))
+        })?;
+
+    Ok(HttpResponse::Ok().json(json!({
+            "config_hash": {
+                "actual": proposal_hashses._2,
+                "computed": computed_contract_config_hash
+            },
+            "network_hash": {
+                "computed": proposal_hashses._1,
+                "actual": computed_network_hash
+            },
         }
     )))
 }

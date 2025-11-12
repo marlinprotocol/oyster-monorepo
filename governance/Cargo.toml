@@ -20,6 +20,7 @@ utoipa = "5.4.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"] }
 log = "0.4.28"
 env_logger = "0.11.8"
+actix-cors = "0.7.1"
 
 [dev-dependencies]
 dotenvy = "0.15.7"

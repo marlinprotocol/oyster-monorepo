@@ -3,7 +3,10 @@ use std::time::Duration;
 use actix_web::{App, HttpServer, web::Data};
 use anyhow::Result;
 use governance::{
-    apidoc::get_swagger, handler::get_scope, kms::DirtyKMS, middlewares,
+    apidoc::get_swagger,
+    handler::get_scope,
+    kms::DirtyKMS,
+    middlewares::{self, allow_all_cors::allow_all},
     vote_registry::VoteRegistry,
 };
 
@@ -15,10 +18,12 @@ async fn main() -> Result<()> {
     HttpServer::new(move || {
         let vote_registry = VoteRegistry::new();
         let kms = DirtyKMS::default();
-        let server = App::new().wrap(middlewares::ratelimiter::get_rate_limiter(
-            Duration::from_secs(1),
-            15,
-        ));
+        let server = App::new()
+            .wrap(middlewares::ratelimiter::get_rate_limiter(
+                Duration::from_secs(1),
+                15,
+            ))
+            .wrap(allow_all());
         server
             .app_data(Data::new(vote_registry))
             .app_data(Data::new(kms))
