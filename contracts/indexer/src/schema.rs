@@ -23,6 +23,9 @@ diesel::table! {
         #[max_length = 42]
         id -> Bpchar,
         cp -> Text,
+        block -> Int8,
+        #[max_length = 66]
+        tx_hash -> Bpchar,
         is_active -> Bool,
     }
 }

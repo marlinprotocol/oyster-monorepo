@@ -77,6 +77,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -153,7 +157,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -246,7 +252,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -313,6 +321,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -380,7 +392,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -466,7 +480,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -532,6 +548,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -608,7 +628,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -701,7 +723,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
