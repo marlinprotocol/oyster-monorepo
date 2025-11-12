@@ -16,7 +16,6 @@ use sui_rpc::proto::sui::rpc::v2::{
     ProgrammableTransaction, SimulateTransactionRequest, Transaction, TransactionKind,
 };
 use sui_sdk_types::{Address, CheckpointData};
-use sui_storage::blob::Blob;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -428,7 +427,7 @@ impl ChainHandler for SuiProvider {
                         .await
                         .context(format!("Failed to get checkpoint data for sequence {} using remote url", seq_num))?;
 
-                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, Blob::from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
+                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint_data_from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
                     }
                 }
             });
@@ -467,6 +466,15 @@ fn checkpoint_to_sui_logs(package_id: &str, checkpoint: Checkpoint) -> Vec<SuiLo
     }
 
     logs
+}
+
+fn checkpoint_data_from_bytes(bytes: &[u8]) -> Result<CheckpointData> {
+    let (encoding, data) = bytes.split_first().ok_or(anyhow!("empty bytes"))?;
+    if *encoding != 1 {
+        return Err(anyhow!("Invalid encoding of checkpoint bytes"));
+    }
+
+    Ok(bcs::from_bytes(data)?)
 }
 
 fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> Vec<SuiLog> {
