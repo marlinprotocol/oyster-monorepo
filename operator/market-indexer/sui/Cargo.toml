@@ -15,7 +15,6 @@ reqwest = { version = "0.12.23", default-features = false, features = ["rustls-t
 serde = { version = "1.0.217", features = ["derive"] }
 sui_rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-rpc"}
 sui_sdk_types = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-sdk-types"}
-sui_storage = { git = "https://github.com/mystenlabs/sui/", package = "sui-storage", rev = "mainnet-v1.58.3"}
 tokio = { version = "1.46.1", features = ["full"] }
 tokio-retry = "0.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

@@ -8,20 +8,21 @@ use indexer_framework::SaturatingConvert;
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::{self, JobEvent};
 use serde::Deserialize;
-use sui_rpc::client::AuthInterceptor;
-use sui_rpc::client::v2::Client;
+use sui_rpc::client::Client;
+use sui_rpc::client::HeadersInterceptor;
 use sui_rpc::field::FieldMask;
 use sui_rpc::proto::sui::rpc::v2::{
     Checkpoint, Command, GetCheckpointRequest, GetServiceInfoRequest, MoveCall,
     ProgrammableTransaction, SimulateTransactionRequest, Transaction, TransactionKind,
 };
 use sui_sdk_types::{Address, CheckpointData};
-use sui_storage::blob::Blob;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
+
+const GRPC_AUTH_TOKEN: &str = "x-token";
 
 const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -210,14 +211,24 @@ pub struct SuiProvider {
     pub grpc_url: String,
     pub rpc_username: Option<String>,
     pub rpc_password: Option<String>,
+    pub rpc_token: Option<String>,
     pub package_id: String,
 }
 
 impl SuiProvider {
     fn get_client(&self) -> Result<Client> {
         if let Some(username) = &self.rpc_username {
-            Ok(Client::new(&self.grpc_url)?
-                .with_auth(AuthInterceptor::basic(username, self.rpc_password.clone())))
+            let mut headers = HeadersInterceptor::default();
+            headers.basic_auth(username, self.rpc_password.clone());
+
+            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
+        } else if let Some(token) = &self.rpc_token {
+            let mut headers = HeadersInterceptor::default();
+            headers
+                .headers_mut()
+                .insert(GRPC_AUTH_TOKEN, token.parse()?);
+
+            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
         } else {
             Ok(Client::new(&self.grpc_url)?)
         }
@@ -416,7 +427,7 @@ impl ChainHandler for SuiProvider {
                         .await
                         .context(format!("Failed to get checkpoint data for sequence {} using remote url", seq_num))?;
 
-                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, Blob::from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
+                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint_data_from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
                     }
                 }
             });
@@ -455,6 +466,15 @@ fn checkpoint_to_sui_logs(package_id: &str, checkpoint: Checkpoint) -> Vec<SuiLo
     }
 
     logs
+}
+
+fn checkpoint_data_from_bytes(bytes: &[u8]) -> Result<CheckpointData> {
+    let (encoding, data) = bytes.split_first().ok_or(anyhow!("empty bytes"))?;
+    if *encoding != 1 {
+        return Err(anyhow!("Invalid encoding of checkpoint bytes"));
+    }
+
+    Ok(bcs::from_bytes(data)?)
 }
 
 fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> Vec<SuiLog> {
