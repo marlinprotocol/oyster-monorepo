@@ -52,7 +52,6 @@ pub trait InfraProvider {
         &mut self,
         job: &JobId,
         instance_type: &str,
-        family: &str,
         region: &str,
         req_mem: i64,
         req_vcpu: i32,
@@ -81,7 +80,6 @@ where
         &mut self,
         job: &JobId,
         instance_type: &str,
-        family: &str,
         region: &str,
         req_mem: i64,
         req_vcpu: i32,
@@ -94,7 +92,6 @@ where
             .spin_up(
                 job,
                 instance_type,
-                family,
                 region,
                 req_mem,
                 req_vcpu,
@@ -596,7 +593,6 @@ struct JobState<'a> {
     last_settled: Duration,
     rate: U256,
     original_rate: U256,
-    family: String,
     min_rate: U256,
     bandwidth: u64,
     eif_url: String,
@@ -633,8 +629,6 @@ impl<'a> JobState<'a> {
             last_settled: context.now_timestamp(),
             rate: U256::from(1),
             original_rate: U256::from(1),
-            // salmon is the default for jobs (usually old) without any family specified
-            family: "salmon".to_owned(),
             min_rate: U256::MAX,
             bandwidth: 0,
             eif_url: String::new(),
@@ -728,7 +722,6 @@ impl<'a> JobState<'a> {
                 .spin_up(
                     &self.job_id,
                     self.instance_type.as_str(),
-                    self.family.as_str(),
                     &self.region,
                     self.req_mem,
                     self.req_vcpus,
@@ -1076,14 +1069,6 @@ impl<'a> JobState<'a> {
         } else {
             self.req_vcpus = vcpu.try_into().unwrap_or(i32::MAX);
             info!(self.req_vcpus, "Required vcpu");
-        }
-
-        let family = metadata_json["family"].as_str();
-        if update && family.is_some() && self.family != family.unwrap() {
-            return Err(anyhow!("Family change not allowed"));
-        } else if family.is_some() {
-            self.family = family.unwrap().to_owned();
-            info!(self.family, "Family");
         }
 
         let debug = metadata_json["debug"].as_bool().unwrap_or(false);

@@ -8,6 +8,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Context, Result};
 use aws_sdk_ec2::types::*;
 use aws_types::region::Region;
+use coldsnap::{SnapshotUploader, SnapshotWaiter};
 use rand_core::OsRng;
 use serde_json::Value;
 use ssh2::Session;
@@ -22,6 +23,7 @@ use crate::market::{InfraProvider, JobId};
 #[derive(Clone)]
 pub struct Aws {
     clients: HashMap<String, aws_sdk_ec2::Client>,
+    ebs_clients: HashMap<String, aws_sdk_ebs::Client>,
     key_name: String,
     // Path cannot be cloned, hence String
     key_location: String,
@@ -51,10 +53,19 @@ impl Aws {
                     .await;
                 aws_sdk_ec2::Client::new(&config)
             });
+            ebs_clients.insert(region.clone(), {
+                let config = aws_config::from_env()
+                    .profile_name(&aws_profile)
+                    .region(Region::new(region.clone()))
+                    .load()
+                    .await;
+                aws_sdk_ebs::Client::new(&config)
+            });
         }
 
         Aws {
             clients,
+            ebs_clients,
             key_name,
             key_location,
             pub_key_location,
@@ -65,6 +76,10 @@ impl Aws {
 
     async fn client(&self, region: &str) -> &aws_sdk_ec2::Client {
         &self.clients[region]
+    }
+
+    async fn ebs_client(&self, region: &str) -> &aws_sdk_ebs::Client {
+        &self.ebs_clients[region]
     }
 
     pub async fn generate_key_pair(&self) -> Result<()> {
@@ -252,6 +267,7 @@ impl Aws {
         Ok(true)
     }
 
+    // [UPDATE NOTE] This function is obsolete, no enclaves
     pub async fn run_enclave_impl(
         &self,
         job_id: &str,
@@ -790,7 +806,7 @@ EOF
     }
 
     /* AWS EC2 UTILITY */
-
+    // [UPDATE NOTE] Should return private IP, there won't be any Public IPs.
     pub async fn get_instance_ip(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
             .client(region)
@@ -821,22 +837,11 @@ EOF
         &self,
         job: &JobId,
         instance_type: InstanceType,
-        family: &str,
         architecture: &str,
         region: &str,
+        init_params: &[u8],
+        ami_id: &str,
     ) -> Result<String> {
-        let instance_ami = self
-            .get_amis(region, family, architecture)
-            .await
-            .context("could not get amis")?;
-
-        let enclave_options = EnclaveOptionsRequest::builder().enabled(true).build();
-        let ebs = EbsBlockDevice::builder().volume_size(12).build();
-        let block_device_mapping = BlockDeviceMapping::builder()
-            .device_name("/dev/sda1")
-            .ebs(ebs)
-            .build();
-
         let name_tag = Tag::builder().key("Name").value("JobRunner").build();
         let managed_tag = Tag::builder().key("managedBy").value("marlin").build();
         let project_tag = Tag::builder().key("project").value("oyster").build();
@@ -865,21 +870,20 @@ EOF
             .get_security_group(region)
             .await
             .context("could not get subnet")?;
-
+        // [UPDATE NOTE] Add user data to launch instance
         Ok(self
             .client(region)
             .await
             .run_instances()
-            .image_id(instance_ami)
+            .image_id(ami_id)
             .instance_type(instance_type)
             .key_name(self.key_name.clone())
             .min_count(1)
             .max_count(1)
-            .enclave_options(enclave_options)
-            .block_device_mappings(block_device_mapping)
             .tag_specifications(tags)
             .security_group_ids(sec_group)
             .subnet_id(subnet)
+            .user_data(String::from_utf8_lossy(init_params).to_string())
             .send()
             .await
             .context("could not run instance")?
@@ -903,73 +907,6 @@ EOF
             .context("could not terminate instance")?;
 
         Ok(())
-    }
-
-    pub async fn get_amis(&self, region: &str, family: &str, architecture: &str) -> Result<String> {
-        let project_filter = Filter::builder()
-            .name("tag:project")
-            .values("oyster")
-            .build();
-        let name_filter = Filter::builder()
-            .name("name")
-            .values("marlin/oyster/worker-".to_owned() + family + "-" + architecture + "-????????")
-            .build();
-
-        let own_ami = self
-            .client(region)
-            .await
-            .describe_images()
-            .owners("self")
-            .filters(project_filter)
-            .filters(name_filter)
-            .send()
-            .await
-            .context("could not describe images")?;
-
-        let own_ami = own_ami.images().iter().max_by_key(|x| &x.name);
-
-        if own_ami.is_some() {
-            Ok(own_ami
-                .unwrap()
-                .image_id()
-                .ok_or(anyhow!("could not parse image id"))?
-                .to_string())
-        } else {
-            self.get_community_amis(region, family, architecture)
-                .await
-                .context("could not get community ami")
-        }
-    }
-
-    pub async fn get_community_amis(
-        &self,
-        region: &str,
-        family: &str,
-        architecture: &str,
-    ) -> Result<String> {
-        let owner = "753722448458";
-        let name_filter = Filter::builder()
-            .name("name")
-            .values("marlin/oyster/worker-".to_owned() + family + "-" + architecture + "-????????")
-            .build();
-
-        Ok(self
-            .client(region)
-            .await
-            .describe_images()
-            .owners(owner)
-            .filters(name_filter)
-            .send()
-            .await
-            .context("could not describe images")?
-            // response parsing from here
-            .images()
-            .iter()
-            .max_by_key(|x| &x.name)
-            .ok_or(anyhow!("no images found"))?
-            .image_id()
-            .ok_or(anyhow!("could not parse image id"))?
-            .to_string())
     }
 
     pub async fn get_security_group(&self, region: &str) -> Result<String> {
@@ -1016,6 +953,95 @@ EOF
             .subnet_id()
             .ok_or(anyhow!("Could not parse subnet id"))?
             .to_string())
+    }
+
+    async fn get_job_snapshot_id(
+        &self,
+        job: &JobId,
+        region: &str,
+    ) -> Result<(bool, String)> {
+        let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
+        let operator_filter = Filter::builder()
+            .name("tag:operator")
+            .values(&job.operator)
+            .build();
+        let chain_filter = Filter::builder()
+            .name("tag:chainID")
+            .values(&job.chain)
+            .build();
+        let contract_filter = Filter::builder()
+            .name("tag:contractAddress")
+            .values(&job.contract)
+            .build();
+        let res = self
+            .client(region)
+            .await
+            .describe_snapshots()
+            .owner_ids("self")
+            .filters(job_filter)
+            .filters(operator_filter)
+            .filters(contract_filter)
+            .filters(chain_filter)
+            .send()
+            .await
+            .context("could not describe instances")?;
+
+        let own_snapshot = res.snapshots().iter().max_by_key(|x| &x.start_time);
+        if let Some(snapshot) = own_snapshot {
+            Ok((
+                true,
+                snapshot
+                    .snapshot_id()
+                    .ok_or(anyhow!("could not parse snapshot id"))?
+                    .to_string(),
+            ))
+        } else {
+            Ok((false, "".to_owned()))
+        }
+    }
+
+    async fn get_job_ami_id(
+        &self,
+        job: &JobId,
+        region: &str,
+    ) -> Result<(bool, String)> {
+        let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
+        let operator_filter = Filter::builder()
+            .name("tag:operator")
+            .values(&job.operator)
+            .build();
+        let chain_filter = Filter::builder()
+            .name("tag:chainID")
+            .values(&job.chain)
+            .build();
+        let contract_filter = Filter::builder()
+            .name("tag:contractAddress")
+            .values(&job.contract)
+            .build();
+        let res = self
+            .client(region)
+            .await
+            .describe_images()
+            .owners("self")
+            .filters(job_filter)
+            .filters(operator_filter)
+            .filters(contract_filter)
+            .filters(chain_filter)
+            .send()
+            .await
+            .context("could not describe instances")?;
+
+        let own_ami = res.images().iter().max_by_key(|x| &x.name);
+        if let Some(ami) = own_ami {
+            Ok((
+                true,
+                ami.image_id()
+                    .ok_or(anyhow!("could not parse image id"))?
+                    .to_string(),
+            ))
+        } else {
+            Ok((false, "".to_owned()))
+        }
     }
 
     pub async fn get_job_instance_id(
@@ -1103,6 +1129,7 @@ EOF
             .into())
     }
 
+    // [UPDATE NOTE] This function is obsolete, no enclaves
     pub async fn get_enclave_state(&self, instance_id: &str, region: &str) -> Result<String> {
         let public_ip_address = self
             .get_instance_ip(instance_id, region)
@@ -1308,11 +1335,11 @@ EOF
         Ok(())
     }
 
+    // [UPDATE NOTE] Spin up instance is only kept, no run enclaves needed
     async fn spin_up_impl(
         &mut self,
         job: &JobId,
         instance_type: &str,
-        family: &str,
         region: &str,
         req_mem: i64,
         req_vcpu: i32,
@@ -1347,14 +1374,189 @@ EOF
             }
         }
 
+        // [UPDATE NOTE] Check AMI corresponding to given job. If dosen't exist then check if snapshot exists.
+        // If doesn't exist download image upload as snapshot and register AMI. If snapshot exists register AMI from it.
+
+        let (mut ami_exist, mut ami_id) = self.get_job_ami_id(job, region).await
+            .context("failed to get job ami")?;
+
+        if !ami_exist {
+            // check snapshot exists
+            let (snapshot_exist, mut snapshot_id) = self.get_job_snapshot_id(job, region).await
+                .context("failed to get job snapshot")?;
+            if !snapshot_exist {
+                // 1. Download image in image_url to a tmp file
+                // 2. check blacklist/whitelist
+                // 3. Upload image as snapshot
+
+                let tmp_file_path = format!("/tmp/image-{}.raw", job.id);
+                let mut tmp_file = File::create(&tmp_file_path)
+                    .context(format!("Failed to create temporary file for image {}", tmp_file_path))?;
+
+                // Download the image from the image_url
+                let resp = reqwest::get(image_url)
+                    .await
+                    .context(format!("Failed to start download file from {} for job ID {}", image_url, job.id))?;
+                let mut stream = resp.bytes_stream();
+
+                while let Some(item) = stream.next().await {
+                    let chunk = item.context(format!("Failed to read chunk from response stream for job ID {}", job.id))?;
+                    tmp_file.write_all(&chunk).await
+                        .context(format!("Failed to write chunk to temporary file for job ID {}", job.id))?;
+                }
+
+                tmp_file.flush().await
+                    .context(format!("Failed to flush temporary file for job ID {}", job.id))?;
+
+                let mut hasher = Sha256::new();
+                let mut file = File::open(&tmp_file_path)
+                    .context("Failed to open temporary file for hashing")?;
+                let mut buffer = [0; 8192];
+                loop {
+                    let n = file.read(&mut buffer)
+                        .context("Failed to read temporary file")?;
+                    if n == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..n]);
+                }
+                let file_hash = hex::encode(hasher.finalize());
+
+                if let Some(whitelist_list) = self.whitelist {
+                    let mut allowed = false;
+                    for entry in whitelist_list {
+                        if entry.contains(&file_hash) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+                    if !allowed {
+                        return Err(anyhow!("Image hash {} not found in whitelist", file_hash));
+                    }
+                }
+
+                if let Some(blacklist_list) = self.blacklist {
+                    for entry in blacklist_list {
+                        if entry.contains(&file_hash) {
+                            return Err(anyhow!("Image hash {} found in blacklist", file_hash));
+                        }
+                    }
+                }
+
+
+                let uploader = SnapshotUploader::new(self.ebs_client(region).await?);
+                let managed_tag = aws_sdk_ebs::types::Tag::builder().key("managedBy").value("marlin").build();
+                let project_tag = aws_sdk_ebs::types::Tag::builder().key("project").value("oyster").build();
+                let job_tag = aws_sdk_ebs::types::Tag::builder().key("jobId").value(&job.id).build();
+                let operator_tag = aws_sdk_ebs::types::Tag::builder().key("operator").value(&job.operator).build();
+                let chain_tag = aws_sdk_ebs::types::Tag::builder().key("chainID").value(&job.chain).build();
+                let contract_tag = aws_sdk_ebs::types::Tag::builder()
+                    .key("contractAddress")
+                    .value(&job.contract)
+                    .build();
+
+                let snapshot_tags = vec![
+                    managed_tag,
+                    project_tag,
+                    job_tag,
+                    operator_tag,
+                    contract_tag,
+                    chain_tag,
+                ];
+                snapshot_id = uploader.upload_from_file(Path::new(&tmp_file_path), None, None, snapshot_tags, None, None, None).await
+                    .context("Failed to upload snapshot from image file")?;
+                info!(snapshot_id, "Snapshot uploaded");
+                let waiter = SnapshotWaiter::new(self.ebs_client(region).await?);
+                waiter.wait_for_completed(snapshot_id.as_str()).await
+                    .context("Failed to wait for snapshot completion")?;
+                info!(snapshot_id, "Snapshot is now completed");
+            
+            }
+            // Register AMI from snapshot
+
+            let block_dev_mapping = aws_sdk_ec2::models::BlockDeviceMapping::builder()
+                .device_name("/dev/xvda")
+                .ebs(
+                    aws_sdk_ec2::models::EbsBlockDevice::builder()
+                        .snapshot_id(snapshot_id)
+                        .build(),
+                )
+            .build();
+
+            let instance_type =
+                InstanceType::from_str(instance_type).context("cannot parse instance type")?;
+            let resp = self
+                .client(region)
+                .await
+                .describe_instance_types()
+                .instance_types(instance_type.clone())
+                .send()
+                .await
+                .context("could not describe instance types")?;
+            let mut architecture = "arm64".to_string();
+            let isntance_types = resp.instance_types();
+            for instance in isntance_types {
+                let supported_architectures = instance
+                    .processor_info()
+                    .ok_or(anyhow!("error fetching instance processor info"))?
+                    .supported_architectures();
+                if let Some(arch) = supported_architectures.iter().next() {
+                    arch.as_str().clone_into(&mut architecture);
+                    info!(architecture);
+                }
+            }
+            
+            let resp = self.client(region).await
+                .register_image()
+                .name(format!("marlin/oyster/job-{}", job.id))
+                .architecture(architecture)
+                .root_device_name("/dev/xvda")
+                .block_device_mappings(block_dev_mapping)
+                .tag_specifications(
+                    TagSpecification::builder()
+                        .resource_type(ResourceType::Image)
+                        .tags(
+                            Tag::builder().key("managedBy").value("marlin").build(),
+                        )
+                        .tags(
+                            Tag::builder().key("project").value("oyster").build(),
+                        )
+                        .tags(
+                            Tag::builder().key("jobId").value(&job.id).build(),
+                        )
+                        .tags(
+                            Tag::builder().key("operator").value(&job.operator).build(),
+                        )
+                        .tags(
+                            Tag::builder().key("contractAddress").value(&job.contract).build(),
+                        )
+                        .tags(
+                            Tag::builder().key("chainID").value(&job.chain).build(),
+                        )
+                        .build()
+                )
+                .send()
+                .await
+                .context(format!("Failed to register AMI from snapshot {} for job {}", snapshot_id, job.id))?;
+
+            ami_id = resp.image_id()
+                .ok_or(anyhow!("could not parse image id"))?
+                .to_string();
+        }
+
         if !exist {
             // either no old instance or old instance was not enough, launch new one
             instance = self
-                .spin_up_instance(job, instance_type, family, region, req_mem, req_vcpu)
+                .spin_up_instance(job, instance_type, region, req_mem, req_vcpu, init_params, ami_id)
                 .await
                 .context("failed to spin up instance")?;
         }
 
+        // [UPDATE NOTE] No enclave deployment needed. Check all the steps in this function if needed
+        // Pick following:
+        // 1. Rate limit configuration
+        // 2. User Data setup
+        // 3. Pick user image
         self.run_enclave_impl(
             &job.id,
             family,
@@ -1371,14 +1573,19 @@ EOF
         .context("failed to run enclave")
     }
 
+
+    // [UPDATE NOTE] New things to add:
+    // 1. Pick AMI corresponding to given image_url
+    // 2. Setup user data
     pub async fn spin_up_instance(
         &self,
         job: &JobId,
         instance_type: &str,
-        family: &str,
         region: &str,
         req_mem: i64,
         req_vcpu: i32,
+        init_params: &[u8],
+        ami_id: &str,
     ) -> Result<String> {
         let instance_type =
             InstanceType::from_str(instance_type).context("cannot parse instance type")?;
@@ -1426,7 +1633,7 @@ EOF
             return Err(anyhow!("Required memory or vcpus are more than available"));
         }
         let instance = self
-            .launch_instance(job, instance_type, family, &architecture, region)
+            .launch_instance(job, instance_type, &architecture, region, init_params, ami_id)
             .await
             .context("could not launch instance")?;
         sleep(Duration::from_secs(100)).await;
@@ -1515,7 +1722,6 @@ impl InfraProvider for Aws {
         &mut self,
         job: &JobId,
         instance_type: &str,
-        family: &str,
         region: &str,
         req_mem: i64,
         req_vcpu: i32,
@@ -1527,7 +1733,6 @@ impl InfraProvider for Aws {
         self.spin_up_impl(
             job,
             instance_type,
-            family,
             region,
             req_mem,
             req_vcpu,
@@ -1546,6 +1751,8 @@ impl InfraProvider for Aws {
             .context("could not spin down enclave")
     }
 
+    // [UPDATE NOTE] Due to Gateway VM rate limit, instance IP won't be equal to elastic IP. Instead, Gateway VM
+    // secondary IPs are used. 
     async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
         let instance = self
             .get_job_instance_id(job, region)
