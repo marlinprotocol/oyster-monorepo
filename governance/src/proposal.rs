@@ -11,16 +11,58 @@ use serde::{Deserialize, Serialize};
 
 use crate::governance::IGovernance::Vote;
 
+/// Unified representation of a single vote decision.
+///
+/// This enum combines:
+///
+/// - [`GovernanceVote`] — the raw on-chain vote data.
+/// - [`InferredVote`]   — the backend’s interpreted / enriched view of that vote.
+///
+/// For the “normal” cases, both are present as a pair. For anything that
+/// cannot be interpreted into a well-defined decision, the variant
+/// [`VoteDecision::Invalid`] holds only the raw [`GovernanceVote`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VoteDecision {
-    Yes((GovernanceVote, InferredVote)),        //1
-    No((GovernanceVote, InferredVote)),         //2
-    NoWithVeto((GovernanceVote, InferredVote)), //3
-    Abstain((GovernanceVote, InferredVote)),    //4
-    Invalid(GovernanceVote),                    // anything else
+    /// A vote interpreted as **Yes**.
+    ///
+    /// Tuple contents are `(on_chain, inferred)`:
+    /// - `GovernanceVote` – raw on-chain vote.
+    /// - `InferredVote`   – backend’s interpretation (e.g. resolved delegations,
+    ///   normalized weights, etc.).
+    Yes((GovernanceVote, InferredVote)), // 1
+
+    /// A vote interpreted as **No**.
+    ///
+    /// Tuple contents are `(on_chain, inferred)`.
+    No((GovernanceVote, InferredVote)), // 2
+
+    /// A vote interpreted as **No with veto**.
+    ///
+    /// Tuple contents are `(on_chain, inferred)`.
+    NoWithVeto((GovernanceVote, InferredVote)), // 3
+
+    /// A vote interpreted as **Abstain**.
+    ///
+    /// Tuple contents are `(on_chain, inferred)`.
+    Abstain((GovernanceVote, InferredVote)), // 4
+
+    /// Any vote that could not be mapped to a well-defined decision.
+    ///
+    /// This preserves the raw on-chain [`GovernanceVote`] so callers can:
+    /// - inspect the original data,
+    /// - log / debug,
+    /// - or apply custom fallback logic.
+    Invalid(GovernanceVote), // anything else
 }
 
 impl VoteDecision {
+    /// Returns the underlying on-chain [`GovernanceVote`] for this decision.
+    ///
+    /// For the interpreted variants (`Yes`, `No`, `NoWithVeto`, `Abstain`),
+    /// this is the first element of the `(GovernanceVote, InferredVote)` pair.
+    ///
+    /// For [`VoteDecision::Invalid`], this returns the raw on-chain vote that
+    /// could not be classified.
     pub fn get_on_chain_vote(&self) -> &GovernanceVote {
         match self {
             VoteDecision::Yes(a) => &a.0,
@@ -31,6 +73,14 @@ impl VoteDecision {
         }
     }
 
+    /// Returns the source chain ID of the vote, if available.
+    ///
+    /// Only interpreted votes (`Yes`, `No`, `NoWithVeto`, `Abstain`) carry
+    /// backend-derived metadata such as `source_chain_id`, so this method
+    /// returns:
+    ///
+    /// - `Some(chain_id)` for interpreted decisions,
+    /// - `None` for [`VoteDecision::Invalid`], since no `InferredVote` exists.
     pub fn get_chain_id(&self) -> Option<U256> {
         let id = match self {
             VoteDecision::Yes(v)
@@ -44,6 +94,15 @@ impl VoteDecision {
         id
     }
 
+    /// Returns the delegator address *if present and non-zero*.
+    ///
+    /// - For interpreted decisions (`Yes`, `No`, `NoWithVeto`, `Abstain`),
+    ///   this is extracted from the underlying [`GovernanceVote`].
+    ///
+    /// - For [`VoteDecision::Invalid`], the raw on-chain delegator address
+    ///   is used.
+    ///
+    /// A delegator of `Address::ZERO` is treated as “not set” and returns `None`.
     pub fn get_delegator_address(&self) -> Option<Address> {
         let delegator = match self {
             VoteDecision::Yes(a) => a.0.delegator,
@@ -60,6 +119,10 @@ impl VoteDecision {
         }
     }
 
+    /// Returns the original voter address from the on-chain vote.
+    ///
+    /// All variants, including [`VoteDecision::Invalid`], store a
+    /// [`GovernanceVote`], so this method is total and never returns `None`.
     pub fn get_voter_address(&self) -> Address {
         match self {
             VoteDecision::Yes(a) => a.0.voter,
@@ -117,9 +180,33 @@ impl InferredVote {
     }
 }
 
+/// Alias for the raw on-chain vote type.
+///
+/// This represents a single vote as it exists on-chain, before any
+/// backend interpretation or enrichment is applied.
 pub type GovernanceVote = Vote;
 
 impl GovernanceVote {
+    /// Converts this raw on-chain vote into a high-level [`VoteDecision`].
+    ///
+    /// This method takes:
+    ///
+    /// - `sk` – the encryption private key used to decrypt or interpret any
+    ///   encrypted payload associated with the vote.
+    /// - `proposal_id` – the proposal this vote is associated with, used as
+    ///   contextual information for interpretation.
+    ///
+    /// On success, it returns one of the concrete variants:
+    ///
+    /// - [`VoteDecision::Yes`]
+    /// - [`VoteDecision::No`]
+    /// - [`VoteDecision::NoWithVeto`]
+    /// - [`VoteDecision::Abstain`]
+    ///
+    /// When the vote cannot be interpreted (for example due to decryption
+    /// errors, malformed data, or unsupported encoding), it falls back to
+    /// [`VoteDecision::Invalid`], preserving the original [`GovernanceVote`]
+    /// so callers can log, debug, or apply custom handling.
     pub fn to_vote_decision(&self, sk: EncryptionPrivateKey, proposal_id: B256) -> VoteDecision {
         match self._to_vote_decision(sk, proposal_id) {
             Ok(a) => a,
@@ -233,12 +320,12 @@ impl GovernanceVote {
     }
 }
 
-pub fn decrypt_ecies(receiver_priv: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
+fn decrypt_ecies(receiver_priv: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
     let result = ecies::decrypt(receiver_priv, msg).map_err(|e| anyhow!(e))?;
     Ok(result)
 }
 
-pub fn encrypt_ecies(receiver_pub: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
+fn encrypt_ecies(receiver_pub: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
     let result = ecies::encrypt(receiver_pub, msg).map_err(|e| anyhow!(e))?;
     Ok(result)
 }

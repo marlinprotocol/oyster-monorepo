@@ -9,19 +9,24 @@ use dotenvy::dotenv;
 use ecies::{PublicKey as EncryptionPublicKey, SecretKey as EncryptionPrivateKey};
 
 pub type SigningPublicKey = FixedBytes<64>;
+
+// This trait defines a common interface for KMS modules to be implemented
 #[async_trait]
 pub trait KMS {
+    /// Returns the secret signing key that will be used to sign the voting result. This key be be persistent
     async fn get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
         // You can add invariants, logging, metrics, caching, etc. here
         log::debug!("Fetching persistent secret key");
         self._get_persistent_secret_key().await
     }
 
+    /// Returns the public key of the assiciated secret signing key that will be used to sign the voting result. This key be be persistent
     async fn get_persistent_public_key(&self) -> Result<SigningPublicKey> {
         log::debug!("Fetching persistent public key");
         self._get_persistent_public_key().await
     }
 
+    /// Returns the secret key with which votes must be encrypted for a proposal.
     async fn get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
         log::debug!(
             "Fetching proposal secret key for proposal: {}",
@@ -30,6 +35,7 @@ pub trait KMS {
         self._get_proposal_secret_key(proposal_hash).await
     }
 
+    /// Returns the public key assiciated with secret key with which votes must be encrypted for a proposal.
     async fn get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
         log::debug!(
             "Fetching proposal public key for proposal: {}",
@@ -57,6 +63,43 @@ pub trait KMS {
         Ok(sk.serialize().into())
     }
 
+    /// Generates a KMS signature over the given attestation inputs.
+    ///
+    /// This signs a message derived from the `image_id`, `enclave_pubkey`, and
+    /// `proposal_id` using the configured KMS backend and returns the raw
+    /// signature bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * `image_id` - Identifier of the guest image / circuit being attested.
+    /// * `enclave_pubkey` - Public key of the enclave or prover, encoded as bytes.
+    /// * `proposal_id` - Identifier of the governance proposal this attestation
+    ///   is bound to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the KMS request fails, the signature cannot be
+    /// produced, or the underlying transport encounters an error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use alloy::primitives::{B256, Bytes};
+    /// use governance::kms::KMS;
+    ///
+    /// # async fn example<K: KMS + Send + Sync>(kms: K) -> anyhow::Result<()> {
+    /// #     let image_id = B256::ZERO;
+    /// #     let enclave_pubkey = "0x1234".parse()?;
+    /// #     let proposal_id = B256::ZERO;
+    /// #
+    ///     let sig = kms
+    ///         .generate_kms_sig(image_id, enclave_pubkey, proposal_id)
+    ///         .await?;
+    ///     println!("KMS signature: {sig:?}");
+    /// #
+    /// #     Ok(())
+    /// # }
+    /// ```
     async fn generate_kms_sig(
         &self,
         image_id: B256,
@@ -91,6 +134,7 @@ pub trait KMS {
     }
 }
 
+/// Sample implementation of KMS service. This should be only used during local testing.
 #[derive(Debug, Clone, Default)]
 pub struct DirtyKMS;
 

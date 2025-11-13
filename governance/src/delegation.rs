@@ -10,13 +10,27 @@ sol! {
     }
 }
 
+/// Represent a delegation contract instance with provider and delegation contract address
 #[derive(Debug)]
 pub struct Delegation<N: Network> {
+    /// Provider instance associated with delegation contract
     provider: RootProvider<N>,
+
+    /// Address of the delegation contract
     delegation: Address,
 }
 
 impl<N: Network> Delegation<N> {
+    /// Creates a new instance of delegation contract
+    ///
+    /// # Example
+    /// ```
+    /// use governance::delegation::Delegation;
+    /// use alloy::network::Ethereum;
+    /// let chain_rpc = "delegation chain rpc";
+    /// let delegation_address = "delegation contract address";
+    /// let delegation = Delegation::<Ethereum>::new(chain_rpc, delegation_address);
+    /// ```
     pub fn new(delegation_chain_rpc_url: &str, delegation_address: &str) -> Result<Self> {
         let url = Url::parse(delegation_chain_rpc_url)?;
         let provider = RootProvider::<N>::new_http(url);
@@ -28,6 +42,29 @@ impl<N: Network> Delegation<N> {
         })
     }
 
+    /// Fetches the delegatee address for a given `delegator` at a specific `block_number`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloy::primitives::Address;
+    /// use alloy::network::Ethereum;
+    /// use governance::delegation::Delegation;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// #     let chain_rpc = "https://delegation-chain-rpc.example";
+    /// #     let delegation_address = "0xabcdef01abcdef01abcdef01abcdef01abcdef01";
+    /// #     let delegation = Delegation::<Ethereum>::new(chain_rpc, delegation_address)?;
+    /// #
+    ///     let delegator: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+    ///     let block_number: u64 = 19_000_000;
+    ///
+    ///     let delegatee = delegation.get_delegatee(delegator, block_number).await?;
+    ///     println!("Delegatee: {delegatee}");
+    /// #
+    /// #     Ok(())
+    /// # }
+    /// ```
     pub async fn get_delegatee(&self, delegator: Address, block_number: u64) -> Result<Address> {
         log::debug!("Fetching delegatee for delegator: {}", delegator);
         let i_delegation = IDelegation::new(self.delegation, &self.provider);
@@ -41,6 +78,33 @@ impl<N: Network> Delegation<N> {
         Ok(delegatee)
     }
 
+    /// Checks whether a delegation from `delegator` to `delegatee` is set
+    /// at the given `block_number`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use alloy::primitives::Address;
+    /// use alloy::network::Ethereum;
+    /// use governance::delegation::Delegation;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// #     let chain_rpc = "https://delegation-chain-rpc.example";
+    /// #     let delegation_address = "0xabcdef01abcdef01abcdef01abcdef01abcdef01";
+    /// #     let delegation = Delegation::<Ethereum>::new(chain_rpc, delegation_address)?;
+    /// #
+    ///     let delegator: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+    ///     let delegatee: Address = "0x2222222222222222222222222222222222222222".parse().unwrap();
+    ///     let block_number: u64 = 19_000_000;
+    ///
+    ///     let is_set = delegation
+    ///         .is_delegation_set(delegator, delegatee, block_number)
+    ///         .await?;
+    ///     println!("Is delegation set? {is_set}");
+    /// #
+    /// #     Ok(())
+    /// # }
+    /// ```
     pub async fn is_delegation_set(
         &self,
         delegator: Address,

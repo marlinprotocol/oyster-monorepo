@@ -38,8 +38,18 @@ sol! {
     }
 }
 
-/// Holds the proposal in focus, a reference to the weighted vote map,
-/// and a thread-safe handle to KMS.
+/// Aggregates weighted votes for a single proposal and produces on-chain-ready results.
+///
+/// `VoteAggregator` is responsible for:
+/// - summing weighted votes into a [`VoteDecisionResult`],
+/// - producing enclave and KMS signatures,
+/// - building the ABI-encoded result payload,
+/// - and packaging everything into [`SubmitResultInputParams`] that can be
+///   submitted to the governance contract.
+///
+/// It does **not** perform any chain reads itself; instead it operates on:
+/// - a precomputed map of weighted votes, and
+/// - a KMS handle used to derive encryption-related artifacts.
 pub struct VoteAggregator<'a, K: KMS + Send + Sync> {
     proposal_id: B256,
     image_id: B256,
@@ -53,6 +63,19 @@ impl<'a, K> VoteAggregator<'a, K>
 where
     K: KMS + Send + Sync,
 {
+    /// Creates a new [`VoteAggregator`] for a given proposal and image.
+    ///
+    /// - `proposal_id` – the governance proposal being finalized.
+    /// - `image_id` – identifier of the attested image / circuit in the enclave/KMS flow.
+    /// - `weighted_votes` – reference to a map of `chain_id -> (address -> WeightVoteDecision)`,
+    ///   typically produced by a [`crate::vote_factory::VoteFactory`] or similar component.
+    /// - `kms` – shared handle to a [`KMS`] implementation used to fetch signatures
+    ///   and decryption material.
+    /// - `contract_data_preimage` – preimage containing governance-related contract
+    ///   data used to derive the `contract_data_hash`.
+    ///
+    /// A fresh transient signing key is generated internally and used to sign
+    /// enclave messages for this aggregator instance.
     pub fn new(
         proposal_id: B256,
         image_id: B256,
@@ -70,6 +93,16 @@ where
         }
     }
 
+    /// Computes the aggregate vote tallies for the current proposal.
+    ///
+    /// Iterates over all [`WeightVoteDecision`] entries in `weighted_votes` and:
+    /// - sums weights for `Yes`, `No`, `Abstain`, and `NoWithVeto`,
+    /// - ignores [`crate::proposal::VoteDecision::Invalid`] entries,
+    /// - accumulates `totalVotingPower` as the sum of all counted weights.
+    ///
+    /// Returns a [`VoteDecisionResult`] suitable for:
+    /// - signing by the enclave,
+    /// - embedding into the final `resultData` payload.
     pub fn get_vote_decision_result(&self) -> Result<VoteDecisionResult> {
         let mut yes = U256::ZERO;
         let mut no = U256::ZERO;
@@ -113,6 +146,15 @@ where
         })
     }
 
+    /// Requests a KMS signature for this proposal.
+    ///
+    /// Calls [`KMS::generate_kms_sig`] with:
+    /// - the `image_id`,
+    /// - the enclave public key returned by [`Self::get_enclave_pubkey`],
+    /// - the `proposal_id`.
+    ///
+    /// Returns the raw signature bytes produced by the KMS. Errors if the
+    /// underlying KMS call fails.
     pub async fn get_kms_sig(&self) -> Result<Bytes> {
         // Return what KMS produced (don’t drop it)
         let sig = self
@@ -126,10 +168,30 @@ where
         Ok(sig)
     }
 
+    /// Returns the enclave's public key bytes for this aggregation session.
+    ///
+    /// The key is derived from the internally generated transient signing key
+    /// and encoded as raw bytes. This value is included in:
+    /// - `enclavePubKey` for [`SubmitResultInputParams`],
+    /// - and used by downstream consumers to verify `enclaveSig`.
     pub async fn get_enclave_pubkey(&self) -> Result<Bytes> {
         Ok(self.transient_secret_key.public_key().to_vec().into())
     }
 
+    /// Produces the enclave signature over the voting result.
+    ///
+    /// Steps:
+    /// 1. Computes `contract_data_hash` as `sha256(abi.encode(contract_data_preimage))`.
+    /// 2. Constructs a `VotingMessage` containing:
+    ///    - `contract_data_hash`,
+    ///    - `proposal_id`,
+    ///    - the aggregated [`VoteDecisionResult`] from [`Self::get_vote_decision_result`].
+    /// 3. Computes `message_hash = sha256(abi.encode(VotingMessage))`.
+    /// 4. Signs `message_hash` with the transient signing key and returns the
+    ///    resulting signature bytes.
+    ///
+    /// This signature is expected to be verifiable by anyone who knows the
+    /// enclave public key and the encoding scheme.
     pub async fn get_enclave_sig(&self) -> Result<Bytes> {
         let contract_data_hash: B256 = {
             let h = Sha256::digest(&self.contract_data_preimage.abi_encode());
@@ -154,6 +216,12 @@ where
         Ok(signature.into())
     }
 
+    /// Fetches the vote decryption key for this proposal from KMS.
+    ///
+    /// Delegates to [`KMS::get_proposal_secret_bytes`] using `proposal_id`.
+    /// The returned bytes are embedded as `voteDecryptionKey` in
+    /// [`SubmitResultInputParams`] and are used by the on-chain / off-chain
+    /// logic to decrypt individual votes when appropriate.
     pub async fn get_vote_decryption_key(&self) -> Result<Bytes> {
         self.kms.get_proposal_secret_bytes(self.proposal_id).await
     }
@@ -167,6 +235,14 @@ where
         Ok(result.abi_encode().into())
     }
 
+    /// Builds the ABI-encoded result payload for submission.
+    ///
+    /// Encodes an internal `(proposal_id, VoteDecisionResult)` pair as:
+    ///
+    /// `abi.encode(bytes32 proposal_id, VoteDecisionResult)`
+    ///
+    /// and returns the resulting bytes. These bytes are intended to be used as
+    /// `resultData` inside [`SubmitResultInputParams`].
     pub async fn get_submit_result_input_params(&self) -> Result<SubmitResultInputParams> {
         let submit_result_input = SubmitResultInputParams {
             kmsSig: self.get_kms_sig().await?,

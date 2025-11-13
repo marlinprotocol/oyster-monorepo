@@ -15,12 +15,31 @@ use crate::{
 
 use crate::config::{self, find_block_by_timestamp};
 
+/// High-level helper for reading and interpreting votes for a proposal.
+///
+/// `VoteParse` ties together:
+/// - [`Governance`] – to read on-chain proposal and vote data on the governance chain.
+/// - [`GovernanceEnclave`] – to resolve token network configs and delegation contracts
+///   on external chains.
+///
+/// It is responsible for:
+/// - fetching raw votes from the governance contract,
+/// - converting them into interpreted decisions,
+/// - resolving delegation rules and token weights,
+/// - and pushing the final weighted decisions into a shared [`VoteFactory`].
 pub struct VoteParse<N: Network> {
     governance: Governance<N>,
     governance_enclave: GovernanceEnclave<N>,
 }
 
 impl<N: Network> VoteParse<N> {
+    /// Creates a new [`VoteParse`] instance.
+    ///
+    /// - `governance` – client bound to the on-chain governance contract.
+    /// - `governance_enclave` – client used to resolve token and delegation
+    ///   configuration across chains.
+    ///
+    /// This does not perform any network I/O and is cheap to construct.
     pub fn new(governance: Governance<N>, governance_enclave: GovernanceEnclave<N>) -> Self {
         Self {
             governance,
@@ -28,6 +47,13 @@ impl<N: Network> VoteParse<N> {
         }
     }
 
+    /// Fetches timing information for a given proposal.
+    ///
+    /// This is a thin wrapper around [`Governance::get_proposal_timing_info`],
+    /// returning the [`ProposalTimeInfo`] for `proposal_id`, which includes:
+    /// - when the proposal was created,
+    /// - when voting activates,
+    /// - and when voting / proposal lifetimes end.
     pub async fn get_proposal_timing_info(&self, proposal_id: B256) -> Result<ProposalTimeInfo> {
         let info = self
             .governance
@@ -36,6 +62,26 @@ impl<N: Network> VoteParse<N> {
         Ok(info)
     }
 
+    /// Reads, decrypts, and records all votes for a proposal.
+    ///
+    /// Workflow:
+    /// 1. Checks the shared [`VoteFactory`] via the `Mutex`; if it is already
+    ///    marked complete, the function returns early.
+    /// 2. Fetches the total on-chain vote count from [`Governance`].
+    /// 3. Iterates over each vote index:
+    ///    - reads the raw on-chain vote,
+    ///    - converts it into a [`crate::proposal::VoteDecision`] using the provided encryption
+    ///      private key `sk` and `proposal_id`,
+    ///    - stores the decision into the [`VoteFactory`] by index.
+    /// 4. After all decisions are stored
+    ///    compute and attach token-based weights.
+    ///
+    /// Errors if:
+    /// - the mutex is poisoned,
+    /// - the vote count does not fit into `u64`,
+    /// - any underlying governance RPC call fails,
+    /// - or decryption / interpretation fails in a way not mapped to
+    ///   [`crate::proposal::VoteDecision::Invalid`].
     pub async fn parse_votes(
         &self,
         proposal_id: B256,
@@ -79,6 +125,26 @@ impl<N: Network> VoteParse<N> {
         Ok(())
     }
 
+    /// Reads, decrypts, and records all votes for a proposal.
+    ///
+    /// Workflow:
+    /// 1. Checks the shared [`VoteFactory`] via the `Mutex`; if it is already
+    ///    marked complete, the function returns early.
+    /// 2. Fetches the total on-chain vote count from [`Governance`].
+    /// 3. Iterates over each vote index:
+    ///    - reads the raw on-chain vote,
+    ///    - converts it into a [`VoteDecision`] using the provided encryption
+    ///      private key `sk` and `proposal_id`,
+    ///    - stores the decision into the [`VoteFactory`] by index.
+    /// 4. After all decisions are stored, calls [`Self::parse_votes_weight`] to
+    ///    compute and attach token-based weights.
+    ///
+    /// Errors if:
+    /// - the mutex is poisoned,
+    /// - the vote count does not fit into `u64`,
+    /// - any underlying governance RPC call fails,
+    /// - or decryption / interpretation fails in a way not mapped to
+    ///   [`VoteDecision::Invalid`].
     async fn parse_votes_weight(
         &self,
         proposal_id: B256,
@@ -101,9 +167,9 @@ impl<N: Network> VoteParse<N> {
             // vf guard is dropped here
         };
 
-        let nearest_block_on_gov_chain = self
+        let accurate_block_on_gov_chain = self
             .governance
-            .get_proposal_creation_block_number(proposal_id)
+            .get_accurate_proposal_creation_block_number(proposal_id)
             .await?;
 
         let mut updates: Vec<WeightVoteDecision> = Vec::new();
@@ -111,7 +177,7 @@ impl<N: Network> VoteParse<N> {
         for (chain_id, address_vote_map) in votes_by_chain {
             let token_network_configs = self
                 .governance_enclave
-                .get_token_network_config(chain_id, nearest_block_on_gov_chain)
+                .get_token_network_config(chain_id, accurate_block_on_gov_chain)
                 .await?;
 
             let base_url = token_network_configs

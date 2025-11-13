@@ -13,6 +13,12 @@ use utoipa_swagger_ui::SwaggerUi;
 #[openapi(paths(hello_handler, status, proposal_encryption_key, proposal_hashes))]
 struct ApiDoc;
 
+/// Get Swagger service for service
+/// # Example
+/// ```
+/// use governance::apidoc::get_swagger;
+/// let service = get_swagger();
+/// ```
 pub fn get_swagger() -> SwaggerUi {
     SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi())
 }

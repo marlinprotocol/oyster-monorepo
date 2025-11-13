@@ -174,7 +174,7 @@ async fn status<K: KMS + Send + Sync>(
         })?;
 
     let nearest_block_on_gov_chain = governance
-        .get_proposal_creation_block_number(proposal_id)
+        .get_accurate_proposal_creation_block_number(proposal_id)
         .await
         .map_err(|e| {
             error::ErrorInternalServerError(format!("vote result generation error: {e}"))
@@ -285,7 +285,7 @@ async fn proposal_hashes<K: KMS + Send + Sync>(
     fetch_and_check_proposal_time_info!(governance, proposal_id);
 
     let nearest_block_on_gov_chain = governance
-        .get_proposal_creation_block_number(proposal_id)
+        .get_accurate_proposal_creation_block_number(proposal_id)
         .await
         .map_err(|e| {
             error::ErrorInternalServerError(format!("vote result generation error: {e}"))

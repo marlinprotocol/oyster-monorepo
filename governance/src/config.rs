@@ -25,6 +25,16 @@ pub struct GovernanceConfig {
     pub rpc_apikeys: HashMap<String, String>,
 }
 
+/// Constructs a new instance of governance contract
+///
+/// # Examples
+/// ```
+/// use governance::config::get_governance;
+/// use alloy::network::Ethereum;
+///
+/// let governance = get_governance::<Ethereum>();
+///
+/// ```
 pub fn get_governance<N: Network>() -> Result<Governance<N>> {
     let cfg = get_config()?;
 
@@ -48,6 +58,16 @@ pub fn get_governance<N: Network>() -> Result<Governance<N>> {
     Ok(governance)
 }
 
+/// Constructs a new instance of governance enclave contract
+///
+/// # Examples
+/// ```
+/// use governance::config::get_governance_enclave;
+/// use alloy::network::Ethereum;
+///
+/// let governance_enclave = get_governance_enclave::<Ethereum>();
+///
+/// ```
 pub fn get_governance_enclave<N: Network>() -> Result<GovernanceEnclave<N>> {
     let cfg = get_config()?;
 
@@ -63,6 +83,15 @@ pub fn get_governance_enclave<N: Network>() -> Result<GovernanceEnclave<N>> {
     Ok(governance_enclave)
 }
 
+/// Returns governance chain rpc url
+///
+/// # Examples
+/// ```
+/// use governance::config::create_gov_chain_rpc_url;
+///
+/// let rpc_url = create_gov_chain_rpc_url();
+///
+/// ```
 pub fn create_gov_chain_rpc_url() -> Result<String> {
     let rpc_apikey = get_gov_chain_rpc_apikey()?;
     let rpc_url = format!("{}{}", GOV_CHAIN_BASE_RPC, rpc_apikey);
@@ -73,11 +102,30 @@ pub fn create_gov_chain_rpc_url() -> Result<String> {
     Ok(url.as_str().to_string())
 }
 
+/// Returns governance chain rpc apikey
+///
+/// # Examples
+/// ```
+/// use governance::config::get_gov_chain_rpc_apikey;
+///
+/// let apikey = get_gov_chain_rpc_apikey();
+///
+/// ```
 pub fn get_gov_chain_rpc_apikey() -> Result<String> {
     let cfg = get_config().context("loading config")?;
     Ok(cfg.gov_chain_apikey)
 }
 
+/// Returns other chain rpc apikey
+///
+/// # Examples
+/// ```
+/// use alloy::primitives::U256;
+/// use governance::config::get_rpc_apikey;
+/// let chain_id = U256::from(1);
+/// let apikey = get_rpc_apikey(chain_id);
+///
+/// ```
 pub fn get_rpc_apikey(chain_id: U256) -> Result<String> {
     let cfg = get_config().context("loading config")?;
 
@@ -92,6 +140,17 @@ pub fn get_rpc_apikey(chain_id: U256) -> Result<String> {
     Ok(rpc_apikey.clone())
 }
 
+/// Returns other chain rpc url
+///
+/// # Examples
+/// ```
+/// use alloy::primitives::U256;
+/// use governance::config::create_rpc_url;
+/// let chain_id = U256::from(1);
+/// let base_url = "base rpc";
+/// let rpc_url = create_rpc_url(base_url, chain_id);
+///
+/// ```
 pub fn create_rpc_url(base_url: &str, chain_id: U256) -> Result<String> {
     let cid = chain_id.to_string();
     let rpc_apikey = get_rpc_apikey(chain_id)?;
@@ -105,6 +164,20 @@ pub fn create_rpc_url(base_url: &str, chain_id: U256) -> Result<String> {
     Ok(url.as_str().to_string())
 }
 
+/// Constructs a new instance of delegation contract
+///
+/// # Examples
+/// ```
+/// use governance::config::get_governanace_delegation;
+/// use alloy::network::Ethereum;
+/// use alloy::primitives::{U256, Address};
+/// let chain_id = U256::from(1);
+/// let base_url = "base rpc";
+/// let delegation_contract_address = "0xabcdef01abcdef01abcdef01abcdef01abcdef01";
+///
+/// let delegation_contract = get_governanace_delegation::<Ethereum>(chain_id, base_url, delegation_contract_address);
+///
+/// ```
 pub fn get_governanace_delegation<N: Network>(
     chain_id: U256,
     base_url: &str,
@@ -124,6 +197,15 @@ pub fn get_governanace_delegation<N: Network>(
     Ok(delegation)
 }
 
+/// Returns governance config
+///
+/// # Examples
+/// ```
+/// use governance::config::get_config;
+///
+/// let config = get_config();
+///
+/// ```
 pub fn get_config() -> Result<GovernanceConfig> {
     let candidates = ["./config/config.json", "/config/config.json"];
 
@@ -151,6 +233,16 @@ pub fn get_config() -> Result<GovernanceConfig> {
     Ok(cfg)
 }
 
+/// Returns latest block on chain
+///
+/// # Examples
+/// ```
+/// use governance::config::latest_block;
+/// use alloy::network::Ethereum;
+/// let chain_rpc_url = "chain_rpc_url rpc";
+/// let block = latest_block::<Ethereum>(chain_rpc_url);
+///
+/// ```
 pub async fn latest_block<N: Network>(chain_rpc_url: &str) -> Result<u64> {
     let url = Url::parse(chain_rpc_url)?;
 
@@ -163,6 +255,17 @@ pub async fn latest_block<N: Network>(chain_rpc_url: &str) -> Result<u64> {
     Ok(latest_num)
 }
 
+/// Find the block number closest to the given timestamp
+///
+/// # Examples
+/// ```
+/// use governance::config::find_block_by_timestamp;
+/// use alloy::network::Ethereum;
+/// let chain_rpc_url = "chain_rpc_url rpc";
+/// let target_ts = 1234;
+/// let block = find_block_by_timestamp::<Ethereum>(chain_rpc_url, target_ts);
+///
+/// ```
 pub async fn find_block_by_timestamp<N: Network>(
     chain_rpc_url: &str,
     target_ts: u64,
