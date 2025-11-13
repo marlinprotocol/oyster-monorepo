@@ -1,13 +1,13 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use hex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::read;
 use tracing::info;
 
-use oyster::attestation::{get, AttestationExpectations, AWS_ROOT_KEY};
+use oyster::attestation::{AWS_ROOT_KEY, AttestationExpectations, get};
 
-use crate::args::pcr::{preset_to_pcr_preset, PcrArgs};
+use crate::args::pcr::{PcrArgs, preset_to_pcr_preset};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
 use crate::types::Platform;
 
@@ -108,7 +108,9 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
 
         attestation_doc
     } else {
-        bail!("Could not get attestation, either enclave-ip, attestation-hex or attestation-hex-file must be specified")
+        bail!(
+            "Could not get attestation, either enclave-ip, attestation-hex or attestation-hex-file must be specified"
+        )
     };
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
@@ -143,7 +145,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
     info!("Enclave public key: {}", hex::encode(decoded.public_key));
-    info!("Image id: {}", hex::encode(&decoded.image_id));
+    info!("Image id: {}", hex::encode(decoded.image_id));
     info!("User data: {}", hex::encode(&decoded.user_data));
     if let Ok(user_data) = String::from_utf8(decoded.user_data.to_vec()) {
         info!("User data, decoded as UTF-8: {user_data}");
@@ -160,12 +162,10 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         pcr1 = attestation_expectations.pcrs.map(|x| hex::encode(x[1])),
         pcr2 = attestation_expectations.pcrs.map(|x| hex::encode(x[2])),
         pcr16 = attestation_expectations.pcrs.map(|x| hex::encode(x[3])),
-        enclave_public_key = attestation_expectations.public_key.map(|x| hex::encode(x)),
-        user_data = attestation_expectations.user_data.map(|x| hex::encode(x)),
-        root_public_key = attestation_expectations
-            .root_public_key
-            .map(|x| hex::encode(x)),
-        image_id = attestation_expectations.image_id.map(|x| hex::encode(x)),
+        enclave_public_key = attestation_expectations.public_key.map(hex::encode),
+        user_data = attestation_expectations.user_data.map(hex::encode),
+        root_public_key = attestation_expectations.root_public_key.map(hex::encode),
+        image_id = attestation_expectations.image_id.map(hex::encode),
         "Verified against expectations: "
     );
     Ok(())

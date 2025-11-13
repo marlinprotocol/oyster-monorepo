@@ -9,8 +9,8 @@ use alloy::{
     hex::FromHex,
     signers::k256::sha2::{Digest, Sha256},
 };
-use anyhow::{anyhow, bail, Context, Result};
-use base64::{prelude::BASE64_STANDARD, Engine};
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Args;
 use k256::sha2::Sha384;
 use lazy_static::lazy_static;
@@ -82,7 +82,7 @@ impl InitParamsArgs {
             .unwrap_or_default();
 
         if let Some(address) = self.contract_address {
-            if let Err(_) = Address::from_hex(&address) {
+            if Address::from_hex(&address).is_err() {
                 bail!("invalid contract address");
             }
             init_params.push(format!("contract-address:1:0:utf8:{}", address));
@@ -180,7 +180,7 @@ impl InitParamsArgs {
         let mut hasher = Sha256::new();
         // bitflags denoting what pcrs are part of the computation
         // this one has 0, 1, 2 and 16
-        hasher.update(&((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
+        hasher.update(((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
         hasher.update(hex::decode(pcrs.0).context("failed to decode PCR")?);
         hasher.update(hex::decode(pcrs.1).context("failed to decode PCR")?);
         hasher.update(hex::decode(pcrs.2).context("failed to decode PCR")?);
