@@ -1,0 +1,5 @@
+# rust-toolchain.toml  (at the project/workspace root)
+[toolchain]
+channel = "1.88.0"
+# components = ["rustfmt", "clippy"]      # optional
+# targets = ["x86_64-unknown-linux-musl"] # optional
