@@ -57,13 +57,20 @@ impl ChainHandler for MyChainHandler {
         Ok(12345)
     }
 
-    async fn fetch_logs_and_group_by_block(
+    async fn fetch_logs_grouped_by_block(
         &self,
         start_block: u64,
         end_block: u64,
     ) -> anyhow::Result<std::collections::BTreeMap<u64, Vec<Self::RawLog>>> {
         // Query logs/events, group them by block
         Ok(std::collections::BTreeMap::new())
+    }
+
+    async fn subscribe_logs_grouped_by_block<'a>(
+        &'a self,
+    ) -> anyhow::Result<impl tokio_stream::StreamExt<Item = (u64, Vec<Self::RawLog>)> + Send + 'a> {
+        // Subscribe to logs stream
+        Ok(Stream)
     }
 }
 ```

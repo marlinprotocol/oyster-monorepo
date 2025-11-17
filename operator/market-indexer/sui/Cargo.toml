@@ -17,6 +17,7 @@ sui_rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-
 sui_sdk_types = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-sdk-types"}
 tokio = { version = "1.46.1", features = ["full"] }
 tokio-retry = "0.3"
+tokio-stream = "0.1.17"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
