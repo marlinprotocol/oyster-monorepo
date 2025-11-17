@@ -341,7 +341,7 @@ fn hash_eip191_message(msg: &[u8]) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use crate::kms::{DirtyKMS, KMS};
+    use crate::kms::kms::{DirtyKMS, KMS};
 
     use super::*;
     use alloy::{

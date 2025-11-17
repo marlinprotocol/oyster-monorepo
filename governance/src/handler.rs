@@ -1,6 +1,8 @@
 use crate::{
-    config,
-    kms::KMS,
+    attestations::{AttestationSource, ContractAttestationSource, EnclaveAttestationSource},
+    config::{self, create_config, create_gov_chain_rpc_url, latest_block},
+    governance_enclave::GovernanceEnclave,
+    kms::kms::KMS,
     vote_parser::VoteParse,
     vote_registry::VoteRegistry,
     vote_result::{self, ContractDataPreimage},
@@ -9,7 +11,11 @@ use actix_web::{
     HttpResponse, Responder, error,
     web::{self, Data},
 };
-use alloy::{network::Ethereum, primitives::U256, sol};
+use alloy::{
+    network::{Ethereum, Network},
+    primitives::{B256, U256},
+    sol,
+};
 use ecies::PublicKey as EncryptionPublicKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -73,6 +79,12 @@ sol! {
 struct ProposalHashPlaceHolder {
     #[allow(unused)]
     proposal_id: String,
+}
+
+#[derive(ToSchema, Serialize, Deserialize)]
+struct SecretLoadPlaceholder {
+    #[allow(unused)]
+    secret: String,
 }
 
 #[utoipa::path(
@@ -195,8 +207,7 @@ async fn status<K: KMS + Send + Sync>(
         vote_hash: vote_factory.vote_hash(),
     };
 
-    let image_id = governance_enclave
-        .get_image_id(nearest_block_on_gov_chain)
+    let image_id = fetch_image_id(governance_enclave, nearest_block_on_gov_chain)
         .await
         .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
 
@@ -255,6 +266,86 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
         {
             "proposal_id": proposal_id,
             "encryption_key": format!("0x{}", hex::encode(pk.serialize()))
+        }
+    )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/encryption_key",
+    responses(
+        (status = 200, description = "Return proposal voting result"),
+    ),
+    tag = "Deprecated"
+)]
+async fn encryption_key<K: KMS + Send + Sync>(kms: Data<K>) -> actix_web::Result<impl Responder> {
+    let pk = kms
+        .get_persistent_encryption_public_key()
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("encryption key error: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "encryption_key": format!("0x{}", hex::encode(pk.serialize()))
+        }
+    )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/image_id",
+    responses(
+        (status = 200, description = "Return image id of the enclave"),
+    ),
+    tag = "Manual Compute"
+)]
+async fn image_id() -> actix_web::Result<impl Responder> {
+    let governance_enclave =
+        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
+
+    use alloy::network::Ethereum;
+    let chain_rpc_url = create_gov_chain_rpc_url()
+        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+    let lb = latest_block::<Ethereum>(&chain_rpc_url)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+
+    let image_id = fetch_image_id(governance_enclave, lb)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "image_id": format!("0x{}", hex::encode(image_id))
+        }
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/load_config",
+    request_body = SecretLoadPlaceholder,
+    responses(
+        (status = 200, description = "Load Config"),
+    ),
+    tag = "Config"
+)]
+async fn load_config<K: KMS + Send + Sync>(
+    payload: web::Json<SecretLoadPlaceholder>,
+    kms: Data<K>,
+) -> actix_web::Result<impl Responder> {
+    let secret_hex = payload.0.secret;
+    let secret_bytes = hex::decode(secret_hex).map_err(|e| {
+        error::ErrorInternalServerError(format!("unable to decode secret hex: {e}"))
+    })?;
+
+    create_config(kms.into_inner(), &secret_bytes)
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("load config issue: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "image_id": ""
         }
     )))
 }
@@ -373,10 +464,30 @@ async fn proposal_hashes<K: KMS + Send + Sync>(
 pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
     web::scope("/v1")
         .route("/hello", web::get().to(hello_handler))
+        .route("/image_id", web::get().to(image_id))
+        .route("/encryption_key", web::get().to(encryption_key::<K>))
         .route("/status", web::post().to(status::<K>))
+        .route("/load_config", web::post().to(load_config::<K>))
         .route(
             "/proposal_encryption_key",
             web::post().to(proposal_encryption_key::<K>),
         )
         .route("/proposal_hashes", web::post().to(proposal_hashes::<K>))
+}
+
+pub async fn fetch_image_id<N: Network>(
+    governance_enclave: GovernanceEnclave<N>,
+    nearest_block_on_gov_chain: u64,
+) -> anyhow::Result<B256> {
+    let image_id = if cfg!(feature = "contract_image_id_source") {
+        ContractAttestationSource::new(governance_enclave)
+            .image_id(nearest_block_on_gov_chain)
+            .await?
+    } else {
+        EnclaveAttestationSource::new("localhost", "1301")
+            .image_id(nearest_block_on_gov_chain)
+            .await?
+    };
+
+    Ok(image_id)
 }

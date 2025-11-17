@@ -5,7 +5,7 @@ use anyhow::Result;
 use governance::{
     apidoc::get_swagger,
     handler::get_scope,
-    kms::DirtyKMS,
+    kms::kms::DirtyKMS,
     middlewares::{self, allow_all_cors::allow_all},
     vote_registry::VoteRegistry,
 };

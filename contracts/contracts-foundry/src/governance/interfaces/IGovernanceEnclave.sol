@@ -3,6 +3,12 @@
 pragma solidity 0.8.29;
 
 interface IGovernanceEnclave {
+    struct TokenNetworkConfig {
+        bytes32 chainHash; // sha256(abi.encode(chainId, rpcUrls))
+        address tokenAddress;
+        string[] rpcUrls;
+    }
+
     function getImageId() external view returns (bytes32);
 
     function verifyKMSSig(bytes32 _imageId, bytes calldata _enclavePubKey, bytes calldata _kmsSig, bytes32 _proposalId)
@@ -23,7 +29,7 @@ interface IGovernanceEnclave {
 
     function isChainSupported(uint256 _chainId) external view returns (bool);
     
-    function getTokenNetworkConfig(uint256 _chainId) external view returns (bytes32 chainHash, address tokenAddress, string[] memory rpcUrls);
+    function getTokenNetworkConfig(uint256 _chainId) external view returns (TokenNetworkConfig memory);
     
     function getPCRConfig() external view returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId);
 }

@@ -1,0 +1,6 @@
+target/
+.env
+config/
+config/*
+.git
+.gitignore

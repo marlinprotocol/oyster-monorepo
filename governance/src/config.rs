@@ -5,12 +5,14 @@ use alloy::{
     providers::{Provider, RootProvider},
 };
 use anyhow::{Context, Result, anyhow};
+use ecies::decrypt;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, sync::Arc};
 use url::Url;
 
 use crate::{
     delegation::Delegation, governance::Governance, governance_enclave::GovernanceEnclave,
+    kms::kms::KMS,
 };
 
 pub const GOVERNANCE: &str = "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48";
@@ -23,6 +25,35 @@ pub struct GovernanceConfig {
     pub governance_enclave: String,
     pub gov_chain_apikey: String,
     pub rpc_apikeys: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Base {
+    gov_chain_apikey: String,
+    rpc_apikeys: HashMap<String, String>,
+}
+
+pub async fn create_config<K: KMS + Send + Sync>(kms: Arc<K>, msg: &[u8]) -> Result<()> {
+    if fs::exists("./config.json")? {
+        return Err(anyhow!(
+            "config.json already exists — refusing to overwrite"
+        ));
+    }
+
+    let receiver_sec = kms.get_persistent_encryption_secret_key().await?;
+    let decrypted_data = decrypt(&receiver_sec.serialize(), msg).map_err(|e| anyhow!(e))?;
+
+    let json_str = std::str::from_utf8(&decrypted_data)
+        .map_err(|e| anyhow!("invalid UTF-8 in decrypted data: {}", e))?;
+
+    let base: Base =
+        serde_json::from_str(json_str).map_err(|e| anyhow!("invalid JSON structure: {}", e))?;
+
+    let output_json = serde_json::to_string_pretty(&base)?;
+
+    fs::write("./config.json", output_json).map_err(|e| anyhow!(e))?;
+
+    Ok(())
 }
 
 /// Constructs a new instance of governance contract
@@ -207,19 +238,19 @@ pub fn get_governanace_delegation<N: Network>(
 ///
 /// ```
 pub fn get_config() -> Result<GovernanceConfig> {
-    let candidates = ["./config/config.json", "/config/config.json"];
+    let candidates = [
+        "./config/config.json",
+        "/config/config.json",
+        "./config.json",
+        "/config.json",
+    ];
 
     // find the first readable config
     let (path, contents) = candidates
         .iter()
         .find_map(|p| fs::read_to_string(p).ok().map(|s| (*p, s)))
-        .ok_or_else(|| anyhow!("config.json not found in ./config or /config"))?;
+        .ok_or_else(|| anyhow!("config.json not found in ./config or /config or / or ."))?;
 
-    #[derive(Serialize, Deserialize)]
-    struct Base {
-        gov_chain_apikey: String,
-        rpc_apikeys: HashMap<String, String>,
-    }
     // parse and validate
     let base_cfg: Base =
         serde_json::from_str(&contents).with_context(|| format!("parse failed for {path}"))?;

@@ -119,7 +119,7 @@ mod tests {
         config,
         governance::Governance,
         governance_enclave::GovernanceEnclave,
-        kms::{DirtyKMS, KMS},
+        kms::kms::{DirtyKMS, KMS},
         vote_parser::VoteParse,
         vote_registry::VoteRegistry,
     };

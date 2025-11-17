@@ -10,6 +10,8 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
+import {IGovernanceEnclave} from "./interfaces/IGovernanceEnclave.sol";
+
 /// @title GovernanceEnclave
 /// @notice Manages KMS, PCR, and RPC URL configurations for Governance Enclave.
 ///         This contract stores configurations that are queried by the Governance contract during proposal processing
@@ -21,7 +23,8 @@ contract GovernanceEnclave is
     ContextUpgradeable,
     ERC165Upgradeable,
     AccessControlUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    IGovernanceEnclave
 {
     using ECDSA for bytes32;
 
@@ -54,12 +57,6 @@ contract GovernanceEnclave is
         bytes32 imageId;
     }
 
-    struct TokenNetworkConfig {
-        bytes32 chainHash; // sha256(abi.encode(chainId, rpcUrls))
-        address tokenAddress;
-        string[] rpcUrls;
-    }
-
     // ========== Constants ==========
 
     bytes32 public constant GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE = keccak256("GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE");
@@ -76,7 +73,7 @@ contract GovernanceEnclave is
     bytes32 private networkHash;
     uint256[] public supportedChainIds;
     uint256 public maxRPCUrlsPerChain;
-    mapping(uint256 chainId => TokenNetworkConfig config) private tokenNetworkConfigs;
+    mapping(uint256 chainId => IGovernanceEnclave.TokenNetworkConfig config) private tokenNetworkConfigs;
     uint256[50] private __gap1;
 
     // ========== Events ==========
@@ -452,7 +449,7 @@ contract GovernanceEnclave is
         return _isChainIdSupported(_chainId);
     }
 
-    function getTokenNetworkConfig(uint256 _chainId) external view returns (TokenNetworkConfig memory) {
+    function getTokenNetworkConfig(uint256 _chainId) external view returns (IGovernanceEnclave.TokenNetworkConfig memory) {
         return tokenNetworkConfigs[_chainId];
     }
 

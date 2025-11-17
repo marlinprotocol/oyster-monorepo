@@ -39,3 +39,6 @@ pub mod vote_registry;
 
 /// Voting Result computation for a given vote snapshot
 pub mod vote_result;
+
+/// Attestation Utility
+pub mod attestations;

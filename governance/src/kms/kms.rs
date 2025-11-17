@@ -44,19 +44,37 @@ pub trait KMS {
         self._get_proposal_public_key(proposal_hash).await
     }
 
+    async fn get_persistent_encryption_secret_key(&self) -> Result<EncryptionPrivateKey> {
+        self._get_persistent_encryption_secret_key().await
+    }
+
+    async fn get_persistent_encryption_public_key(&self) -> Result<EncryptionPublicKey> {
+        self._get_persistent_encryption_public_key().await
+    }
+
+    async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey> {
+        Ok(self.get_persistent_secret_key().await?.public_key())
+    }
+    async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
+        Ok(EncryptionPublicKey::from_secret_key(
+            &self.get_proposal_secret_key(proposal_hash).await?,
+        ))
+    }
+    async fn _get_persistent_encryption_public_key(&self) -> Result<EncryptionPublicKey> {
+        Ok(EncryptionPublicKey::from_secret_key(
+            &self._get_persistent_encryption_secret_key().await?,
+        ))
+    }
     // ---------- required “internal” methods (override these) ----------
 
     /// Implementors MUST return the persistent signing secret key.
     async fn _get_persistent_secret_key(&self) -> Result<SigningPrivateKey>;
 
-    /// Implementors MUST return the persistent signing public key.
-    async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey>;
-
     /// Implementors MUST return the per-proposal encryption secret key.
     async fn _get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey>;
 
-    /// Implementors MUST return the per-proposal encryption public key.
-    async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey>;
+    // Implementors MUST return the persistent encryption secret key.
+    async fn _get_persistent_encryption_secret_key(&self) -> Result<EncryptionPrivateKey>;
 
     async fn get_proposal_secret_bytes(&self, proposal_hash: B256) -> Result<Bytes> {
         let sk = self.get_proposal_secret_key(proposal_hash).await?;
@@ -85,7 +103,7 @@ pub trait KMS {
     ///
     /// ```no_run
     /// use alloy::primitives::{B256, Bytes};
-    /// use governance::kms::KMS;
+    /// use governance::kms::kms::KMS;
     ///
     /// # async fn example<K: KMS + Send + Sync>(kms: K) -> anyhow::Result<()> {
     /// #     let image_id = B256::ZERO;
@@ -140,15 +158,23 @@ pub struct DirtyKMS;
 
 #[async_trait]
 impl KMS for DirtyKMS {
+    async fn _get_persistent_encryption_secret_key(&self) -> Result<EncryptionPrivateKey> {
+        dotenv().ok();
+        let sk_hex = std::env::var("DIRTY_KMS_HEX")?;
+        let raw: Vec<u8> = hex::decode(sk_hex)?;
+        let raw_array: &[u8; 32] = raw
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Invalid key length, expected 32 bytes"))?;
+        let enc_sk = EncryptionPrivateKey::parse(raw_array).map_err(|e| anyhow!(" failed: {e}"))?;
+        Ok(enc_sk)
+    }
+
     async fn _get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
         dotenv().ok();
         let sk_hex = std::env::var("DIRTY_KMS_HEX")?;
         let raw: Vec<u8> = hex::decode(sk_hex)?;
         Ok(SigningPrivateKey::from_slice(&raw)?)
-    }
-
-    async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey> {
-        Ok(self.get_persistent_secret_key().await?.public_key())
     }
 
     async fn _get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
@@ -168,12 +194,6 @@ impl KMS for DirtyKMS {
             EncryptionPrivateKey::parse(private_key).map_err(|e| anyhow!(" failed: {e}"))?;
         Ok(enc_sk)
     }
-
-    async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {
-        Ok(EncryptionPublicKey::from_secret_key(
-            &self.get_proposal_secret_key(proposal_hash).await?,
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -181,7 +201,7 @@ mod tests {
     use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
     use anyhow::Result;
 
-    use crate::kms::{DirtyKMS, KMS};
+    use crate::kms::kms::{DirtyKMS, KMS};
 
     #[tokio::test]
     async fn test_kms_sig_generation() -> Result<()> {

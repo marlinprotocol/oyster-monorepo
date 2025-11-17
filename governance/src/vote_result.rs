@@ -1,5 +1,5 @@
 use crate::governance::IGovernance::{SubmitResultInputParams, VoteDecisionResult};
-use crate::kms::KMS;
+use crate::kms::kms::KMS;
 use crate::vote_factory::WeightVoteDecision;
 
 use alloy::primitives::{Address, B256, Bytes, U256};
