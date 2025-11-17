@@ -1130,6 +1130,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-retry",
+ "tokio-stream",
  "tracing",
 ]
 

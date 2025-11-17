@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 
 use anyhow::{Context, Result};
+use tokio_stream::StreamExt;
 
 use crate::events::JobEvent;
 use crate::schema::{JobEventName, JobEventRecord};
@@ -25,11 +26,16 @@ pub trait ChainHandler {
     fn fetch_latest_block(&self) -> impl Future<Output = Result<u64>> + Send;
 
     /// Fetch raw logs for the oyster market on the chain between a range and group them by block/checkpoint/slot
-    fn fetch_logs_and_group_by_block(
+    fn fetch_logs_grouped_by_block(
         &self,
         start_block: u64,
         end_block: u64,
     ) -> impl Future<Output = Result<BTreeMap<u64, Vec<Self::RawLog>>>> + Send;
+
+    /// Subscribe to raw logs and return the stream grouped by block/checkpoint/slot for processing
+    fn subscribe_logs_grouped_by_block<'a>(
+        &'a self,
+    ) -> impl Future<Output = Result<impl StreamExt<Item = (u64, Vec<Self::RawLog>)> + Send + 'a>> + Send;
 }
 
 // Transform raw logs from a block into suitable DB records
