@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use ecies::SecretKey as EncryptionPrivateKey;
 
+#[derive(Default, Debug, Clone, Copy)]
 pub struct OysterKms;
 
 #[async_trait]

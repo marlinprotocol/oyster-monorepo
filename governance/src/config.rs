@@ -7,6 +7,7 @@ use alloy::{
 use anyhow::{Context, Result, anyhow};
 use ecies::decrypt;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::{collections::HashMap, fs, sync::Arc};
 use url::Url;
 
@@ -19,7 +20,6 @@ pub const GOVERNANCE: &str = "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48";
 pub const GOVERNANCE_ENCLAVE: &str = "0xf6EF8A444c47ab142B33D0EEb60c60050916d64F";
 pub const GOV_CHAIN_BASE_RPC: &str = "https://arbitrum-sepolia.core.chainstack.com/";
 
-#[derive(Deserialize)]
 pub struct GovernanceConfig {
     pub governance_contract: String,
     pub governance_enclave: String,
@@ -33,6 +33,7 @@ struct Base {
     rpc_apikeys: HashMap<String, String>,
 }
 
+/// Creates a new config in the enclave
 pub async fn create_config<K: KMS + Send + Sync>(kms: Arc<K>, msg: &[u8]) -> Result<()> {
     if fs::exists("./config.json")? {
         return Err(anyhow!(
@@ -52,6 +53,21 @@ pub async fn create_config<K: KMS + Send + Sync>(kms: Arc<K>, msg: &[u8]) -> Res
     let output_json = serde_json::to_string_pretty(&base)?;
 
     fs::write("./config.json", output_json).map_err(|e| anyhow!(e))?;
+
+    Ok(())
+}
+
+/// Deletes the config
+pub async fn delete_config_file() -> Result<()> {
+    let path = Path::new("./config.json");
+
+    // 1. Error if it doesn't exist (mirror the "refuse to overwrite" logic)
+    if !path.exists() {
+        return Err(anyhow!("config.json does not exist — nothing to delete"));
+    }
+
+    // 2. Delete the file
+    fs::remove_file(path).map_err(|e| anyhow!("failed to delete config.json: {}", e))?;
 
     Ok(())
 }
@@ -384,4 +400,54 @@ async fn block_ts<N: Network>(provider: &RootProvider<N>, n: u64) -> Result<u64>
         .map_err(|e| anyhow!("get_block({n}) failed: {e}"))?
         .ok_or_else(|| anyhow!("block {n} not found"))?;
     Ok(b.header().timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use anyhow::{Result, anyhow};
+    use ecies::encrypt;
+
+    use crate::{
+        config::{Base, create_config, delete_config_file},
+        kms::kms::{DirtyKMS, KMS},
+    };
+
+    #[tokio::test]
+    async fn test_config_generation() -> Result<()> {
+        let kms = DirtyKMS::default();
+        let receiver_pub = kms.get_persistent_encryption_public_key().await?;
+
+        let base = Base {
+            gov_chain_apikey: "someapikey".to_string(),
+            rpc_apikeys: {
+                let mut map = HashMap::new();
+                map.insert("1".to_string(), "apikeyofa".to_string());
+                map.insert("2".to_string(), "apikeyofb".to_string());
+                map.insert("3".to_string(), "apikeyofc".to_string());
+                map
+            },
+        };
+        let json = serde_json::to_string(&base)
+            .map_err(|e| anyhow!("failed to serialize Base to JSON: {}", e))?;
+
+        let ciphertext =
+            encrypt(&receiver_pub.serialize(), json.as_bytes()).map_err(|e| anyhow!(e))?;
+
+        create_config(kms.into(), &ciphertext).await?;
+        delete_config_file().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_fe_generated_config() -> Result<()> {
+        let ciphertext = hex::decode(
+            "04466dbb97e6ff5cb0cb0604d91018fb5e49157b8865030af543fabd3e2c8cde68ed0cc8a28b807185657aef49530177a783c7b2516310624fccdcd400b74cf9489404bb566ba8722f8e53c2dcb85867b23a5787edb6f8bacdabff272bff85ada25c87a18fe21fc0e2ad489a80f366bb6e6e92b1c68edbd0a8950f9d8d39d8a3c97d0befb3c3a5f2812cf7445988593a23752afdbdb12c09e8a932bcf55e64ded3e8778a941b7ac96350fb5a438d",
+        )?;
+        let kms = DirtyKMS::default();
+        create_config(kms.into(), &ciphertext).await?;
+        delete_config_file().await?;
+        Ok(())
+    }
 }

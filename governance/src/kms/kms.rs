@@ -153,7 +153,7 @@ pub trait KMS {
 }
 
 /// Sample implementation of KMS service. This should be only used during local testing.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DirtyKMS;
 
 #[async_trait]

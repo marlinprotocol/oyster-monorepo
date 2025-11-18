@@ -5,10 +5,16 @@ use anyhow::Result;
 use governance::{
     apidoc::get_swagger,
     handler::get_scope,
-    kms::kms::DirtyKMS,
+    kms,
     middlewares::{self, allow_all_cors::allow_all},
     vote_registry::VoteRegistry,
 };
+
+#[cfg(feature = "dirty_kms")]
+type ActiveKms = kms::kms::DirtyKMS;
+
+#[cfg(not(feature = "dirty_kms"))]
+type ActiveKms = kms::oyster_kms::OysterKms;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
@@ -17,7 +23,8 @@ async fn main() -> Result<()> {
 
     HttpServer::new(move || {
         let vote_registry = VoteRegistry::new();
-        let kms = DirtyKMS::default();
+        let kms = ActiveKms::default();
+
         let server = App::new()
             .wrap(middlewares::ratelimiter::get_rate_limiter(
                 Duration::from_secs(1),
@@ -28,7 +35,7 @@ async fn main() -> Result<()> {
             .app_data(Data::new(vote_registry))
             .app_data(Data::new(kms))
             .service(get_swagger())
-            .service(get_scope::<DirtyKMS>())
+            .service(get_scope::<ActiveKms>())
     })
     .bind(("0.0.0.0", 3001))? // listen on all interfaces, port 3001
     .run()

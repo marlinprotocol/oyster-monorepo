@@ -1,9 +1,7 @@
 services:
   app:
     container_name: governance
-    build:
-      context: .
-    image: rust-app:latest
+    image: jerryandspike/governance_enclave:v1.0
     ports:
       - "3001:3001"
     env_file:

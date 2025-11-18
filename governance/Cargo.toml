@@ -21,7 +21,7 @@ tokio = {version = "1.47.1"}
 futures= {version = "0.3.31"}
 thiserror = "1.0.58"
 utoipa = "5.4.0"
-utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web", "vendored"] }
 log = "0.4.28"
 env_logger = "0.11.8"
 actix-cors = "0.7.1"
@@ -42,4 +42,6 @@ codegen-units = 1
 
 
 [features]
+default = []
+dirty_kms = []
 contract_image_id_source = []

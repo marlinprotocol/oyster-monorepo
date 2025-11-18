@@ -4,3 +4,6 @@ config/
 config/*
 .git
 .gitignore
+config.json
+temp
+temp/

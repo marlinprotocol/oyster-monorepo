@@ -12,7 +12,7 @@
     COPY src ./src
     
     # Build in release mode
-    RUN cargo build --release
+    RUN cargo build --release --features dirty_kms,contract_image_id_source
     
     # ---------- 2) Runtime stage ----------
     FROM debian:bookworm-slim AS runtime
@@ -23,6 +23,10 @@
         rm -rf /var/lib/apt/lists/*
     
     WORKDIR /app
+
+    # Non-root user for safety
+    RUN useradd -m appuser \
+        && chown -R appuser:appuser /app
     
     # Change this to your actual binary name if different
     ARG BIN_NAME=governance
@@ -30,8 +34,6 @@
     # Copy the compiled binary from the builder stage
     COPY --from=builder /app/target/release/${BIN_NAME} /usr/local/bin/app
     
-    # Non-root user for safety
-    RUN useradd -m appuser
     USER appuser
     
     # The port your app listens on

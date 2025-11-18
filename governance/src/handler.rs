@@ -1,6 +1,7 @@
+#[allow(unused)]
 use crate::{
     attestations::{AttestationSource, ContractAttestationSource, EnclaveAttestationSource},
-    config::{self, create_config, create_gov_chain_rpc_url, latest_block},
+    config::{self, create_config, create_gov_chain_rpc_url, delete_config_file, latest_block},
     governance_enclave::GovernanceEnclave,
     kms::kms::KMS,
     vote_parser::VoteParse,
@@ -16,6 +17,7 @@ use alloy::{
     primitives::{B256, U256},
     sol,
 };
+use anyhow::Result;
 use ecies::PublicKey as EncryptionPublicKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -305,10 +307,10 @@ async fn image_id() -> actix_web::Result<impl Responder> {
 
     use alloy::network::Ethereum;
     let chain_rpc_url = create_gov_chain_rpc_url()
-        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+        .map_err(|e| error::ErrorInternalServerError(format!("gov chain rpc error: {e}")))?;
     let lb = latest_block::<Ethereum>(&chain_rpc_url)
         .await
-        .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
+        .map_err(|e| error::ErrorInternalServerError(format!("latest block fetch issue: {e}")))?;
 
     let image_id = fetch_image_id(governance_enclave, lb)
         .await
@@ -345,7 +347,27 @@ async fn load_config<K: KMS + Send + Sync>(
 
     Ok(HttpResponse::Ok().json(json!(
         {
-            "image_id": ""
+            "status": true
+        }
+    )))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/delete_config",
+    responses(
+        (status = 200, description = "DeleteConfig"),
+    ),
+    tag = "Config"
+)]
+async fn delete_config() -> actix_web::Result<impl Responder> {
+    delete_config_file()
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("Failed to delete config: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "status": true
         }
     )))
 }
@@ -464,6 +486,7 @@ async fn proposal_hashes<K: KMS + Send + Sync>(
 pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
     web::scope("/v1")
         .route("/hello", web::get().to(hello_handler))
+        .route("/delete_config", web::delete().to(delete_config))
         .route("/image_id", web::get().to(image_id))
         .route("/encryption_key", web::get().to(encryption_key::<K>))
         .route("/status", web::post().to(status::<K>))
@@ -475,19 +498,26 @@ pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
         .route("/proposal_hashes", web::post().to(proposal_hashes::<K>))
 }
 
+#[cfg(feature = "contract_image_id_source")]
 pub async fn fetch_image_id<N: Network>(
     governance_enclave: GovernanceEnclave<N>,
     nearest_block_on_gov_chain: u64,
-) -> anyhow::Result<B256> {
-    let image_id = if cfg!(feature = "contract_image_id_source") {
-        ContractAttestationSource::new(governance_enclave)
-            .image_id(nearest_block_on_gov_chain)
-            .await?
-    } else {
-        EnclaveAttestationSource::new("localhost", "1301")
-            .image_id(nearest_block_on_gov_chain)
-            .await?
-    };
+) -> Result<B256> {
+    let image_id = ContractAttestationSource::new(governance_enclave)
+        .image_id(nearest_block_on_gov_chain)
+        .await?;
+
+    Ok(image_id)
+}
+
+#[cfg(not(feature = "contract_image_id_source"))]
+pub async fn fetch_image_id<N: Network>(
+    _governance_enclave: GovernanceEnclave<N>, // unused in this mode
+    nearest_block_on_gov_chain: u64,
+) -> Result<B256> {
+    let image_id = EnclaveAttestationSource::new("65.0.196.244", "1301")
+        .image_id(nearest_block_on_gov_chain)
+        .await?;
 
     Ok(image_id)
 }
