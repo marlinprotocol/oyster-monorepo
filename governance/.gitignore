@@ -5,3 +5,5 @@ config/*
 temp
 temp/
 config.json
+.marlin
+.marlin/*
