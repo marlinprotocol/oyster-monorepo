@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use clap::Args;
 use k256::sha2::Sha384;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     args::{
@@ -27,7 +27,7 @@ pub struct ImageArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 
-    /// debug mode 
+    /// debug mode
     #[arg(long)]
     debug: bool,
 }
@@ -37,8 +37,20 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
         .init_params
         .pcrs
         .clone()
-        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug)) 
+        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug))
         .context("Failed to load PCRs")?;
+
+    // Check if all PCR values are zero (debug mode)
+    let pcr0_is_zero = pcrs.0.chars().all(|c| c == '0');
+    let pcr1_is_zero = pcrs.1.chars().all(|c| c == '0');
+    let pcr2_is_zero = pcrs.2.chars().all(|c| c == '0');
+
+    if pcr0_is_zero && pcr1_is_zero && pcr2_is_zero {
+        warn!(
+            "WARNING: Computing image ID for insecure enclave running in debug mode.
+             DO NOT use this image ID to approve for contract-based KMS or send any encrypted secrets as init params to this enclave,as debug enclaves can be compromised and sensitive data can be extracted."
+        );
+    }
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args
         .init_params

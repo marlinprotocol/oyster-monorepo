@@ -82,6 +82,13 @@ impl InitParamsArgs {
             .unwrap_or_default();
 
         if let Some(address) = self.contract_address {
+            if debug {
+                // attempting to use contract address in debug mode
+                // error out since it is not safe
+                return Err(anyhow!(
+                    "Refused to allow contract address in debug mode enclaves. It is not safe to use contract address in debug mode since it can expose sensitive contract interactions."
+                ));
+            }
             if let Err(_) = Address::from_hex(&address) {
                 bail!("invalid contract address");
             }
