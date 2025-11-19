@@ -3,7 +3,7 @@ use crate::types::Platform;
 use crate::utils::provider::create_provider;
 use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
 use alloy::sol;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use tracing::info;
 
@@ -66,6 +66,35 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
     );
 
     if let Some(debug) = debug {
+        // Check if existing init_params contain contract-address when enabling debug mode
+        if debug && metadata.get("init_params").is_some() {
+            if let Some(init_params_str) = metadata["init_params"].as_str() {
+                // Decode the base64 init_params to check for contract-address
+                if let Ok(decoded_bytes) =
+                    base64::Engine::decode(&base64::prelude::BASE64_STANDARD, init_params_str)
+                {
+                    if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
+                        if let Ok(init_params_json) =
+                            serde_json::from_str::<serde_json::Value>(&decoded_str)
+                        {
+                            if let Some(params) =
+                                init_params_json.get("params").and_then(|p| p.as_array())
+                            {
+                                for param in params {
+                                    if let Some(path) = param.get("path").and_then(|p| p.as_str()) {
+                                        if path == "contract-address" {
+                                            return Err(anyhow!(
+                                                "Refused to enable debug mode for job with contract address. It is not safe to use contract address in debug mode since it can expose sensitive contract interactions."
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         metadata["debug"] = serde_json::Value::Bool(debug);
     }
 
