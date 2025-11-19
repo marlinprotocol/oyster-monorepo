@@ -8,24 +8,22 @@ actix-extensible-rate-limit = "0.4.0"
 actix-web = "4.11.0"
 alloy = "1.1.0"
 anyhow = "1.0.100"
-aws-nitro-enclaves-cose = "0.5.1"
 async-trait = "0.1.89"
 dotenvy = "0.15.7"
 ecies = "0.2.10"
 hex = "0.4.3"
 serde = "1.0.228"
-serde_cbor = "0.11.2"
 serde_json = "1.0.145"
 url = "2.5.7"
 tokio = {version = "1.47.1"}
 futures= {version = "0.3.31"}
-thiserror = "1.0.58"
 utoipa = "5.4.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web", "vendored"] }
 log = "0.4.28"
 env_logger = "0.11.8"
 actix-cors = "0.7.1"
 reqwest = "0.12.24"
+oyster-sdk = "0.17.1"
 
 [dev-dependencies]
 tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "time"] }
