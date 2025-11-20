@@ -21,6 +21,7 @@ contract GovernanceEnclaveTest is Test {
     bytes public pcr0;
     bytes public pcr1;
     bytes public pcr2;
+    bytes public pcr16;
     uint256 public maxRPCUrlsPerChain;
 
     // Cached values for verification tests
@@ -38,10 +39,12 @@ contract GovernanceEnclaveTest is Test {
         user = makeAddr("user");
 
         // Initialize test data
-        kmsRootServerPubKey = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
+        kmsRootServerPubKey =
+            hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
         pcr0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         pcr1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
         pcr2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
+        pcr16 = hex"161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616";
         maxRPCUrlsPerChain = 10;
 
         // Deploy and initialize GovernanceEnclave
@@ -49,14 +52,7 @@ contract GovernanceEnclaveTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), "");
         governanceEnclave = GovernanceEnclave(address(proxy));
 
-        governanceEnclave.initialize(
-            admin,
-            kmsRootServerPubKey,
-            pcr0,
-            pcr1,
-            pcr2,
-            maxRPCUrlsPerChain
-        );
+        governanceEnclave.initialize(admin, kmsRootServerPubKey, pcr0, pcr1, pcr2, pcr16, maxRPCUrlsPerChain);
 
         // Initialize MockEnclave and cache values
         mockEnclave = new MockEnclave();
@@ -79,7 +75,7 @@ contract GovernanceEnclaveTest is Test {
     function _setupNetwork(uint256 chainId, uint256 rpcCount) internal returns (address tokenAddress) {
         tokenAddress = makeAddr(string(abi.encodePacked("token", vm.toString(chainId))));
         string[] memory rpcUrls = _createRpcUrls(rpcCount);
-        
+
         vm.prank(admin);
         governanceEnclave.setNetworkConfig(chainId, tokenAddress, rpcUrls);
     }
@@ -114,14 +110,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_initialize_revert_WhenCalledTwice() public {
         vm.expectRevert("Initializable: contract is already initialized");
-        governanceEnclave.initialize(
-            admin,
-            kmsRootServerPubKey,
-            pcr0,
-            pcr1,
-            pcr2,
-            maxRPCUrlsPerChain
-        );
+        governanceEnclave.initialize(admin, kmsRootServerPubKey, pcr0, pcr1, pcr2, pcr16, maxRPCUrlsPerChain);
     }
 
     function test_initialize_revert_WhenZeroAdmin() public {
@@ -130,14 +119,7 @@ contract GovernanceEnclaveTest is Test {
         GovernanceEnclave newEnclave = GovernanceEnclave(address(proxy));
 
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__InvalidAddress.selector);
-        newEnclave.initialize(
-            address(0),
-            kmsRootServerPubKey,
-            pcr0,
-            pcr1,
-            pcr2,
-            maxRPCUrlsPerChain
-        );
+        newEnclave.initialize(address(0), kmsRootServerPubKey, pcr0, pcr1, pcr2, pcr16, maxRPCUrlsPerChain);
     }
 
     //-------------------------------- Setters Tests --------------------------------//
@@ -145,8 +127,9 @@ contract GovernanceEnclaveTest is Test {
     // ========== KMS Root Server Key Tests ==========
 
     function test_setKMSRootServerKey_Success() public {
-        bytes memory newKey = hex"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-        
+        bytes memory newKey =
+            hex"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
         vm.prank(admin);
         governanceEnclave.setKMSRootServerKey(newKey);
 
@@ -155,7 +138,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_setKMSRootServerKey_revert_WhenNotAdmin() public {
         bytes memory newKey = hex"abcdef1234567890";
-        
+
         vm.prank(user);
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
         governanceEnclave.setKMSRootServerKey(newKey);
@@ -170,42 +153,49 @@ contract GovernanceEnclaveTest is Test {
     // ========== PCR Config Tests ==========
 
     function test_setPCRConfig_Success() public {
-        bytes memory newPcr0 = hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
-        bytes memory newPcr1 = hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
-        bytes memory newPcr2 = hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
-        
-        vm.prank(admin);
-        governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2);
+        bytes memory newPcr0 =
+            hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        bytes memory newPcr1 =
+            hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
+        bytes memory newPcr2 =
+            hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
+        bytes memory newPcr16 =
+            hex"323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232";
 
-        (bytes memory retPcr0, bytes memory retPcr1, bytes memory retPcr2,) = governanceEnclave.getPCRConfig();
+        vm.prank(admin);
+        governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2, newPcr16);
+
+        (bytes memory retPcr0, bytes memory retPcr1, bytes memory retPcr2, bytes memory retPcr16,) =
+            governanceEnclave.getPCRConfig();
         assertEq(retPcr0, newPcr0);
         assertEq(retPcr1, newPcr1);
         assertEq(retPcr2, newPcr2);
+        assertEq(retPcr16, newPcr16);
     }
 
     function test_setPCRConfig_revert_WhenNotAdmin() public {
         vm.prank(user);
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__OnlyDefaultAdmin.selector);
-        governanceEnclave.setPCRConfig(pcr0, pcr1, pcr2);
+        governanceEnclave.setPCRConfig(pcr0, pcr1, pcr2, pcr16);
     }
 
     function test_setPCRConfig_revert_WhenEmptyPCR() public {
         vm.prank(admin);
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__InvalidPCR.selector);
-        governanceEnclave.setPCRConfig("", "", "");
+        governanceEnclave.setPCRConfig("", "", "", "");
     }
 
     function test_setPCRConfig_revert_WhenSameImageId() public {
         vm.prank(admin);
         vm.expectRevert(GovernanceEnclave.GovernanceEnclave__SameImageId.selector);
-        governanceEnclave.setPCRConfig(pcr0, pcr1, pcr2);
+        governanceEnclave.setPCRConfig(pcr0, pcr1, pcr2, pcr16);
     }
 
     // ========== Max RPC URLs Per Chain Tests ==========
 
     function test_setMaxRPCUrlsPerChain_Success() public {
         uint256 newMax = 20;
-        
+
         vm.prank(admin);
         governanceEnclave.setMaxRPCUrlsPerChain(newMax);
 
@@ -329,7 +319,7 @@ contract GovernanceEnclaveTest is Test {
         uint256[] memory indexes = new uint256[](2);
         indexes[0] = 0;
         indexes[1] = 2;
-        
+
         string[] memory newRpcUrls = new string[](2);
         newRpcUrls[0] = "https://newrpc1.example.com";
         newRpcUrls[1] = "https://newrpc3.example.com";
@@ -469,18 +459,18 @@ contract GovernanceEnclaveTest is Test {
 
         uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         assertEq(chainIds.length, 3, "Should have 3 supported chains");
-        
+
         // Verify chain IDs are correct (order might not be guaranteed)
         bool hasChain1 = false;
         bool hasChain2 = false;
         bool hasChain3 = false;
-        
+
         for (uint256 i = 0; i < chainIds.length; i++) {
             if (chainIds[i] == 1) hasChain1 = true;
             if (chainIds[i] == 2) hasChain2 = true;
             if (chainIds[i] == 3) hasChain3 = true;
         }
-        
+
         assertTrue(hasChain1, "Should contain chain 1");
         assertTrue(hasChain2, "Should contain chain 2");
         assertTrue(hasChain3, "Should contain chain 3");
@@ -490,16 +480,16 @@ contract GovernanceEnclaveTest is Test {
         // Add networks
         _setupNetwork(1, 1);
         _setupNetwork(2, 1);
-        
+
         assertEq(governanceEnclave.getAllSupportedChainIds().length, 2, "Should have 2 chains");
-        
+
         // Remove one network by setting token to address(0)
         string[] memory emptyUrls = new string[](1);
         emptyUrls[0] = "https://placeholder.com";
-        
+
         vm.prank(admin);
         governanceEnclave.setNetworkConfig(1, address(0), emptyUrls);
-        
+
         uint256[] memory chainIds = governanceEnclave.getAllSupportedChainIds();
         assertEq(chainIds.length, 1, "Should have 1 chain after removal");
         assertEq(chainIds[0], 2, "Should only have chain 2");
@@ -518,7 +508,7 @@ contract GovernanceEnclaveTest is Test {
         _setupNetwork(1, 1);
         _setupNetwork(2, 1);
         _setupNetwork(5, 1);
-        
+
         assertTrue(governanceEnclave.isChainSupported(1), "Chain 1 should be supported");
         assertTrue(governanceEnclave.isChainSupported(2), "Chain 2 should be supported");
         assertFalse(governanceEnclave.isChainSupported(3), "Chain 3 should not be supported");
@@ -529,42 +519,59 @@ contract GovernanceEnclaveTest is Test {
     function test_isChainSupported_AfterRemoval() public {
         _setupNetwork(TEST_CHAIN_ID, 1);
         assertTrue(governanceEnclave.isChainSupported(TEST_CHAIN_ID), "Chain should be supported");
-        
+
         // Remove network
         string[] memory emptyUrls = new string[](1);
         emptyUrls[0] = "https://placeholder.com";
-        
+
         vm.prank(admin);
         governanceEnclave.setNetworkConfig(TEST_CHAIN_ID, address(0), emptyUrls);
-        
+
         assertFalse(governanceEnclave.isChainSupported(TEST_CHAIN_ID), "Chain should not be supported after removal");
     }
 
     function test_getPCRConfig_ReturnsCorrectValues() public view {
-        (bytes memory returnedPcr0, bytes memory returnedPcr1, bytes memory returnedPcr2, bytes32 returnedImageId) 
-            = governanceEnclave.getPCRConfig();
-        
+        (
+            bytes memory returnedPcr0,
+            bytes memory returnedPcr1,
+            bytes memory returnedPcr2,
+            bytes memory returnedPcr16,
+            bytes32 returnedImageId
+        ) = governanceEnclave.getPCRConfig();
+
         assertEq(returnedPcr0, pcr0, "PCR0 should match");
         assertEq(returnedPcr1, pcr1, "PCR1 should match");
         assertEq(returnedPcr2, pcr2, "PCR2 should match");
+        assertEq(returnedPcr16, pcr16, "PCR16 should match");
         assertEq(returnedImageId, governanceEnclave.getImageId(), "ImageId should match getImageId()");
     }
 
     function test_getPCRConfig_AfterUpdate() public {
         // Update PCR config
-        bytes memory newPcr0 = hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
-        bytes memory newPcr1 = hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
-        bytes memory newPcr2 = hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
-        
+        bytes memory newPcr0 =
+            hex"333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        bytes memory newPcr1 =
+            hex"444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
+        bytes memory newPcr2 =
+            hex"555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
+        bytes memory newPcr16 =
+            hex"323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232";
+
         vm.prank(admin);
-        governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2);
-        
-        (bytes memory returnedPcr0, bytes memory returnedPcr1, bytes memory returnedPcr2, bytes32 returnedImageId) 
-            = governanceEnclave.getPCRConfig();
-        
+        governanceEnclave.setPCRConfig(newPcr0, newPcr1, newPcr2, newPcr16);
+
+        (
+            bytes memory returnedPcr0,
+            bytes memory returnedPcr1,
+            bytes memory returnedPcr2,
+            bytes memory returnedPcr16,
+            bytes32 returnedImageId
+        ) = governanceEnclave.getPCRConfig();
+
         assertEq(returnedPcr0, newPcr0, "PCR0 should be updated");
         assertEq(returnedPcr1, newPcr1, "PCR1 should be updated");
         assertEq(returnedPcr2, newPcr2, "PCR2 should be updated");
+        assertEq(returnedPcr16, newPcr16, "PCR16 should be updated");
         assertTrue(returnedImageId != bytes32(0), "ImageId should be generated");
         assertEq(returnedImageId, governanceEnclave.getImageId(), "ImageId should match getImageId()");
     }
@@ -574,7 +581,7 @@ contract GovernanceEnclaveTest is Test {
     function test_verifyKMSSig_WrongSigner() public view {
         bytes32 imageId = governanceEnclave.getImageId();
         bytes32 proposalId = bytes32(uint256(1));
-        
+
         // Sign with a different private key (not the KMS root server key)
         uint256 wrongPrivKey = 0x1234567890abcdef;
         string memory uri = string(
@@ -600,15 +607,22 @@ contract GovernanceEnclaveTest is Test {
         bytes32 proposalId = bytes32(uint256(1));
 
         // Sign with correct imageId but verify with wrong imageId
-        assertFalse(governanceEnclave.verifyKMSSig(wrongImageId, enclavePubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId));
+        assertFalse(
+            governanceEnclave.verifyKMSSig(
+                wrongImageId, enclavePubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId
+            )
+        );
     }
 
     function test_verifyKMSSig_WrongPublicKey() public view {
         bytes32 imageId = governanceEnclave.getImageId();
         bytes32 proposalId = bytes32(uint256(1));
-        bytes memory wrongPubKey = hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        bytes memory wrongPubKey =
+            hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
-        assertFalse(governanceEnclave.verifyKMSSig(imageId, wrongPubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId));
+        assertFalse(
+            governanceEnclave.verifyKMSSig(imageId, wrongPubKey, mockEnclave.getKmsSig(imageId, proposalId), proposalId)
+        );
     }
 
     function test_verifyEnclaveSig_Valid() public view {
@@ -621,7 +635,7 @@ contract GovernanceEnclaveTest is Test {
 
     function test_verifyEnclaveSig_WrongSigner() public view {
         bytes memory message = abi.encode("test message", uint256(12345));
-        
+
         // Sign with a different private key
         uint256 wrongPrivKey = 0xabcdef1234567890;
         bytes32 digest = sha256(message);
@@ -645,7 +659,8 @@ contract GovernanceEnclaveTest is Test {
     function test_verifyEnclaveSig_WrongPublicKey() public view {
         bytes memory message = abi.encode("test message", uint256(12345));
         bytes memory enclaveSig = _signWithEnclaveKey(message);
-        bytes memory wrongPubKey = hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        bytes memory wrongPubKey =
+            hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
         bytes32 messageHash = keccak256(message);
 
         assertFalse(governanceEnclave.verifyEnclaveSig(wrongPubKey, enclaveSig, messageHash));
@@ -657,4 +672,3 @@ contract GovernanceEnclaveTest is Test {
         assertTrue(governanceEnclave.verifyEnclaveSig(enclavePubKey, enclaveSig, messageHash));
     }
 }
-

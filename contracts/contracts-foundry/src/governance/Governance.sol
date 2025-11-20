@@ -42,7 +42,7 @@ contract Governance is
     // Core Contracts
     address public treasury;
     address public governanceEnclave;
-    mapping (uint256 chainId => address governanceDelegation) public governanceDelegations;
+    mapping(uint256 chainId => address governanceDelegation) public governanceDelegations;
     uint256[] public delegationChainIds;
     bytes32 public contractConfigHash;
 
@@ -164,10 +164,10 @@ contract Governance is
     function _setGovernanceEnclave(address _governanceEnclave) internal {
         require(_governanceEnclave != address(0), Governance__InvalidAddress());
         governanceEnclave = _governanceEnclave;
-        
+
         // Update contract config hash when governance enclave changes
         contractConfigHash = _calcContractConfigHash();
-        
+
         emit GovernanceEnclaveSet(_governanceEnclave);
     }
 
@@ -182,10 +182,10 @@ contract Governance is
 
         governanceDelegations[_chainId] = _governanceDelegation;
         delegationChainIds.push(_chainId);
-        
+
         // Update contract config hash
         contractConfigHash = _calcContractConfigHash();
-        
+
         emit GovernanceDelegationAdded(_chainId, _governanceDelegation);
     }
 
@@ -196,22 +196,22 @@ contract Governance is
         require(_index < delegationChainIds.length, Governance__InvalidAddress());
 
         uint256 chainIdToRemove = delegationChainIds[_index];
-        
+
         // Remove from mapping
         delete governanceDelegations[chainIdToRemove];
-        
+
         // Remove from array by swapping with last element and popping
         delegationChainIds[_index] = delegationChainIds[delegationChainIds.length - 1];
         delegationChainIds.pop();
-        
+
         // Update contract config hash
         contractConfigHash = _calcContractConfigHash();
-        
+
         emit GovernanceDelegationRemoved(chainIdToRemove);
     }
 
     /// @notice Calculates the contract config hash from governanceEnclave and all configured governance delegations
-    /// @dev Uses iterative hashing for gas efficiency - hashes governanceEnclave first, then chains each 
+    /// @dev Uses iterative hashing for gas efficiency - hashes governanceEnclave first, then chains each
     ///      (chainId, address) pair to create a hash for integrity verification
     /// @return currentHash The computed contract config hash representing the current governance configuration
     function _calcContractConfigHash() internal view returns (bytes32) {
@@ -491,16 +491,12 @@ contract Governance is
 
             // Validate delegator and chainId combination
             require(
-                (delegator == address(0) && delegatorChainId == 0)
-                    || (delegator != address(0) && delegatorChainId != 0),
+                (delegator == address(0) && delegatorChainId == 0) || (delegator != address(0) && delegatorChainId != 0),
                 Governance__InvalidDelegatorAndChainId()
             );
 
             if (delegatorChainId != 0) {
-                require(
-                    governanceDelegations[delegatorChainId] != address(0),
-                    Governance__InvalidDelegatorChainId()
-                );
+                require(governanceDelegations[delegatorChainId] != address(0), Governance__InvalidDelegatorChainId());
             }
 
             uint256 voteIdx = proposalVoteInfo.voteCount;
@@ -566,7 +562,8 @@ contract Governance is
         bytes memory message = abi.encode(contractDataHash, proposalId, voteDecisionResult);
         bytes32 messageHash = sha256(message);
         require(
-            _verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, messageHash), Governance__InvalidEnclaveSignature()
+            _verifyEnclaveSig(_params.enclavePubKey, _params.enclaveSig, messageHash),
+            Governance__InvalidEnclaveSignature()
         );
 
         // Store vote decryption key
@@ -901,11 +898,7 @@ contract Governance is
     /// @param _proposalId The unique identifier of the proposal
     /// @param idx The index of the vote
     /// @return vote Specific cast for the proposal
-    function getSingleVoteInfo(bytes32 _proposalId, uint256 idx)
-        external
-        view
-        returns (Vote memory)
-    {
+    function getSingleVoteInfo(bytes32 _proposalId, uint256 idx) external view returns (Vote memory) {
         ProposalVoteInfo storage proposalVoteInfo = proposals[_proposalId].proposalVoteInfo;
         return proposalVoteInfo.votes[idx];
     }
@@ -933,7 +926,11 @@ contract Governance is
     /// @return contractConfigHash The contract configuration hash
     function getProposalHashes(bytes32 _proposalId) external view returns (bytes32, bytes32, bytes32) {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
-        return (proposals[_proposalId].imageId, proposals[_proposalId].networkHash, proposals[_proposalId].contractConfigHash);
+        return (
+            proposals[_proposalId].imageId,
+            proposals[_proposalId].networkHash,
+            proposals[_proposalId].contractConfigHash
+        );
     }
 
     /// @notice Returns the token lock information for a specific proposal
@@ -968,7 +965,9 @@ contract Governance is
     {
         require(proposals[_proposalId].proposalInfo.proposer != address(0), Governance__ProposalDoesNotExist());
         Proposal storage proposal = proposals[_proposalId];
-        return (proposal.voteOutcome, proposal.executed, executionQueue[_proposalId], proposal.imageId, proposal.networkHash);
+        return (
+            proposal.voteOutcome, proposal.executed, executionQueue[_proposalId], proposal.imageId, proposal.networkHash
+        );
     }
 
     /// @notice Returns the number of delegation chain IDs
@@ -995,8 +994,16 @@ contract Governance is
     /// @return voteActivationDelay The delay before voting starts
     /// @return voteDuration The duration of the voting period
     /// @return proposalDuration The total duration of the proposal
-    function getProposalTimingConfig() external view returns (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) {
-        return (proposalTimingConfig.voteActivationDelay, proposalTimingConfig.voteDuration, proposalTimingConfig.proposalDuration);
+    function getProposalTimingConfig()
+        external
+        view
+        returns (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration)
+    {
+        return (
+            proposalTimingConfig.voteActivationDelay,
+            proposalTimingConfig.voteDuration,
+            proposalTimingConfig.proposalDuration
+        );
     }
 
     //-------------------------------- Getters end --------------------------------//

@@ -8,7 +8,6 @@ import {Script} from "forge-std/Script.sol";
  * @dev Automatically detects chain ID and returns appropriate configuration
  */
 contract HelperConfig is Script {
-
     // ========== Structs ==========
 
     struct GovernanceInitParams {
@@ -23,13 +22,14 @@ contract HelperConfig is Script {
         uint256 voteDuration;
         uint256 proposalDuration;
     }
-    
+
     struct GovernanceEnclaveInitParams {
         address admin;
         bytes kmsRootServerPubKey;
         bytes pcr0;
         bytes pcr1;
         bytes pcr2;
+        bytes pcr16;
         uint256 maxRPCUrlsPerChain;
     }
 
@@ -104,20 +104,25 @@ contract HelperConfig is Script {
  * @notice Arbitrum Sepolia configuration
  */
 contract ArbitrumSepoliaConfig is HelperConfig {
-
     address constant ADMIN = 0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A;
     address constant TREASURY = 0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A;
-    
+
     // Token addresses
     address constant DEPOSIT_TOKEN_ARBITRUM_SEPOLIA = 0xc5b41bD20808B4695CBf402AD27d608673FDC888;
     address constant GOVERNANCE_TOKEN_ARBITRUM_SEPOLIA = 0x0a3ae3C1F42Ea9AD5C1fB1A62796735C13801890;
     address constant GOVERNANCE_TOKEN_ETHEREUM_SEPOLIA = 0x2e91E10a9144C2a74F73E745887f89D255817A3e;
 
     // KMS Configuration
-    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
-    bytes constant PCR0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-    bytes constant PCR1 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-    bytes constant PCR2 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes constant KMS_ROOT_SERVER_PUB_KEY =
+        hex"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
+    bytes constant PCR0 =
+        hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes constant PCR1 =
+        hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes constant PCR2 =
+        hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes constant PCR16 =
+        hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
     function getGovernanceInitParams() public pure override returns (GovernanceInitParams memory) {
         return GovernanceInitParams({
@@ -141,22 +146,18 @@ contract ArbitrumSepoliaConfig is HelperConfig {
             pcr0: PCR0,
             pcr1: PCR1,
             pcr2: PCR2,
+            pcr16: PCR16,
             maxRPCUrlsPerChain: 10
         });
     }
 
     function getGovernanceDelegationInitParams() public pure override returns (GovernanceDelegationInitParams memory) {
-        return GovernanceDelegationInitParams({
-            admin: ADMIN
-        });
+        return GovernanceDelegationInitParams({admin: ADMIN});
     }
 
     function getTokenLockConfigs() public pure override returns (TokenLockConfig[] memory) {
         TokenLockConfig[] memory configs = new TokenLockConfig[](1);
-        configs[0] = TokenLockConfig({
-            tokenAddress: DEPOSIT_TOKEN_ARBITRUM_SEPOLIA,
-            lockAmount: 100 * 1e18
-        });
+        configs[0] = TokenLockConfig({tokenAddress: DEPOSIT_TOKEN_ARBITRUM_SEPOLIA, lockAmount: 100 * 1e18});
         return configs;
     }
 
@@ -171,7 +172,7 @@ contract ArbitrumSepoliaConfig is HelperConfig {
 
     function getNetworkConfigs() public pure override returns (TokenNetworkConfig[] memory) {
         TokenNetworkConfig[] memory configs = new TokenNetworkConfig[](2);
-        
+
         // Arbitrum Sepolia
         string[] memory rpcUrlsArbitrumSepolia = new string[](1);
         rpcUrlsArbitrumSepolia[0] = "https://arb-sepolia.g.alchemy.com/v2/";
@@ -210,20 +211,25 @@ contract ArbitrumSepoliaConfig is HelperConfig {
  * @notice Ethereum Sepolia configuration
  */
 contract EthereumSepoliaConfig is HelperConfig {
-
     address constant ADMIN = 0x7C046645E21B811780Cf420021E6701A9E66935C;
     address constant TREASURY = 0x310E2E738BC3654a221488d665a85C78D92317C1;
-    
+
     // Token addresses
     address constant DEPOSIT_TOKEN_ETHEREUM_SEPOLIA = 0xc5b41bD20808B4695CBf402AD27d608673FDC888;
     address constant GOVERNANCE_TOKEN_ETHEREUM_SEPOLIA = 0x6965eC94b4a2D064276b61B35fBdba22e4f99807;
     address constant GOVERNANCE_TOKEN_ARBITRUM_SEPOLIA = 0x0a3ae3C1F42Ea9AD5C1fB1A62796735C13801890;
 
     // KMS Configuration
-    bytes constant KMS_ROOT_SERVER_PUB_KEY = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
-    bytes constant PCR0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-    bytes constant PCR1 = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
-    bytes constant PCR2 = hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
+    bytes constant KMS_ROOT_SERVER_PUB_KEY =
+        hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
+    bytes constant PCR0 =
+        hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes constant PCR1 =
+        hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
+    bytes constant PCR2 =
+        hex"222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
+    bytes constant PCR16 =
+        hex"161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616";
 
     function getGovernanceInitParams() public pure override returns (GovernanceInitParams memory) {
         return GovernanceInitParams({
@@ -247,22 +253,18 @@ contract EthereumSepoliaConfig is HelperConfig {
             pcr0: PCR0,
             pcr1: PCR1,
             pcr2: PCR2,
+            pcr16: PCR16,
             maxRPCUrlsPerChain: 10
         });
     }
 
     function getGovernanceDelegationInitParams() public pure override returns (GovernanceDelegationInitParams memory) {
-        return GovernanceDelegationInitParams({
-            admin: ADMIN
-        });
+        return GovernanceDelegationInitParams({admin: ADMIN});
     }
 
     function getTokenLockConfigs() public pure override returns (TokenLockConfig[] memory) {
         TokenLockConfig[] memory configs = new TokenLockConfig[](1);
-        configs[0] = TokenLockConfig({
-            tokenAddress: DEPOSIT_TOKEN_ETHEREUM_SEPOLIA,
-            lockAmount: 100 * 1e18
-        });
+        configs[0] = TokenLockConfig({tokenAddress: DEPOSIT_TOKEN_ETHEREUM_SEPOLIA, lockAmount: 100 * 1e18});
         return configs;
     }
 
@@ -316,10 +318,9 @@ contract EthereumSepoliaConfig is HelperConfig {
  * @notice Factory for creating chain-specific HelperConfig
  */
 contract ConfigFactory is Script {
-    
     uint256 constant ARBITRUM_SEPOLIA = 421614;
     uint256 constant ETHEREUM_SEPOLIA = 11155111;
-    
+
     error UnsupportedChainId(uint256 chainId);
 
     function getConfig() public returns (HelperConfig) {
@@ -332,4 +333,3 @@ contract ConfigFactory is Script {
         }
     }
 }
-

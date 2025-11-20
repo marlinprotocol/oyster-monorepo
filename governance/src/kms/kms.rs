@@ -1,4 +1,4 @@
-use alloy::primitives::{B256, Bytes, FixedBytes, keccak256};
+use alloy::primitives::{Address, B256, Bytes, FixedBytes, keccak256};
 use alloy::signers::SignerSync;
 use alloy::signers::k256::sha2::{Digest, Sha256};
 use alloy::signers::local::PrivateKeySigner as SigningPrivateKey;
@@ -15,7 +15,6 @@ pub type SigningPublicKey = FixedBytes<64>;
 pub trait KMS {
     /// Returns the secret signing key that will be used to sign the voting result. This key be be persistent
     async fn get_persistent_secret_key(&self) -> Result<SigningPrivateKey> {
-        // You can add invariants, logging, metrics, caching, etc. here
         log::debug!("Fetching persistent secret key");
         self._get_persistent_secret_key().await
     }
@@ -24,6 +23,11 @@ pub trait KMS {
     async fn get_persistent_public_key(&self) -> Result<SigningPublicKey> {
         log::debug!("Fetching persistent public key");
         self._get_persistent_public_key().await
+    }
+
+    async fn get_persistant_signing_address(&self) -> Result<Address> {
+        let sk: SigningPrivateKey = self._get_persistent_secret_key().await?;
+        Ok(sk.address())
     }
 
     /// Returns the secret key with which votes must be encrypted for a proposal.
@@ -45,14 +49,17 @@ pub trait KMS {
     }
 
     async fn get_persistent_encryption_secret_key(&self) -> Result<EncryptionPrivateKey> {
+        log::debug!("Fetching persistent encryption secret key",);
         self._get_persistent_encryption_secret_key().await
     }
 
     async fn get_persistent_encryption_public_key(&self) -> Result<EncryptionPublicKey> {
+        log::debug!("Fetching persistent encryption public key",);
         self._get_persistent_encryption_public_key().await
     }
 
     async fn _get_persistent_public_key(&self) -> Result<SigningPublicKey> {
+        log::debug!("Fetching persistent public key for proposal",);
         Ok(self.get_persistent_secret_key().await?.public_key())
     }
     async fn _get_proposal_public_key(&self, proposal_hash: B256) -> Result<EncryptionPublicKey> {

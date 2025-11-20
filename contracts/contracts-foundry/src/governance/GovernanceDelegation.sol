@@ -10,7 +10,6 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 
-
 contract GovernanceDelegation is
     Initializable, // initializer
     ContextUpgradeable,
@@ -20,11 +19,10 @@ contract GovernanceDelegation is
     UUPSUpgradeable,
     ReentrancyGuardUpgradeable
 {
-
     error GovernanceDelegation__OnlyDefaultAdmin();
     error GovernanceDelegation__DelegationAlreadySet();
     error GovernanceDelegation__InvalidAddress();
-    
+
     event DelegationSet(address delegator, address delegatee);
 
     mapping(address delegator => address delegatee) public delegations;
@@ -49,7 +47,7 @@ contract GovernanceDelegation is
     }
 
     function _authorizeUpgrade(address /*account*/ ) internal view override onlyAdmin {}
-    
+
     //-------------------------------- Overrides end --------------------------------//
 
     //-------------------------------- Initializer start --------------------------------//

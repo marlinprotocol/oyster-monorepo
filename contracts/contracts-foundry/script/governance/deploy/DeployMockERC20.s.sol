@@ -19,7 +19,7 @@ contract DeployMockERC20 is Script {
 
     function deployMockERC20(string memory _name, string memory _symbol) public returns (address) {
         vm.startBroadcast();
-        
+
         // Deploy Implementation
         MockERC20 mockERC20 = new MockERC20();
 
@@ -32,7 +32,7 @@ contract DeployMockERC20 is Script {
             _symbol,
             0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A, // Admin
             0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A, // Minter Role
-            0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A  // Burner Role
+            0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A // Burner Role
         );
 
         MockERC20(address(proxy)).grantMinterRole(0x7E82Da6A7D4f9Bcc01372e8Fe2E882e18fAd9C5A);

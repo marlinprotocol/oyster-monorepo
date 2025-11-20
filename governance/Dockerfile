@@ -12,7 +12,7 @@
     COPY src ./src
     
     # Build in release mode
-    RUN cargo build --release --features dirty_kms,contract_image_id_source
+    RUN cargo build --release
     
     # ---------- 2) Runtime stage ----------
     FROM debian:bookworm-slim AS runtime

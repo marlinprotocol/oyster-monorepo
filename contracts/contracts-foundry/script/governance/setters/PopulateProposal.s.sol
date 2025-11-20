@@ -10,7 +10,6 @@ import {HelperConfig, ConfigFactory} from "../HelperConfig.s.sol";
 import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTypes.sol";
 
 contract PopulateProposal is Script {
-    
     Governance gov = Governance(0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48);
 
     function run() external {
@@ -18,11 +17,13 @@ contract PopulateProposal is Script {
         HelperConfig helperConfig = factory.getConfig();
 
         vm.startBroadcast();
-        if(block.chainid == 421614){
-            for (uint i = 10; i < 11; i++) {
-                _populate_proposal(helperConfig, string(abi.encode("title", i+1)), string(abi.encode("description", i+1)));
+        if (block.chainid == 421614) {
+            for (uint256 i = 10; i < 11; i++) {
+                _populate_proposal(
+                    helperConfig, string(abi.encode("title", i + 1)), string(abi.encode("description", i + 1))
+                );
             }
-        }else{
+        } else {
             console.log("Can't populate proposals on unsupported chainid");
         }
         vm.stopBroadcast();
@@ -41,9 +42,9 @@ contract PopulateProposal is Script {
         gov.propose(
             IGovernanceTypes.ProposeInputParams({
                 depositToken: address(depositToken),
-                targets: new address[](0) ,
-                values: new uint256[](0) ,
-                calldatas: new bytes[](0) ,
+                targets: new address[](0),
+                values: new uint256[](0),
+                calldatas: new bytes[](0),
                 title: title,
                 description: description
             })

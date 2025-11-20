@@ -12,12 +12,11 @@ import {HelperConfig, ConfigFactory} from "../HelperConfig.s.sol";
 /**
  * @notice Deploys all Governance-related contracts: GovernanceEnclave, GovernanceDelegation, and Governance
  * @dev Automatically detects chain ID and uses appropriate configuration
- * 
+ *
  * Usage:
  *   forge script script/governance/DeployGovernance.s.sol:DeployGovernance --rpc-url $RPC_URL --broadcast --verify
  */
 contract DeployGovernance is Script {
-
     // Proxy addresses
     address public governanceEnclaveProxy;
     address public governanceDelegationProxy;
@@ -32,7 +31,7 @@ contract DeployGovernance is Script {
         // Auto-detect chain and get appropriate config
         ConfigFactory factory = new ConfigFactory();
         HelperConfig helperConfig = factory.getConfig();
-        
+
         deploy(helperConfig);
     }
 
@@ -85,34 +84,34 @@ contract DeployGovernance is Script {
 
         // Build JSON using vm.serializeJson
         string memory objectKey = "deployment";
-        
+
         // Governance
         string memory governanceJson = vm.serializeAddress(objectKey, "proxy", governanceProxy);
         governanceJson = vm.serializeAddress(objectKey, "implementation", governanceImplementation);
-        
+
         string memory finalJson = vm.serializeString("root", "Governance", governanceJson);
-        
+
         // GovernanceEnclave
         string memory enclaveJson = vm.serializeAddress("enclave", "proxy", governanceEnclaveProxy);
         enclaveJson = vm.serializeAddress("enclave", "implementation", governanceEnclaveImplementation);
-        
+
         finalJson = vm.serializeString("root", "GovernanceEnclave", enclaveJson);
-        
+
         // GovernanceDelegation
         string memory delegationJson = vm.serializeAddress("delegation", "proxy", governanceDelegationProxy);
         delegationJson = vm.serializeAddress("delegation", "implementation", governanceDelegationImplementation);
-        
+
         finalJson = vm.serializeString("root", "GovernanceDelegation", delegationJson);
-        
+
         // Tokens
         string memory tokensJson = vm.serializeAddress("tokens", "deposit", helperConfig.getDepositTokenAddress());
         tokensJson = vm.serializeAddress("tokens", "governance", helperConfig.getGovernanceTokenAddress());
-        
+
         finalJson = vm.serializeString("root", "tokens", tokensJson);
 
         // Write to file
         vm.writeJson(finalJson, filePath);
-        
+
         console.log("");
         console.log("Deployed addresses saved to:", filePath);
     }
@@ -138,6 +137,7 @@ contract DeployGovernance is Script {
             params.pcr0,
             params.pcr1,
             params.pcr2,
+            params.pcr16,
             params.maxRPCUrlsPerChain
         );
         console.log("GovernanceEnclave Initialized");
@@ -207,9 +207,7 @@ contract DeployGovernance is Script {
         HelperConfig.TokenNetworkConfig[] memory networkConfigs = helperConfig.getNetworkConfigs();
         for (uint256 i = 0; i < networkConfigs.length; i++) {
             GovernanceEnclave(governanceEnclaveProxy).setNetworkConfig(
-                networkConfigs[i].chainId,
-                networkConfigs[i].tokenAddress,
-                networkConfigs[i].rpcUrls
+                networkConfigs[i].chainId, networkConfigs[i].tokenAddress, networkConfigs[i].rpcUrls
             );
             console.log("Network config set for chainId:", networkConfigs[i].chainId);
         }
@@ -218,8 +216,7 @@ contract DeployGovernance is Script {
         HelperConfig.TokenLockConfig[] memory tokenLockConfigs = helperConfig.getTokenLockConfigs();
         for (uint256 i = 0; i < tokenLockConfigs.length; i++) {
             Governance(governanceProxy).setTokenLockAmount(
-                tokenLockConfigs[i].tokenAddress,
-                tokenLockConfigs[i].lockAmount
+                tokenLockConfigs[i].tokenAddress, tokenLockConfigs[i].lockAmount
             );
             console.log("Token lock amount set for token:", tokenLockConfigs[i].tokenAddress);
         }
@@ -229,8 +226,7 @@ contract DeployGovernance is Script {
         for (uint256 i = 0; i < delegationChainConfigs.length; i++) {
             // Use deployed GovernanceDelegation address
             Governance(governanceProxy).addGovernanceDelegation(
-                delegationChainConfigs[i].chainId,
-                governanceDelegationProxy
+                delegationChainConfigs[i].chainId, governanceDelegationProxy
             );
             console.log("Governance delegation added for chainId:", delegationChainConfigs[i].chainId);
         }
@@ -238,4 +234,3 @@ contract DeployGovernance is Script {
         console.log("Post-deployment configuration complete");
     }
 }
-

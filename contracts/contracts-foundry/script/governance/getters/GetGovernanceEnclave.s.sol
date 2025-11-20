@@ -6,7 +6,6 @@ import {console} from "forge-std/console.sol";
 import {GovernanceEnclave} from "../../../src/governance/GovernanceEnclave.sol";
 
 contract GetGovernanceEnclaveBase is Script {
-    
     GovernanceEnclave public governanceEnclave;
 
     constructor() {
@@ -14,10 +13,10 @@ contract GetGovernanceEnclaveBase is Script {
         string memory root = vm.projectRoot();
         string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, ".json");
         string memory json = vm.readFile(filePath);
-        
+
         address governanceEnclaveProxy = vm.parseJsonAddress(json, ".GovernanceEnclave.proxy");
         governanceEnclave = GovernanceEnclave(governanceEnclaveProxy);
-        
+
         console.log("Loaded GovernanceEnclave proxy:", governanceEnclaveProxy);
     }
 }
@@ -25,11 +24,13 @@ contract GetGovernanceEnclaveBase is Script {
 // forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetPCRConfig --rpc-url <RPC_URL> -vvv
 contract GetPCRConfig is GetGovernanceEnclaveBase {
     function run() external view {
-        (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId) = governanceEnclave.getPCRConfig();
+        (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes memory pcr16, bytes32 imageId) =
+            governanceEnclave.getPCRConfig();
         console.log("PCR config:");
         console.log("  PCR0 length:", pcr0.length);
         console.log("  PCR1 length:", pcr1.length);
         console.log("  PCR2 length:", pcr2.length);
+        console.log("  PCR16 length:", pcr16.length);
         console.log("  Image ID:");
         console.logBytes32(imageId);
     }
@@ -64,9 +65,8 @@ contract GetSupportedChainIds is GetGovernanceEnclaveBase {
 
 // forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetTokenNetworkConfig --rpc-url <RPC_URL> -vvv
 contract GetTokenNetworkConfig is GetGovernanceEnclaveBase {
-    
     uint256 constant CHAIN_ID = 421614;
-    
+
     function run() external view {
         GovernanceEnclave.TokenNetworkConfig memory config = governanceEnclave.getTokenNetworkConfig(CHAIN_ID);
         console.log("Token network config for chain:", CHAIN_ID);
@@ -77,7 +77,6 @@ contract GetTokenNetworkConfig is GetGovernanceEnclaveBase {
     }
 }
 
-
 // forge script script/governance/getters/GetGovernanceEnclave.s.sol:GetNetworkHash --rpc-url <RPC_URL> -vvv
 contract GetNetworkHash is GetGovernanceEnclaveBase {
     function run() external view {
@@ -86,4 +85,3 @@ contract GetNetworkHash is GetGovernanceEnclaveBase {
         console.logBytes32(networkHash);
     }
 }
-

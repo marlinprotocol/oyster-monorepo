@@ -35,10 +35,11 @@ contract GovernanceSetup is Test {
     uint256 public voteDuration;
     uint256 public proposalDuration;
     uint256 public maxRPCUrlsPerChain;
-    
+
     bytes public pcr0;
     bytes public pcr1;
     bytes public pcr2;
+    bytes public pcr16;
     bytes public kmsRootServerPubKey;
 
     /* Tokens */
@@ -59,17 +60,19 @@ contract GovernanceSetup is Test {
         // Initialize configuration addresses (these will be set to actual contract addresses in setUp)
         proposalPassVetoThreshold = 1 * 10e18 / 100; // 1% of total supply
         minQuorumThreshold = 5 * 10e18 / 100; // 5% of total supply
-        vetoSlashRate = 30 * 1e18 / 100; // 30% 
+        vetoSlashRate = 30 * 1e18 / 100; // 30%
         voteActivationDelay = 1 * 60; // 1 minute
         voteDuration = 2 * 60; // 2 minutes
         proposalDuration = 10 * 60; // 10 minutes (must be > voteActivationDelay + voteDuration)
         maxRPCUrlsPerChain = 10;
-        
+
         pcr0 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         pcr1 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
         pcr2 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        pcr16 = hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
-        kmsRootServerPubKey = hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
+        kmsRootServerPubKey =
+            hex"d8ad28c9f74e8bf4eb9199e638b2df049282e9c28e40edd096b443ef95b3b829ed785629e1aab7ce66459c76c9888ea26a8eae3a401ac6532824bde249b3292e";
     }
 
     function setUp() public virtual {
@@ -91,45 +94,26 @@ contract GovernanceSetup is Test {
 
         /* Deploy Tokens */
         depositToken = MockERC20(address(new ERC1967Proxy(address(new MockERC20()), "")));
-        depositToken.initialize(
-            "Deposit Token",
-            "DET",
-            admin,
-            admin,
-            admin
-        );
+        depositToken.initialize("Deposit Token", "DET", admin, admin, admin);
 
         marlinGovernanceToken = MockERC20(address(new ERC1967Proxy(address(new MockERC20()), "")));
-        marlinGovernanceToken.initialize(
-            "Marlin Governance Token",
-            "MGT",
-            admin,
-            admin,
-            admin
-        );
-        
+        marlinGovernanceToken.initialize("Marlin Governance Token", "MGT", admin, admin, admin);
+
         /* Deploy GovernanceEnclave and initialize */
         vm.startPrank(admin);
         governanceEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
-        governanceEnclave.initialize(
-            admin,
-            kmsRootServerPubKey,
-            pcr0,
-            pcr1,
-            pcr2,
-            maxRPCUrlsPerChain
-        );
-        
+        governanceEnclave.initialize(admin, kmsRootServerPubKey, pcr0, pcr1, pcr2, pcr16, maxRPCUrlsPerChain);
+
         // Grant configSetter role to configSetter address
         governanceEnclave.grantRole(governanceEnclave.GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE(), configSetter);
         vm.stopPrank();
-        
+
         /* Deploy GovernanceDelegation and initialize */
         vm.startPrank(admin);
         governanceDelegation = GovernanceDelegation(address(new ERC1967Proxy(address(new GovernanceDelegation()), "")));
         governanceDelegation.initialize(admin);
         vm.stopPrank();
-        
+
         /* Deploy Governance and initialize */
         vm.startPrank(admin);
         governance = Governance(address(new ERC1967Proxy(address(new Governance()), "")));
@@ -147,12 +131,12 @@ contract GovernanceSetup is Test {
         );
         _setUpConfig();
         vm.stopPrank();
-        
+
         // Setup proposer with deposit tokens
         vm.startPrank(admin);
         depositToken.mint(proposer, 1000 * 1e18); // Mint 1000 tokens to proposer
         vm.stopPrank();
-        
+
         vm.startPrank(proposer);
         depositToken.approve(address(governance), type(uint256).max); // Approve governance to spend tokens
         vm.stopPrank();
@@ -166,13 +150,9 @@ contract GovernanceSetup is Test {
             rpcUrls[i] = "https://rpc.marlin.com";
         }
 
-        governanceEnclave.setNetworkConfig(
-            block.chainid,
-            address(marlinGovernanceToken),
-            rpcUrls
-        );
+        governanceEnclave.setNetworkConfig(block.chainid, address(marlinGovernanceToken), rpcUrls);
         vm.stopPrank();
-        
+
         // Set token lock amount and governance delegation (requires configSetter)
         vm.startPrank(configSetter);
         governance.setTokenLockAmount(address(depositToken), DEPOSIT_AMOUNT);
@@ -192,13 +172,13 @@ contract GovernanceSetup is Test {
     ) internal view returns (IGovernanceTypes.ProposeInputParams memory) {
         address[] memory targets = new address[](1);
         targets[0] = target;
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = value;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = calldata_;
-        
+
         return IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -211,7 +191,9 @@ contract GovernanceSetup is Test {
 
     /// @dev Helper to create a simple proposal with default params
     function _createSimpleProposal() internal returns (bytes32) {
-        return _createProposal(makeAddr("target"), 0, abi.encodeWithSignature("function()"), "Test Proposal", "Test Description");
+        return _createProposal(
+            makeAddr("target"), 0, abi.encodeWithSignature("function()"), "Test Proposal", "Test Description"
+        );
     }
 
     /// @dev Helper to create a proposal with custom params
@@ -224,13 +206,13 @@ contract GovernanceSetup is Test {
     ) internal returns (bytes32) {
         address[] memory targets = new address[](1);
         targets[0] = target;
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = value;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = calldata_;
-        
+
         return _createProposalWithArrays(targets, values, calldatas, title, description);
     }
 
@@ -268,15 +250,17 @@ contract GovernanceSetup is Test {
     }
 
     /// @dev Helper for single vote
-    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId) internal {
+    function _vote(bytes32 _proposalId, bytes memory _voteEncrypted, address _delegator, uint256 _delegatorChainId)
+        internal
+    {
         bytes[] memory voteEncrypteds = new bytes[](1);
         address[] memory delegators = new address[](1);
         uint256[] memory delegatorChainIds = new uint256[](1);
-        
+
         voteEncrypteds[0] = _voteEncrypted;
         delegators[0] = _delegator;
         delegatorChainIds[0] = _delegatorChainId;
-        
+
         governance.vote(_proposalId, voteEncrypteds, delegators, delegatorChainIds);
     }
 

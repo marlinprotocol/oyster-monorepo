@@ -27,7 +27,7 @@ impl KMS for OysterKms {
     async fn _get_proposal_secret_key(&self, proposal_hash: B256) -> Result<EncryptionPrivateKey> {
         let resp_bytes = reqwest::get(format!(
             "http://127.0.0.1:1100/derive/secp256k1?path={}",
-            proposal_hash
+            format!("{}", proposal_hash).to_lowercase()
         ))
         .await?
         .bytes()

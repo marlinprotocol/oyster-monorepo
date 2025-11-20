@@ -44,19 +44,6 @@ contract GovernanceEnclave is
     error GovernanceEnclave__MaxRpcUrlsPerChainReached();
     error GovernanceEnclave__OnlyConfigSetter();
 
-    // ========== Types ==========
-
-    struct PCR {
-        bytes pcr0;
-        bytes pcr1;
-        bytes pcr2;
-    }
-
-    struct PCRConfig {
-        PCR pcr;
-        bytes32 imageId;
-    }
-
     // ========== Constants ==========
 
     bytes32 public constant GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE = keccak256("GOVERNANCE_ADMIN_CONFIG_SETTER_ROLE");
@@ -67,7 +54,7 @@ contract GovernanceEnclave is
 
     // KMS and PCR Configuration
     bytes public kmsRootServerPubKey;
-    PCRConfig private pcrConfig;
+    IGovernanceEnclave.PCRConfig private pcrConfig;
 
     // Network Configuration
     bytes32 private networkHash;
@@ -131,6 +118,7 @@ contract GovernanceEnclave is
         bytes calldata _pcr0,
         bytes calldata _pcr1,
         bytes calldata _pcr2,
+        bytes calldata _pcr16,
         uint256 _maxRPCUrlsPerChain
     ) external initializer {
         require(_admin != address(0), GovernanceEnclave__InvalidAddress());
@@ -148,7 +136,7 @@ contract GovernanceEnclave is
         _setKMSRootServerKey(_kmsRootServerPubKey);
 
         // Set PCR config
-        _setPCRConfig(_pcr0, _pcr1, _pcr2);
+        _setPCRConfig(_pcr0, _pcr1, _pcr2, _pcr16);
 
         // Set Max RPC URLs per Chain
         _setMaxRPCUrlsPerChain(_maxRPCUrlsPerChain);
@@ -176,16 +164,22 @@ contract GovernanceEnclave is
     /// @param _pcr0 The PCR0 value for enclave verification
     /// @param _pcr1 The PCR1 value for enclave verification
     /// @param _pcr2 The PCR2 value for enclave verification
-    function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) external onlyAdmin {
-        _setPCRConfig(_pcr0, _pcr1, _pcr2);
+    /// @param _pcr16 The PCR2 value for enclave verification
+    function setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2, bytes calldata _pcr16)
+        external
+        onlyAdmin
+    {
+        _setPCRConfig(_pcr0, _pcr1, _pcr2, _pcr16);
     }
 
-    function _setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2) internal {
+    function _setPCRConfig(bytes calldata _pcr0, bytes calldata _pcr1, bytes calldata _pcr2, bytes calldata _pcr16)
+        internal
+    {
         require(_pcr0.length > 0 && _pcr1.length > 0 && _pcr2.length > 0, GovernanceEnclave__InvalidPCR());
-        bytes32 imageIdGenerated = _generateImageId(_pcr0, _pcr1, _pcr2);
+        bytes32 imageIdGenerated = _generateImageId(_pcr0, _pcr1, _pcr2, _pcr16);
         require(imageIdGenerated != pcrConfig.imageId, GovernanceEnclave__SameImageId());
 
-        pcrConfig.pcr = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2});
+        pcrConfig.pcr = PCR({pcr0: _pcr0, pcr1: _pcr1, pcr2: _pcr2, pcr16: _pcr16});
         pcrConfig.imageId = imageIdGenerated;
         emit PCRConfigSet(_pcr0, _pcr1, _pcr2, imageIdGenerated);
     }
@@ -441,7 +435,6 @@ contract GovernanceEnclave is
         return supportedChainIds;
     }
 
-
     /// @notice Checks if a specific chain ID is supported
     /// @param _chainId The chain ID to check
     /// @return isSupported True if the chain is supported, false otherwise
@@ -449,7 +442,11 @@ contract GovernanceEnclave is
         return _isChainIdSupported(_chainId);
     }
 
-    function getTokenNetworkConfig(uint256 _chainId) external view returns (IGovernanceEnclave.TokenNetworkConfig memory) {
+    function getTokenNetworkConfig(uint256 _chainId)
+        external
+        view
+        returns (IGovernanceEnclave.TokenNetworkConfig memory)
+    {
         return tokenNetworkConfigs[_chainId];
     }
 
@@ -459,13 +456,14 @@ contract GovernanceEnclave is
     /// @return pcr0 The PCR0 value
     /// @return pcr1 The PCR1 value
     /// @return pcr2 The PCR2 value
+    /// @return pcr16 The PCR16 value
     /// @return imageId The generated image ID from the PCR values
     function getPCRConfig()
         external
         view
-        returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes32 imageId)
+        returns (bytes memory pcr0, bytes memory pcr1, bytes memory pcr2, bytes memory pcr16, bytes32 imageId)
     {
-        return (pcrConfig.pcr.pcr0, pcrConfig.pcr.pcr1, pcrConfig.pcr.pcr2, pcrConfig.imageId);
+        return (pcrConfig.pcr.pcr0, pcrConfig.pcr.pcr1, pcrConfig.pcr.pcr2, pcrConfig.pcr.pcr16, pcrConfig.imageId);
     }
 
     //-------------------------------- Getters end -------------------------------//
@@ -495,14 +493,13 @@ contract GovernanceEnclave is
 
     /// @dev Generates an image ID from PCR values for enclave verification
     /// @return imageId The generated image ID for enclave verification
-    function _generateImageId(bytes memory _pcr0, bytes memory _pcr1, bytes memory _pcr2)
+    function _generateImageId(bytes memory _pcr0, bytes memory _pcr1, bytes memory _pcr2, bytes memory _pcr16)
         internal
         pure
         returns (bytes32)
     {
         uint32 bitflags = uint32((1 << 0) | (1 << 1) | (1 << 2) | (1 << 16));
-        bytes memory pcr16 = new bytes(48);
-        return sha256(abi.encodePacked(bitflags, _pcr0, _pcr1, _pcr2, pcr16));
+        return sha256(abi.encodePacked(bitflags, _pcr0, _pcr1, _pcr2, _pcr16));
     }
 
     //-------------------------------- Helpers end -------------------------------//

@@ -11,9 +11,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {GovernanceSetup} from "./GovernanceSetup.t.sol";
 
 contract GovernanceProposeTest is GovernanceSetup {
-
     // ========== Basic Propose Tests ==========
-    
+
     function test_propose_Success() public {
         IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
             makeAddr("target"),
@@ -26,20 +25,28 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Get initial balances
         uint256 initialProposerBalance = depositToken.balanceOf(proposer);
         uint256 initialGovernanceBalance = depositToken.balanceOf(address(governance));
-        
+
         // Submit proposal
         vm.prank(proposer);
         bytes32 proposalId = governance.propose{value: 0}(params);
 
         // Verify proposal was created
         assertTrue(proposalId != bytes32(0), "Proposal ID should not be zero");
-        
+
         // Verify proposer nonce was incremented
         assertEq(governance.proposerNonce(proposer), 1, "Proposer nonce should be incremented");
-        
+
         // Verify tokens were locked
-        assertEq(depositToken.balanceOf(address(governance)), initialGovernanceBalance + DEPOSIT_AMOUNT, "Tokens should be locked in governance contract");
-        assertEq(depositToken.balanceOf(proposer), initialProposerBalance - DEPOSIT_AMOUNT, "Proposer tokens should be deducted");
+        assertEq(
+            depositToken.balanceOf(address(governance)),
+            initialGovernanceBalance + DEPOSIT_AMOUNT,
+            "Tokens should be locked in governance contract"
+        );
+        assertEq(
+            depositToken.balanceOf(proposer),
+            initialProposerBalance - DEPOSIT_AMOUNT,
+            "Proposer tokens should be deducted"
+        );
     }
 
     function test_propose_MultipleTargets() public {
@@ -48,17 +55,17 @@ contract GovernanceProposeTest is GovernanceSetup {
         targets[0] = makeAddr("target1");
         targets[1] = makeAddr("target2");
         targets[2] = makeAddr("target3");
-        
+
         uint256[] memory values = new uint256[](3);
         values[0] = 0;
         values[1] = 0.1 ether;
         values[2] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](3);
         calldatas[0] = abi.encodeWithSignature("function1()");
         calldatas[1] = abi.encodeWithSignature("function2(uint256)", 123);
         calldatas[2] = abi.encodeWithSignature("function3(string)", "test");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -78,12 +85,12 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Input Validation Tests ==========
-    
+
     function test_propose_EmptyTargets() public {
         address[] memory targets = new address[](0);
         uint256[] memory values = new uint256[](0);
         bytes[] memory calldatas = new bytes[](0);
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -103,14 +110,14 @@ contract GovernanceProposeTest is GovernanceSetup {
         address[] memory targets = new address[](2);
         targets[0] = makeAddr("target1");
         targets[1] = makeAddr("target2");
-        
+
         uint256[] memory values = new uint256[](1); // Mismatched length
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](2);
         calldatas[0] = abi.encodeWithSignature("function1()");
         calldatas[1] = abi.encodeWithSignature("function2()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -119,7 +126,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             description: "Proposal with mismatched array lengths",
             depositToken: address(depositToken)
         });
-
 
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__InvalidInputLength.selector);
@@ -183,7 +189,7 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Token and Deposit Tests ==========
-    
+
     function test_propose_revert_when_UnsupportedToken() public {
         IGovernanceTypes.ProposeInputParams memory params = _buildProposeParams(
             makeAddr("target"),
@@ -212,7 +218,7 @@ contract GovernanceProposeTest is GovernanceSetup {
         uint256 proposerBalance = depositToken.balanceOf(proposer);
         vm.prank(proposer);
         depositToken.transfer(admin, proposerBalance);
-        
+
         // Fund with insufficient amount
         vm.prank(admin);
         depositToken.mint(proposer, DEPOSIT_AMOUNT - 1);
@@ -230,7 +236,7 @@ contract GovernanceProposeTest is GovernanceSetup {
             "Insufficient Allowance",
             "Proposal with insufficient allowance"
         );
-        
+
         // Approve less than required amount
         vm.prank(proposer);
         depositToken.approve(address(governance), DEPOSIT_AMOUNT / 2);
@@ -241,17 +247,17 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Duplicate Proposal Tests ==========
-    
+
     function test_propose_DuplicateProposal() public {
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -263,7 +269,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         vm.prank(admin);
         depositToken.mint(proposer, DEPOSIT_AMOUNT * 2);
-        
+
         vm.startPrank(proposer);
         depositToken.approve(address(governance), DEPOSIT_AMOUNT * 2);
 
@@ -282,17 +288,17 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Proposal ID Generation Tests ==========
-    
+
     function test_propose_UniqueProposalIds() public {
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params1 = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -313,7 +319,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         vm.prank(admin);
         depositToken.mint(proposer, DEPOSIT_AMOUNT * 2);
-        
+
         vm.startPrank(proposer);
         depositToken.approve(address(governance), DEPOSIT_AMOUNT * 2);
 
@@ -326,7 +332,7 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Pause State Tests ==========
-    
+
     function test_propose_revert_when_WhenPaused() public {
         // Pause the governance contract
         vm.prank(admin);
@@ -334,13 +340,13 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -350,31 +356,24 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-
         vm.prank(proposer);
         vm.expectRevert(); // Should revert due to pause
         governance.propose{value: 0}(params);
     }
 
     // ========== Network Configuration Tests ==========
-    
+
     function test_propose_revert_when_NoSupportedChains() public {
         // Create a new governance enclave without network configuration
-        GovernanceEnclave newGovernanceEnclave = GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
-        
+        GovernanceEnclave newGovernanceEnclave =
+            GovernanceEnclave(address(new ERC1967Proxy(address(new GovernanceEnclave()), "")));
+
         vm.prank(admin);
-        newGovernanceEnclave.initialize(
-            admin,
-            kmsRootServerPubKey,
-            pcr0,
-            pcr1,
-            pcr2,
-            maxRPCUrlsPerChain
-        );
-        
+        newGovernanceEnclave.initialize(admin, kmsRootServerPubKey, pcr0, pcr1, pcr2, pcr16, maxRPCUrlsPerChain);
+
         // Create a new governance instance with the new enclave
         Governance newGovernance = Governance(address(new ERC1967Proxy(address(new Governance()), "")));
-        
+
         vm.prank(admin);
         newGovernance.initialize(
             admin,
@@ -395,13 +394,13 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -422,17 +421,17 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Proposal Timing Tests ==========
-    
+
     function test_propose_TimingConfiguration() public {
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -442,7 +441,6 @@ contract GovernanceProposeTest is GovernanceSetup {
             depositToken: address(depositToken)
         });
 
-
         uint256 proposalTime = block.timestamp;
         vm.prank(proposer);
         bytes32 proposalId = governance.propose{value: 0}(params);
@@ -451,13 +449,25 @@ contract GovernanceProposeTest is GovernanceSetup {
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
 
         assertEq(timeInfo.proposedTimestamp, proposalTime, "Proposed timestamp should match");
-        assertEq(timeInfo.voteActivationTimestamp, proposalTime + voteActivationDelay, "Vote activation timestamp should be correct");
-        assertEq(timeInfo.voteDeadlineTimestamp, proposalTime + voteActivationDelay + voteDuration, "Vote deadline timestamp should be correct");
-        assertEq(timeInfo.proposalDeadlineTimestamp, proposalTime + proposalDuration, "Proposal deadline timestamp should be correct");
+        assertEq(
+            timeInfo.voteActivationTimestamp,
+            proposalTime + voteActivationDelay,
+            "Vote activation timestamp should be correct"
+        );
+        assertEq(
+            timeInfo.voteDeadlineTimestamp,
+            proposalTime + voteActivationDelay + voteDuration,
+            "Vote deadline timestamp should be correct"
+        );
+        assertEq(
+            timeInfo.proposalDeadlineTimestamp,
+            proposalTime + proposalDuration,
+            "Proposal deadline timestamp should be correct"
+        );
     }
 
     // ========== Multiple Proposers Tests ==========
-    
+
     function test_propose_MultipleProposers() public {
         address proposer2 = makeAddr("proposer2");
         vm.deal(proposer2, GAS_FUND_AMOUNT);
@@ -468,13 +478,13 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("function()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -504,18 +514,18 @@ contract GovernanceProposeTest is GovernanceSetup {
     }
 
     // ========== Getter Function Tests ==========
-    
+
     function test_getProposalInfo() public {
         // Create a proposal first
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.1 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("someFunction()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -537,7 +547,7 @@ contract GovernanceProposeTest is GovernanceSetup {
             string memory proposalTitle,
             string memory proposalDescription
         ) = governance.getProposalInfo(proposalId);
-        
+
         assertEq(proposalProposer, proposer, "Proposer should match");
         assertEq(proposalTargets.length, 1, "Should have 1 target");
         assertEq(proposalTargets[0], makeAddr("target"), "Target should match");
@@ -553,13 +563,13 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Create a proposal first
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("someFunction()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -578,16 +588,13 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Add some votes
         vm.prank(voter1);
         _vote(proposalId, "encrypted_vote_1", address(0), 0);
-        
+
         vm.prank(voter2);
         _vote(proposalId, "encrypted_vote_2", address(0), 0);
 
         // Test getAllVoteInfo
-        (
-            IGovernanceTypes.Vote[] memory allVotes,
-            uint256 voteCount,
-        ) = governance.getAllVoteInfo(proposalId);
-        
+        (IGovernanceTypes.Vote[] memory allVotes, uint256 voteCount,) = governance.getAllVoteInfo(proposalId);
+
         assertEq(allVotes.length, 2, "Should have 2 votes");
         assertEq(voteCount, 2, "Vote count should be 2");
         assertEq(allVotes[0].voter, voter1, "First voter should match");
@@ -600,13 +607,13 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Create a proposal first
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("someFunction()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -628,13 +635,13 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Create a proposal first
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("target");
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSignature("someFunction()");
-        
+
         IGovernanceTypes.ProposeInputParams memory params = IGovernanceTypes.ProposeInputParams({
             targets: targets,
             values: values,
@@ -656,13 +663,13 @@ contract GovernanceProposeTest is GovernanceSetup {
 
         // Test getVoteInfo
         (address voteVoter, bytes memory voteEncrypted) = governance.getVoteInfo(proposalId, 0);
-        
+
         assertEq(voteVoter, voter1, "Voter should match");
         assertEq(voteEncrypted, "encrypted_vote_1", "Vote should match");
     }
 
     // ========== Proposal Getter Tests ==========
-    
+
     function test_proposalExists_ReturnsTrue() public {
         bytes32 testProposalId = _createSimpleProposal();
         assertTrue(governance.proposalExists(testProposalId), "Proposal should exist");
@@ -688,7 +695,7 @@ contract GovernanceProposeTest is GovernanceSetup {
 
     function test_getProposalNetworkHash_ReturnsNetworkHash() public {
         bytes32 testProposalId = _createSimpleProposal();
-        (,bytes32 networkHash,) = governance.getProposalHashes(testProposalId);
+        (, bytes32 networkHash,) = governance.getProposalHashes(testProposalId);
         bytes32 expectedNetworkHash = governanceEnclave.getNetworkHash();
         assertEq(networkHash, expectedNetworkHash, "Network hash should match");
     }
@@ -716,11 +723,11 @@ contract GovernanceProposeTest is GovernanceSetup {
         // Create multiple proposals
         bytes32 proposal1 = _createSimpleProposal();
         bytes32 proposal2 = _createSimpleProposal();
-        
+
         // Both should have the same token lock info
         (address token1, uint256 amount1) = governance.getTokenLockInfo(proposal1);
         (address token2, uint256 amount2) = governance.getTokenLockInfo(proposal2);
-        
+
         assertEq(token1, token2, "Tokens should be the same");
         assertEq(amount1, amount2, "Amounts should be the same");
         assertEq(token1, address(depositToken), "Token should be deposit token");

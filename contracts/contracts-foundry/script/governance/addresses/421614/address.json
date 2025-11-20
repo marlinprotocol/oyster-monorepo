@@ -1,15 +1,15 @@
 {
   "Governance": {
-    "implementation": "0x8F4dA0d19182B3763166Beb4E90767E3Ce187968",
-    "proxy": "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48"
+    "implementation": "0x259f8706df835EA62d8959625Feef29D55339520",
+    "proxy": "0xe98AB549cE2654DD56fd7128D8959c0ee905d5F7"
   },
   "GovernanceDelegation": {
-    "implementation": "0x9d91220CaC223648bf1d77B6c4f499Fc7A11A79d",
-    "proxy": "0xEa2C24a2C0ed96E162481f44fe910FA0c4bab180"
+    "implementation": "0x8b3EF6352eA7D47A7125cf25Dd4bD849ceb4192E",
+    "proxy": "0xbA9a8F9a04C9e4678a4eC4ef569Ef850090c9997"
   },
   "GovernanceEnclave": {
-    "implementation": "0x07Cb5B671892E191b6c13ea9387DF2bB660be636",
-    "proxy": "0xf6EF8A444c47ab142B33D0EEb60c60050916d64F"
+    "implementation": "0xE9d73e6B3bb50e274a37f52eB3AD0838ADd7d094",
+    "proxy": "0xE1CD9398f6d0c2093c1Cc7f98Ca466BE0D5D27Ea"
   },
   "tokens": {
     "deposit": "0xc5b41bD20808B4695CBf402AD27d608673FDC888",

@@ -28,13 +28,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.1 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 100);
-        
+
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -48,43 +48,31 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal that will not have submitResult called"
             })
         );
-        
+
         // Wait for proposal deadline to pass without calling submitResult
         vm.warp(governance.getProposalTimeInfo(proposalId).proposalDeadlineTimestamp + 1);
-        
+
         // Try to refund - should succeed and get ETH back, but lose all deposit tokens
         vm.prank(proposer);
         governance.refund(proposalId);
-        
+
         // Check balances - proposer should have lost all deposit tokens
         uint256 finalProposerBalance = depositToken.balanceOf(proposer);
         uint256 finalTreasuryBalance = depositToken.balanceOf(treasury);
         uint256 finalProposerETH = proposer.balance;
-        
+
         // Proposer should have lost the deposit amount (deposit tokens are locked in contract)
         // Initial: 1000 tokens, Lost: 100 tokens (deposit), Refund: 0 tokens
         // Final balance: 1000 - 100 + 0 = 900 tokens
-        assertEq(
-            finalProposerBalance, 
-            900 * 1e18, 
-            "Proposer should have lost deposit tokens"
-        );
-        
+        assertEq(finalProposerBalance, 900 * 1e18, "Proposer should have lost deposit tokens");
+
         // Treasury should not have received anything (deposit tokens remain locked)
-        assertEq(
-            finalTreasuryBalance, 
-            0, 
-            "Treasury should not have received anything"
-        );
-        
+        assertEq(finalTreasuryBalance, 0, "Treasury should not have received anything");
+
         // Proposer should have received ETH refund
         // Initial: 1 ETH, Used: 0.1 ETH, Refund: 0.1 ETH
         // Final balance: 1 - 0.1 + 0.1 = 1 ETH
-        assertEq(
-            finalProposerETH, 
-            1 ether, 
-            "Proposer should have received ETH refund"
-        );
+        assertEq(finalProposerETH, 1 ether, "Proposer should have received ETH refund");
     }
 
     /// @notice Test when proposer gets ETH refund when submitResult is not called
@@ -93,15 +81,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal with ETH value
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.5 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 200);
-        
 
-        
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -115,35 +101,27 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal to test ETH refund"
             })
         );
-        
+
         // Wait for proposal deadline to pass
         vm.warp(governance.getProposalTimeInfo(proposalId).proposalDeadlineTimestamp + 1);
-        
+
         // Call refund to get ETH back
         vm.prank(proposer);
         governance.refund(proposalId);
-        
+
         // Check balances
         uint256 finalProposerBalance = depositToken.balanceOf(proposer);
         uint256 finalProposerETH = proposer.balance;
-        
+
         // Proposer should have lost deposit tokens but got ETH back
         // Initial: 1000 tokens, Lost: 100 tokens (deposit), Refund: 0 tokens
         // Final balance: 1000 - 100 + 0 = 900 tokens
-        assertEq(
-            finalProposerBalance, 
-            900 * 1e18, 
-            "Proposer should have lost deposit tokens"
-        );
-        
+        assertEq(finalProposerBalance, 900 * 1e18, "Proposer should have lost deposit tokens");
+
         // Proposer should have received ETH refund
         // Initial: 1 ETH, Used: 0.5 ETH, Refund: 0.5 ETH
         // Final balance: 1 - 0.5 + 0.5 = 1 ETH
-        assertEq(
-            finalProposerETH, 
-            1 ether, 
-            "Proposer should have received ETH refund"
-        );
+        assertEq(finalProposerETH, 1 ether, "Proposer should have received ETH refund");
     }
 
     // ========== Veto Slash Tests ==========
@@ -154,13 +132,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.2 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 300);
-        
+
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -174,24 +152,24 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal that will be vetoed"
             })
         );
-        
+
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
         bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
-        
+
         // Wait for vote deadline to pass
         vm.warp(timeInfo.voteDeadlineTimestamp + 1);
-        
+
         // Create veto vote result (20% yes, 10% no, 10% abstain, 60% noWithVeto)
         // yes (20) < (no + noWithVeto) (70) && no (10) < noWithVeto (60) && noWithVeto (60) > threshold (1% = 10)
         MockEnclave.VotePercentage memory votePercentage = MockEnclave.VotePercentage({
-            yes: 0.2 * 1e18,     // 20%
-            no: 0.1 * 1e18,      // 10%
+            yes: 0.2 * 1e18, // 20%
+            no: 0.1 * 1e18, // 10%
             abstain: 0.1 * 1e18, // 10%
             noWithVeto: 0.6 * 1e18 // 60%
         });
-        
+
         // Get signed result from MockEnclave
         (bytes32 imageId,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
@@ -204,44 +182,32 @@ contract GovernanceSlashTest is GovernanceSetup {
             governance.contractConfigHash(),
             voteHash
         );
-        
+
         // Submit the result - should result in veto
         vm.prank(admin);
         governance.submitResult(params);
-        
+
         // Check balances after veto
         uint256 finalProposerBalance = depositToken.balanceOf(proposer);
         uint256 finalTreasuryBalance = depositToken.balanceOf(treasury);
         uint256 finalProposerETH = proposer.balance;
-        
+
         // Calculate expected slash amount using actual vetoSlashRate from contract
         uint256 actualVetoSlashRate = governance.vetoSlashRate();
         uint256 expectedSlashAmount = (100 * 1e18 * actualVetoSlashRate) / 1e18; // 100 tokens deposit
-        
+
         // Proposer should have received partial refund
         // Initial: 1000 tokens, Lost: 100 tokens (deposit), Refund: 70 tokens (70% of 100)
         // Final balance: 1000 - 100 + 70 = 970 tokens
-        assertEq(
-            finalProposerBalance, 
-            970 * 1e18, 
-            "Proposer should have received partial deposit refund"
-        );
-        
+        assertEq(finalProposerBalance, 970 * 1e18, "Proposer should have received partial deposit refund");
+
         // Treasury should have received slashed amount
-        assertEq(
-            finalTreasuryBalance, 
-            expectedSlashAmount, 
-            "Treasury should have received slashed amount"
-        );
-        
+        assertEq(finalTreasuryBalance, expectedSlashAmount, "Treasury should have received slashed amount");
+
         // Proposer should have received ETH refund
         // Initial: 1 ETH, Used: 0.2 ETH, Refund: 0.2 ETH
         // Final balance: 1 - 0.2 + 0.2 = 1 ETH
-        assertEq(
-            finalProposerETH, 
-            1 ether, 
-            "Proposer should have received ETH refund"
-        );
+        assertEq(finalProposerETH, 1 ether, "Proposer should have received ETH refund");
     }
 
     /// @notice Test when vetoed proposal has no ETH value
@@ -250,15 +216,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal with no ETH value
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 400);
-        
 
-        
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -272,23 +236,23 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A vetoed proposal with no ETH value"
             })
         );
-        
+
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
         bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
-        
+
         // Wait for vote deadline to pass
         vm.warp(timeInfo.voteDeadlineTimestamp + 1);
-        
+
         // Create veto vote result
         MockEnclave.VotePercentage memory votePercentage = MockEnclave.VotePercentage({
-            yes: 0.15 * 1e18,    // 15%
-            no: 0.05 * 1e18,     // 5%
+            yes: 0.15 * 1e18, // 15%
+            no: 0.05 * 1e18, // 5%
             abstain: 0.1 * 1e18, // 10%
             noWithVeto: 0.7 * 1e18 // 70%
         });
-        
+
         // Get signed result from MockEnclave
         (bytes32 imageId2,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
@@ -301,28 +265,20 @@ contract GovernanceSlashTest is GovernanceSetup {
             governance.contractConfigHash(),
             voteHash
         );
-        
+
         // Submit the result - should result in veto (no ETH to refund, but deposit is slashed)
         vm.prank(admin);
         governance.submitResult(params);
-        
+
         // Check that deposit was slashed but no ETH was refunded
         uint256 finalProposerBalance = depositToken.balanceOf(proposer);
         uint256 finalTreasuryBalance = depositToken.balanceOf(treasury);
-        
+
         // Proposer should have received partial refund (70% of deposit tokens)
-        assertEq(
-            finalProposerBalance, 
-            970 * 1e18, 
-            "Proposer should have received partial refund from slashed deposit"
-        );
-        
+        assertEq(finalProposerBalance, 970 * 1e18, "Proposer should have received partial refund from slashed deposit");
+
         // Treasury should have received slashed portion (30% of deposit tokens)
-        assertEq(
-            finalTreasuryBalance, 
-            30 * 1e18, 
-            "Treasury should have received slashed portion of deposit"
-        );
+        assertEq(finalTreasuryBalance, 30 * 1e18, "Treasury should have received slashed portion of deposit");
     }
 
     // ========== Edge Cases ==========
@@ -333,13 +289,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.1 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 500);
-        
+
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -353,7 +309,7 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal to test early refund"
             })
         );
-        
+
         // Try to refund before deadline - should fail
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
@@ -366,13 +322,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.1 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 600);
-        
+
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -386,23 +342,23 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal to test refund after submitResult"
             })
         );
-        
+
         // Get proposal info for signing
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(proposalId);
         bytes32 networkHash = governanceEnclave.getNetworkHash();
         bytes32 voteHash = governance.getVoteHash(proposalId);
-        
+
         // Wait for vote deadline to pass
         vm.warp(timeInfo.voteDeadlineTimestamp + 1);
-        
+
         // Submit a result (any result)
         MockEnclave.VotePercentage memory votePercentage = MockEnclave.VotePercentage({
-            yes: 0.7 * 1e18,     // 70%
-            no: 0.2 * 1e18,      // 20%
+            yes: 0.7 * 1e18, // 70%
+            no: 0.2 * 1e18, // 20%
             abstain: 0.05 * 1e18, // 5%
             noWithVeto: 0.05 * 1e18 // 5%
         });
-        
+
         (bytes32 imageId3,,) = governance.getProposalHashes(proposalId);
         IGovernanceTypes.SubmitResultInputParams memory params = mockEnclave.getResult(
             proposalId,
@@ -414,13 +370,13 @@ contract GovernanceSlashTest is GovernanceSetup {
             governance.contractConfigHash(),
             voteHash
         );
-        
+
         vm.prank(admin);
         governance.submitResult(params);
-        
+
         // Wait for proposal deadline to pass
         vm.warp(timeInfo.proposalDeadlineTimestamp + 1);
-        
+
         // Try to refund after submitResult - should fail
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);
@@ -431,7 +387,7 @@ contract GovernanceSlashTest is GovernanceSetup {
     /// @dev Refund should fail for non-existent proposals
     function test_refundRevertWhen_NonExistentProposal() public {
         bytes32 nonExistentProposalId = keccak256("non-existent");
-        
+
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__ProposalDoesNotExist.selector);
         governance.refund(nonExistentProposalId);
@@ -443,13 +399,13 @@ contract GovernanceSlashTest is GovernanceSetup {
         // Create a proposal
         address[] memory targets = new address[](1);
         targets[0] = address(mockTarget);
-        
+
         uint256[] memory values = new uint256[](1);
         values[0] = 0.1 ether;
-        
+
         bytes[] memory calldatas = new bytes[](1);
         calldatas[0] = abi.encodeWithSelector(MockTarget.setValue.selector, 700);
-        
+
         // Propose the governance action
         vm.prank(proposer);
         vm.deal(proposer, 1 ether);
@@ -463,14 +419,14 @@ contract GovernanceSlashTest is GovernanceSetup {
                 description: "A proposal to test multiple refunds"
             })
         );
-        
+
         // Wait for proposal deadline to pass
         vm.warp(governance.getProposalTimeInfo(proposalId).proposalDeadlineTimestamp + 1);
-        
+
         // First refund should succeed
         vm.prank(proposer);
         governance.refund(proposalId);
-        
+
         // Second refund should fail due to NotRefundableProposal
         vm.prank(proposer);
         vm.expectRevert(IGovernanceErrors.Governance__NotRefundableProposal.selector);

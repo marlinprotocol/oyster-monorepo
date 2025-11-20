@@ -1,9 +1,8 @@
 use crate::governance_enclave::GovernanceEnclave;
 use alloy::{network::Network, primitives::B256};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use oyster;
-use reqwest::Client;
 
 #[async_trait]
 pub trait AttestationSource {
@@ -64,31 +63,6 @@ impl AttestationSource for EnclaveAttestationSource {
 
         Ok(image_id.into())
     }
-}
-
-pub async fn build_attestation_vec(attestation_endpoint: &str) -> Result<Vec<u8>> {
-    let client = Client::new();
-    let response = client
-        .get(attestation_endpoint)
-        .send()
-        .await
-        .context("failed to send attestation request")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let err_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| String::from("No error details"));
-        anyhow::bail!("failed building the attestation: {status} - {err_text}");
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .context("failed to read attestation body")?;
-
-    Ok(bytes.to_vec())
 }
 
 #[cfg(test)]

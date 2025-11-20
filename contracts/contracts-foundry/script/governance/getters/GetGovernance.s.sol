@@ -7,7 +7,6 @@ import {Governance} from "../../../src/governance/Governance.sol";
 import {IGovernanceTypes} from "../../../src/governance/interfaces/IGovernanceTypes.sol";
 
 contract GetGovernanceBase is Script {
-    
     Governance public governance;
 
     constructor() {
@@ -15,19 +14,18 @@ contract GetGovernanceBase is Script {
         string memory root = vm.projectRoot();
         string memory filePath = string.concat(root, "/script/governance/addresses/", chainIdStr, ".json");
         string memory json = vm.readFile(filePath);
-        
+
         address governanceProxy = vm.parseJsonAddress(json, ".Governance.proxy");
         governance = Governance(governanceProxy);
-        
+
         console.log("Loaded Governance proxy:", governanceProxy);
     }
 }
 
 // forge script script/governance/getters/GetGovernance.s.sol:GetProposalDepositAmount --rpc-url <RPC_URL> -vvv
 contract GetProposalDepositAmount is GetGovernanceBase {
-    
     address constant TOKEN_ADDRESS = 0x293A148f62665f77ed0f18FC20C66A696cc7632C;
-    
+
     function run() external view {
         uint256 amount = governance.proposalDepositAmounts(TOKEN_ADDRESS);
         console.log("Proposal deposit amount for token:", TOKEN_ADDRESS);
@@ -38,7 +36,8 @@ contract GetProposalDepositAmount is GetGovernanceBase {
 // forge script script/governance/getters/GetGovernance.s.sol:GetProposalTimingConfig --rpc-url <RPC_URL> -vvv
 contract GetProposalTimingConfig is GetGovernanceBase {
     function run() external view {
-        (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) = governance.getProposalTimingConfig();
+        (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) =
+            governance.getProposalTimingConfig();
         console.log("Proposal timing config:");
         console.log("  Vote Activation Delay:", voteActivationDelay);
         console.log("  Vote Duration:", voteDuration);
@@ -100,9 +99,8 @@ contract GetDelegationChainIds is GetGovernanceBase {
 
 // forge script script/governance/getters/GetGovernance.s.sol:GetGovernanceDelegation --rpc-url <RPC_URL> -vvv
 contract GetGovernanceDelegation is GetGovernanceBase {
-    
     uint256 constant CHAIN_ID = 11155111;
-    
+
     function run() external view {
         address delegation = governance.getGovernanceDelegation(CHAIN_ID);
         console.log("Governance delegation for chain:", CHAIN_ID);
@@ -121,18 +119,12 @@ contract GetContractConfigHash is GetGovernanceBase {
 
 // forge script script/governance/getters/GetGovernance.s.sol:GetProposalState --rpc-url <RPC_URL> -vvv
 contract GetProposalState is GetGovernanceBase {
-    
     bytes32 constant PROPOSAL_ID = 0xf3b5be3a784898de48efdba792837d0f010b1ec3da7533dbf1c5229ed3a9d55e;
-    
+
     function run() external view {
-        (
-            Governance.VoteOutcome voteOutcome,
-            bool executed,
-            bool inExecutionQueue,
-            bytes32 imageId,
-            bytes32 networkHash
-        ) = governance.getProposalState(PROPOSAL_ID);
-        
+        (Governance.VoteOutcome voteOutcome, bool executed, bool inExecutionQueue, bytes32 imageId, bytes32 networkHash)
+        = governance.getProposalState(PROPOSAL_ID);
+
         console.log("Proposal state for:");
         console.logBytes32(PROPOSAL_ID);
         console.log("  Vote outcome:", uint8(voteOutcome));
@@ -147,9 +139,8 @@ contract GetProposalState is GetGovernanceBase {
 
 // forge script script/governance/getters/GetGovernance.s.sol:GetVoteOutcome --rpc-url <RPC_URL> -vvv
 contract GetVoteOutcome is GetGovernanceBase {
-    
     bytes32 constant PROPOSAL_ID = 0x0000000000000000000000000000000000000000000000000000000000000000;
-    
+
     function run() external view {
         uint8 outcome = uint8(governance.getVoteOutcome(PROPOSAL_ID));
         console.log("Vote outcome for:");
@@ -168,30 +159,30 @@ contract GetPaused is GetGovernanceBase {
 
 // forge script script/governance/getters/GetGovernance.s.sol:GetProposalHashes --rpc-url <RPC_URL> -vvv
 contract GetProposalHashes is GetGovernanceBase {
-    
     bytes32 constant PROPOSAL_ID = 0xbb8b1531a5e00ba9520bdf1569e6ef22519a4728e7e4ae074d7516013d6147bf;
-    
+
     function run() external view {
         console.log("=== Proposal Hashes Debug ===");
         console.log("Proposal ID:");
         console.logBytes32(PROPOSAL_ID);
-        
+
         // Get proposal hashes
         (bytes32 imageId, bytes32 networkHash, bytes32 contractConfigHash) = governance.getProposalHashes(PROPOSAL_ID);
-        
+
         console.log("Image ID:");
         console.logBytes32(imageId);
         console.log("Network Hash:");
         console.logBytes32(networkHash);
         console.log("Contract Config Hash:");
         console.logBytes32(contractConfigHash);
-        
+
         // Get proposal timing info
-        (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) = governance.getProposalTimingConfig();
+        (uint256 voteActivationDelay, uint256 voteDuration, uint256 proposalDuration) =
+            governance.getProposalTimingConfig();
         console.log("Vote Activation Delay:", voteActivationDelay);
         console.log("Vote Duration:", voteDuration);
         console.log("Proposal Duration:", proposalDuration);
-        
+
         // Get proposal time info
         IGovernanceTypes.ProposalTimeInfo memory timeInfo = governance.getProposalTimeInfo(PROPOSAL_ID);
         console.log("Proposed Timestamp:");
@@ -202,8 +193,7 @@ contract GetProposalHashes is GetGovernanceBase {
         console.log(timeInfo.voteDeadlineTimestamp);
         console.log("Proposal Deadline Timestamp:");
         console.log(timeInfo.proposalDeadlineTimestamp);
-        
+
         console.log("================================");
     }
 }
-

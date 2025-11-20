@@ -16,8 +16,8 @@ use crate::{
     kms::kms::KMS,
 };
 
-pub const GOVERNANCE: &str = "0x5F5e03D26419f8fa106Dea7336B4872DC3a7AE48";
-pub const GOVERNANCE_ENCLAVE: &str = "0xf6EF8A444c47ab142B33D0EEb60c60050916d64F";
+pub const GOVERNANCE: &str = "0xe98AB549cE2654DD56fd7128D8959c0ee905d5F7";
+pub const GOVERNANCE_ENCLAVE: &str = "0xE1CD9398f6d0c2093c1Cc7f98Ca466BE0D5D27Ea";
 pub const GOV_CHAIN_BASE_RPC: &str = "https://arbitrum-sepolia.core.chainstack.com/";
 
 pub struct GovernanceConfig {

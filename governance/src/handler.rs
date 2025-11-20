@@ -13,7 +13,7 @@ use actix_web::{
     web::{self, Data},
 };
 use alloy::{
-    network::{Ethereum, Network},
+    network::Ethereum,
     primitives::{B256, U256},
     sol,
 };
@@ -209,7 +209,7 @@ async fn status<K: KMS + Send + Sync>(
         vote_hash: vote_factory.vote_hash(),
     };
 
-    let image_id = fetch_image_id(governance_enclave, nearest_block_on_gov_chain)
+    let image_id = fetch_image_id()
         .await
         .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
 
@@ -295,6 +295,36 @@ async fn encryption_key<K: KMS + Send + Sync>(kms: Data<K>) -> actix_web::Result
 
 #[utoipa::path(
     get,
+    path = "/v1/kms_root_server_key",
+    responses(
+        (status = 200, description = "Return KMS root server key"),
+    ),
+    tag = "Deprecated"
+)]
+async fn kms_root_server_key<K: KMS + Send + Sync>(
+    kms: Data<K>,
+) -> actix_web::Result<impl Responder> {
+    let pk = kms
+        .get_persistent_public_key()
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("signing key error: {e}")))?;
+
+    let address = kms
+        .get_persistant_signing_address()
+        .await
+        .map_err(|e| error::ErrorInternalServerError(format!("signing key error: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "signing_public_key": format!("0x{}", hex::encode(pk)),
+            "address": address,
+            "version": "bullseye"
+        }
+    )))
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/image_id",
     responses(
         (status = 200, description = "Return image id of the enclave"),
@@ -302,23 +332,30 @@ async fn encryption_key<K: KMS + Send + Sync>(kms: Data<K>) -> actix_web::Result
     tag = "Manual Compute"
 )]
 async fn image_id() -> actix_web::Result<impl Responder> {
-    let governance_enclave =
-        config::get_governance_enclave::<Ethereum>().map_err(error::ErrorInternalServerError)?;
-
-    use alloy::network::Ethereum;
-    let chain_rpc_url = create_gov_chain_rpc_url()
-        .map_err(|e| error::ErrorInternalServerError(format!("gov chain rpc error: {e}")))?;
-    let lb = latest_block::<Ethereum>(&chain_rpc_url)
-        .await
-        .map_err(|e| error::ErrorInternalServerError(format!("latest block fetch issue: {e}")))?;
-
-    let image_id = fetch_image_id(governance_enclave, lb)
+    let image_id = fetch_image_id()
         .await
         .map_err(|e| error::ErrorInternalServerError(format!("failed image id fetch: {e}")))?;
 
     Ok(HttpResponse::Ok().json(json!(
         {
             "image_id": format!("0x{}", hex::encode(image_id))
+        }
+    )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/contracts",
+    responses(
+        (status = 200, description = "Return contracts that are being used"),
+    ),
+    tag = "Config"
+)]
+async fn contracts() -> actix_web::Result<impl Responder> {
+    Ok(HttpResponse::Ok().json(json!(
+        {
+            "GOVERNANCE": config::GOVERNANCE,
+            "GOVERNANCE_ENCLAVE": config::GOVERNANCE_ENCLAVE
         }
     )))
 }
@@ -496,13 +533,19 @@ pub fn get_scope<K: KMS + Send + Sync + 'static>() -> actix_web::Scope {
             web::post().to(proposal_encryption_key::<K>),
         )
         .route("/proposal_hashes", web::post().to(proposal_hashes::<K>))
+        .route(
+            "/kms_root_server_key",
+            web::get().to(kms_root_server_key::<K>),
+        )
+        .route("/contracts", web::get().to(contracts))
 }
 
 #[cfg(feature = "contract_image_id_source")]
-pub async fn fetch_image_id<N: Network>(
-    governance_enclave: GovernanceEnclave<N>,
-    nearest_block_on_gov_chain: u64,
-) -> Result<B256> {
+pub async fn fetch_image_id() -> Result<B256> {
+    let governance_enclave = config::get_governance_enclave::<Ethereum>()?;
+    let chain_rpc_url = create_gov_chain_rpc_url()?;
+    let nearest_block_on_gov_chain = latest_block::<Ethereum>(&chain_rpc_url).await?;
+
     let image_id = ContractAttestationSource::new(governance_enclave)
         .image_id(nearest_block_on_gov_chain)
         .await?;
@@ -511,12 +554,10 @@ pub async fn fetch_image_id<N: Network>(
 }
 
 #[cfg(not(feature = "contract_image_id_source"))]
-pub async fn fetch_image_id<N: Network>(
-    _governance_enclave: GovernanceEnclave<N>, // unused in this mode
-    nearest_block_on_gov_chain: u64,
-) -> Result<B256> {
-    let image_id = EnclaveAttestationSource::new("65.0.196.244", "1301")
-        .image_id(nearest_block_on_gov_chain)
+pub async fn fetch_image_id() -> Result<B256> {
+    // block number is irrelevant here
+    let image_id = EnclaveAttestationSource::new("127.0.0.1", "1301")
+        .image_id(0)
         .await?;
 
     Ok(image_id)
