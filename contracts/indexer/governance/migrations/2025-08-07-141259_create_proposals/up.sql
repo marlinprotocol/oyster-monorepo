@@ -2,7 +2,6 @@ CREATE TYPE result_outcome AS ENUM ('PENDING', 'PASSED', 'FAILED', 'VETOED');
 
 CREATE TABLE proposals (
   id CHAR(66) PRIMARY KEY,
-  job_id CHAR(66),
   proposer CHAR(42) NOT NULL,
   nonce NUMERIC NOT NULL,
   title TEXT NOT NULL,

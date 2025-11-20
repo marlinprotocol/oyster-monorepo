@@ -1,4 +1,3 @@
-pub mod constants;
 mod handlers;
 mod schema;
 
@@ -31,7 +30,7 @@ pub trait LogsProvider {
 #[derive(Clone)]
 pub struct AlloyProvider {
     pub url: Url,
-    pub contracts: Vec<Address>,
+    pub contract: Address,
 }
 
 impl LogsProvider for AlloyProvider {
@@ -50,7 +49,7 @@ impl LogsProvider for AlloyProvider {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let addresses = self.contracts.clone();
+        let addresses = self.contract.clone();
         Ok(rt.block_on(
             alloy::providers::ProviderBuilder::new()
                 .on_http(self.url.clone())
