@@ -1,20 +1,19 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
 use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use aws_sdk_ec2::types::*;
 use aws_types::region::Region;
+use base64::{prelude::BASE64_STANDARD, Engine};
 use coldsnap::{SnapshotUploader, SnapshotWaiter};
 use rand_core::OsRng;
-use serde_json::Value;
-use ssh2::Session;
 use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use tokio::time::{sleep, Duration};
+use tokio_stream::StreamExt;
 use tracing::{error, info};
 use whoami::username;
 
@@ -44,6 +43,7 @@ impl Aws {
         let pub_key_location = "/home/".to_owned() + &username() + "/.ssh/" + &key_name + ".pub";
 
         let mut clients = HashMap::<String, aws_sdk_ec2::Client>::new();
+        let mut ebs_clients = HashMap::<String, aws_sdk_ebs::Client>::new();
         for region in regions {
             clients.insert(region.clone(), {
                 let config = aws_config::from_env()
@@ -180,630 +180,61 @@ impl Aws {
             .is_empty())
     }
 
-    /* SSH UTILITY */
-
-    pub async fn ssh_connect(&self, ip_address: &str) -> Result<Session> {
-        let tcp = TcpStream::connect(ip_address)?;
-
-        let mut sess = Session::new()?;
-
-        sess.set_tcp_stream(tcp);
-        sess.handshake()?;
-        sess.userauth_pubkey_file("ubuntu", None, Path::new(&self.key_location), None)?;
-        info!(ip_address, "SSH connection established");
-        Ok(sess)
-    }
-
-    fn ssh_exec(sess: &Session, command: &str) -> Result<(String, String)> {
-        let mut channel = sess
-            .channel_session()
-            .context("Failed to get channel session")?;
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        channel
-            .exec(command)
-            .context("Failed to execute command: {command}")?;
-        channel
-            .read_to_string(&mut stdout)
-            .context("Failed to read stdout")?;
-        channel
-            .stderr()
-            .read_to_string(&mut stderr)
-            .context("Failed to read stderr")?;
-        channel.wait_close().context("Failed to wait for close")?;
-
-        Ok((stdout, stderr))
-    }
-
-    fn check_eif_blacklist_whitelist(&self, sess: &Session) -> Result<bool> {
-        if self.whitelist.is_some() || self.blacklist.is_some() {
-            let (stdout, stderr) = Self::ssh_exec(sess, "sha256sum /home/ubuntu/enclave.eif")
-                .context("Failed to calculate image hash")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Error calculating hash of enclave image");
-            }
-
-            let line = stdout
-                .split_whitespace()
-                .next()
-                .ok_or(anyhow!("Failed to retrieve image hash: {stdout}"))?;
-
-            info!(line, "Hash");
-
-            if let Some(whitelist_list) = self.whitelist {
-                info!("Checking whitelist...");
-                let mut allowed = false;
-                for entry in whitelist_list {
-                    if entry.contains(line) {
-                        allowed = true;
-                        break;
-                    }
-                }
-                if allowed {
-                    info!("EIF ALLOWED!");
-                } else {
-                    info!("EIF NOT ALLOWED!");
-                    return Ok(false);
-                }
-            }
-
-            if let Some(blacklist_list) = self.blacklist {
-                info!("Checking blacklist...");
-                let mut allowed = true;
-                for entry in blacklist_list {
-                    if entry.contains(line) {
-                        allowed = false;
-                        break;
-                    }
-                }
-                if allowed {
-                    info!("EIF ALLOWED!");
-                } else {
-                    info!("EIF NOT ALLOWED!");
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(true)
-    }
 
     // [UPDATE NOTE] This function is obsolete, no enclaves
-    pub async fn run_enclave_impl(
-        &self,
-        job_id: &str,
-        family: &str,
-        instance_id: &str,
-        region: &str,
-        image_url: &str,
-        req_vcpu: i32,
-        req_mem: i64,
-        bandwidth: u64,
-        debug: bool,
-        init_params: &[u8],
-    ) -> Result<()> {
-        if family != "salmon" && family != "tuna" {
-            return Err(anyhow!("unsupported image family"));
-        }
-
-        // make a ssh session
-        let public_ip_address = self
-            .get_instance_ip(instance_id, region)
-            .await
-            .context("could not fetch instance ip")?;
-        let sess = &self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
-            .context("error establishing ssh connection")?;
-
-        // set up ephemeral ports for the host
-        Self::run_fragment_ephemeral_ports(sess)?;
-        // set up nitro enclaves allocator
-        Self::run_fragment_allocator(sess, req_vcpu, req_mem)?;
-        // download enclave image and perform whitelist/blacklist checks
-        self.run_fragment_download_and_check_image(sess, image_url)?;
-        // set up bandwidth rate limiting
-        Self::run_fragment_bandwidth(sess, bandwidth)?;
-
-        if family == "tuna" {
-            // set up iptables rules
-            Self::run_fragment_iptables_tuna(sess)?;
-            // set up job id in the init server
-            Self::run_fragment_init_server(sess, job_id, init_params)?;
-        } else {
-            // set up iptables rules
-            Self::run_fragment_iptables_salmon(sess)?;
-        }
-
-        // set up debug logger if enabled
-        Self::run_fragment_logger(sess, debug)?;
-        // run the enclave
-        Self::run_fragment_enclave(sess, req_vcpu, req_mem, debug)?;
-
-        Ok(())
-    }
-
-    // Enclave deployment fragments start here
-    //
-    // IMPORTANT: Each fragment is expected to be declarative where it will take the system
-    // to the desired state by executing whatever commands necessary
-
-    // Goal: set ephemeral ports to 61440-65535
-    // cheap, so just always overwrites previous state
-    fn run_fragment_ephemeral_ports(sess: &Session) -> Result<()> {
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            "sudo sysctl -w net.ipv4.ip_local_port_range=\"61440 65535\"",
-        )
-        .context("Failed to set ephemeral ports")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Failed to set ephemeral ports");
-        }
-
-        Ok(())
-    }
-
-    // Goal: allocate the specified cpus and memory for the enclave
-    // WARN: Making this declarative would mean potentially restarting enclaves,
-    // not sure how to handle this, instead just prevent them from being different in market
-    fn run_fragment_allocator(sess: &Session, req_vcpu: i32, req_mem: i64) -> Result<()> {
-        if Self::is_enclave_running(sess)? {
-            // return if enclave is already running
-            return Ok(());
-        }
-
-        Self::ssh_exec(
-            sess,
-            // interpolation is safe since values are integers
-            &format!("echo -e '---\\nmemory_mib: {req_mem}\\ncpu_count: {req_vcpu}' | sudo tee /etc/nitro_enclaves/allocator.yaml"),
-        )
-        .context("Failed to set allocator file")?;
-
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            "sudo systemctl daemon-reload && sudo systemctl restart nitro-enclaves-allocator.service",
-        )
-        .context("Failed to restart allocator service")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr))
-                .context("Error restarting nitro-enclaves-allocator service");
-        }
-
-        info!(
-            cpus = req_vcpu,
-            memory = req_mem,
-            "Nitro Enclave Allocator Service set up"
-        );
-
-        Ok(())
-    }
-
-    // Goal: make enclave.eif match the provided image url
-    // uses image_url.txt file to track state instead of redownloading every time
-    // WARN: the enclave image at the url might have changed, we would have to
-    // redownload the image every time to verify it, simply ignore for now
-    fn run_fragment_download_and_check_image(&self, sess: &Session, image_url: &str) -> Result<()> {
-        let (stdout, stderr) =
-            Self::ssh_exec(sess, "cat image_url.txt").context("Failed to read image_url.txt")?;
-
-        // check stderr to handle old CVMs without a url txt file
-        // we assume url was different and redownload
-        if stderr.is_empty() && stdout == image_url {
-            // return if url has not changed
-            return Ok(());
-        }
-
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "curl -sL -o enclave.eif --max-filesize 4000000000 --max-time 120 '{}'",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to download enclave image")?;
-
-        let is_eif_allowed = self
-            .check_eif_blacklist_whitelist(sess)
-            .context("Failed whitelist/blacklist check")?;
-
-        if !is_eif_allowed {
-            return Err(anyhow!("EIF NOT ALLOWED"));
-        }
-
-        // store eif_url only when the image is allowed
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "echo \"{}\" > image_url.txt",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to write EIF URL to txt file.")?;
-
-        Ok(())
-    }
-
-    // Goal: set bandwidth rate
-    // TODO: this always resets tc rules, check if rate has changed
-    fn run_fragment_bandwidth(sess: &Session, bandwidth: u64) -> Result<()> {
-        let (stdout, stderr) = Self::ssh_exec(sess, "sudo tc qdisc show dev ens5 root")
-            .context("Failed to fetch tc config")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr))
-                .context("Error fetching network interface qdisc configuration");
-        }
-        let entries: Vec<&str> = stdout.trim().split('\n').collect();
-        let mut is_any_rule_set = true;
-        if entries[0].to_lowercase().contains("qdisc mq 0: root") && entries.len() == 1 {
-            is_any_rule_set = false;
-        }
-
-        // remove previously defined rules
-        if is_any_rule_set {
-            let (_, stderr) = Self::ssh_exec(sess, "sudo tc qdisc del dev ens5 root")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr))
-                    .context("Error removing network interface qdisc configuration");
-            }
-        }
-
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            // interpolation is safe since values are integers
-            &format!("sudo tc qdisc add dev ens5 root tbf rate {bandwidth}kbit burst 4000Mb latency 100ms"),
-        )?;
-
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Error setting up bandwidth limit");
-        }
-
-        Ok(())
-    }
-
-    // Goal: set up iptables rules for salmon
-    // first two rules are just expected to be there
-    // rest of the rules are replaced if needed
-    fn run_fragment_iptables_salmon(sess: &Session) -> Result<()> {
-        let iptables_rules: [&str; 5] = [
-            "-P PREROUTING ACCEPT",
-            // expected to exist due to how the images are built
-            "-A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER",
-            "-A PREROUTING -i ens5 -p tcp -m tcp --dport 80 -j REDIRECT --to-ports 1200",
-            "-A PREROUTING -i ens5 -p tcp -m tcp --dport 443 -j REDIRECT --to-ports 1200",
-            "-A PREROUTING -i ens5 -p tcp -m tcp --dport 1024:65535 -j REDIRECT --to-ports 1200",
-        ];
-        let (stdout, stderr) = Self::ssh_exec(sess, "sudo iptables -t nat -S PREROUTING")
-            .context("Failed to query iptables")?;
-
-        if !stderr.is_empty() || stdout.is_empty() {
-            return Err(anyhow!(stderr)).context("Failed to get iptables rules");
-        }
-
-        let rules: Vec<&str> = stdout.trim().split('\n').map(|s| s.trim()).collect();
-
-        for i in 0..2 {
-            if rules[i] != iptables_rules[i] {
-                return Err(anyhow!(
-                    "Failed to match rule: got '{}' expected '{}'",
-                    rules[i],
-                    iptables_rules[i],
-                ));
-            }
-        }
-
-        // return if rest of the rules match
-        if rules[2..] == iptables_rules[2..] {
-            return Ok(());
-        }
-
-        // rules have to be replaced
-        // remove existing rules beyond the docker one
-        for _ in 2..rules.len() {
-            // keep deleting rule 2 till nothing would be left
-            let (_, stderr) = Self::ssh_exec(sess, "sudo iptables -t nat -D PREROUTING 2")
-                .context("Failed to delete iptables rule")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to delete iptables rule");
-            }
-        }
-
-        // set rules
-        for rule in iptables_rules[2..].iter() {
-            let (_, stderr) = Self::ssh_exec(sess, &format!("sudo iptables -t nat {rule}"))
-                .context("Failed to set iptables rule")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to set iptables rule");
-            }
-        }
-
-        Ok(())
-    }
-
-    // Goal: set up iptables rules for tuna
-    // first two rules are just expected to be there
-    // rest of the rules are replaced if needed
-    fn run_fragment_iptables_tuna(sess: &Session) -> Result<()> {
-        let iptables_rules: [&str; 4] = [
-            "-P INPUT ACCEPT",
-            "-A INPUT -i ens5 -p tcp -m tcp --dport 80 -j NFQUEUE --queue-num 0",
-            "-A INPUT -i ens5 -p tcp -m tcp --dport 443 -j NFQUEUE --queue-num 0",
-            "-A INPUT -i ens5 -p tcp -m tcp --dport 1024:61439 -j NFQUEUE --queue-num 0",
-        ];
-        let (stdout, stderr) =
-            Self::ssh_exec(sess, "sudo iptables -S INPUT").context("Failed to query iptables")?;
-
-        if !stderr.is_empty() || stdout.is_empty() {
-            return Err(anyhow!(stderr)).context("Failed to get iptables rules");
-        }
-
-        let rules: Vec<&str> = stdout.trim().split('\n').map(|s| s.trim()).collect();
-
-        for i in 0..1 {
-            if rules[i] != iptables_rules[i] {
-                return Err(anyhow!(
-                    "Failed to match rule: got '{}' expected '{}'",
-                    rules[i],
-                    iptables_rules[i],
-                ));
-            }
-        }
-
-        // return if rest of the rules match
-        if rules[1..] == iptables_rules[1..] {
-            return Ok(());
-        }
-
-        // rules have to be replaced
-        // remove existing rules beyond the docker one
-        for _ in 1..rules.len() {
-            // keep deleting rule 1 till nothing would be left
-            let (_, stderr) = Self::ssh_exec(sess, "sudo iptables -D INPUT 1")
-                .context("Failed to delete iptables rule")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to delete iptables rule");
-            }
-        }
-
-        // set rules
-        for rule in iptables_rules[1..].iter() {
-            let (_, stderr) = Self::ssh_exec(sess, &format!("sudo iptables {rule}"))
-                .context("Failed to set iptables rule")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to set iptables rule");
-            }
-        }
-
-        Ok(())
-    }
-
-    // Goal: set up init server params
-    // assumes the .conf has not been modified externally
-    // cheap, so just always does `sed`
-    // init params are updated if they have changed
-    fn run_fragment_init_server(sess: &Session, job_id: &str, init_params: &[u8]) -> Result<()> {
-        // set job id
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            &format!(
-                "sudo sed -i -e 's/placeholder_job_id/{}/g' /etc/supervisor/conf.d/oyster-init-server.conf",
-                job_id.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>(),
-            ),
-        )
-        .context("Failed to set job id for init server")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Failed to set job id for init server");
-        }
-
-        // Check if init params have changed
-        let params_changed = {
-            // Calculate hash of new params
-            let mut hasher = Sha256::new();
-            hasher.update(init_params);
-            let new_hash = hex::encode(hasher.finalize());
-
-            // get old hash
-            let (old_hash, _) = Self::ssh_exec(
-                sess,
-                "sha256sum /home/ubuntu/init-params 2>/dev/null | cut -d ' ' -f 1",
-            )
-            .context("Failed to set job id for init server")?;
-
-            old_hash.trim() != new_hash
-        };
-
-        if !params_changed {
-            return Ok(());
-        }
-
-        info!("Init parameters changed, terminating enclave for restart");
-        let (_, stderr) = Self::ssh_exec(sess, "nitro-cli terminate-enclave --all")?;
-
-        if !stderr.is_empty() && !stderr.contains("Successfully terminated enclave") {
-            return Err(anyhow!(stderr)).context("Error terminating enclave");
-        }
-
-        // set init params
-        let mut init_params_file = sess
-            .scp_send(
-                Path::new("/home/ubuntu/init-params"),
-                0o644,
-                init_params.len() as u64,
-                None,
-            )
-            .context("failed to scp init params")?;
-        init_params_file
-            .write_all(init_params)
-            .context("failed to write init params")?;
-        init_params_file.send_eof().context("failed to send eof")?;
-        init_params_file
-            .wait_eof()
-            .context("failed to wait for eof")?;
-        init_params_file.close().context("failed to close")?;
-        init_params_file
-            .wait_close()
-            .context("failed to wait for close")?;
-
-        let (_, stderr) = Self::ssh_exec(sess, "sudo supervisorctl update")
-            .context("Failed to update init server")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Failed to update init server");
-        }
-
-        Ok(())
-    }
-
-    // Goal: set up or tear down debug logger
-    // if debug is set, downloads logger and set it up, does not care about previous setup
-    // if debug is false, stops the logger if it is running
-    fn run_fragment_logger(sess: &Session, debug: bool) -> Result<()> {
-        if debug {
-            // check if logger is running
-            let (stdout, _) = Self::ssh_exec(sess, "sudo supervisorctl status logger")
-                .context("Failed to get logger status")?;
-            if stdout.contains("RUNNING") {
-                // logger is already running
-                return Ok(());
-            }
-
-            // check if logger is stopped
-            if stdout.contains("STOPPED") {
-                // logger is stopped, just start
-                let (_, stderr) = Self::ssh_exec(sess, "sudo supervisorctl start logger")
-                    .context("Failed to start logger")?;
-                if !stderr.is_empty() {
-                    return Err(anyhow!(stderr)).context("Failed to start logger");
-                }
-                return Ok(());
-            }
-
-            // set up logger if debug flag is set
-            let (_, stderr) = Self::ssh_exec(sess, "curl -fsS https://artifacts.marlin.org/oyster/binaries/nitro-logger_v1.0.0_linux_`uname -m | sed 's/x86_64/amd64/g; s/aarch64/arm64/g'` -o /home/ubuntu/nitro-logger && chmod +x /home/ubuntu/nitro-logger")
-                .context("Failed to download logger")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to download logger");
-            }
-
-            let (_, stderr) = Self::ssh_exec(
-                sess,
-                "<<EOF cat | sudo tee /etc/supervisor/conf.d/logger.conf
-[program:logger]
-command=/home/ubuntu/nitro-logger --enclave-log-file-path /home/ubuntu/enclave.log --script-log-file-path /home/ubuntu/logger.log
-autostart=true
-autorestart=true
-EOF
-                ",
-            )
-            .context("Failed to setup supervisor conf")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to setup supervisor conf");
-            }
-
-            let (_, stderr) = Self::ssh_exec(
-                sess,
-                "sudo supervisorctl reread && sudo supervisorctl update logger",
-            )
-            .context("Failed to start logger")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to start logger");
-            }
-        } else {
-            // check if logger is running
-            let (stdout, _) = Self::ssh_exec(sess, "sudo supervisorctl status logger")
-                .context("Failed to start logger")?;
-            if !stdout.contains("RUNNING") {
-                // logger is not running
-                return Ok(());
-            }
-
-            // kill the logger
-            let (_, stderr) = Self::ssh_exec(sess, "sudo supervisorctl stop logger")
-                .context("Failed to stop logger")?;
-            if !stderr.is_empty() {
-                return Err(anyhow!(stderr)).context("Failed to stop logger");
-            }
-        }
-
-        Ok(())
-    }
-
-    // Goal: set up enclave matching enclave.eif, with debug mode if necessary
-    // does nothing if running enclave has matching PCRs and has correct debug mode
-    // else deploys, killing the running enclave if needed
-    // WARN: it does not care about the vcpu and mem of running enclaves, it is assumed
-    // that the market prevents them from being different while enclaves are running
-    // since the same is enforced for the allocator fragment as well
-    fn run_fragment_enclave(
-        sess: &Session,
-        req_vcpu: i32,
-        req_mem: i64,
-        debug: bool,
-    ) -> Result<()> {
-        let (stdout, stderr) =
-            Self::ssh_exec(sess, "nitro-cli describe-eif --eif-path enclave.eif")
-                .context("could not describe eif")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Error describing eif");
-        }
-
-        let eif_data: HashMap<String, Value> =
-            serde_json::from_str(&stdout).context("could not parse eif description")?;
-
-        let (stdout, stderr) = Self::ssh_exec(sess, "nitro-cli describe-enclaves")
-            .context("could not describe enclaves")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Error describing enclaves");
-        }
-
-        let enclave_data: Vec<HashMap<String, Value>> =
-            serde_json::from_str(&stdout).context("could not parse enclave description")?;
-
-        if let Some(item) = enclave_data.first() {
-            if item["Measurements"] == eif_data["Measurements"]
-                && item["Flags"] == (if debug { "DEBUG_MODE" } else { "NONE" })
-            {
-                // same enclave, correct debug mode, just return
-                return Ok(());
-            } else {
-                // different enclave, kill it
-                let (_, stderr) = Self::ssh_exec(sess, "nitro-cli terminate-enclave --all")?;
-
-                if !stderr.is_empty() && !stderr.contains("Successfully terminated enclave") {
-                    return Err(anyhow!(stderr)).context("Error terminating enclave");
-                }
-            }
-        }
-
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            &format!(
-                "nitro-cli run-enclave --cpu-count {req_vcpu} --memory {req_mem} --eif-path enclave.eif --enclave-cid 88{}",
-                if debug { " --debug-mode" } else { "" }
-            ),
-        )?;
-
-        if !stderr.is_empty() {
-            if !stderr.contains("Started enclave with enclave-cid") {
-                return Err(anyhow!(stderr)).context("Error running enclave image");
-            } else {
-                info!(stderr);
-            }
-        }
-
-        info!("Enclave running");
-
-        Ok(())
-    }
-
-    // Enclave deployment fragments end here
-
-    fn is_enclave_running(sess: &Session) -> Result<bool> {
-        let (stdout, stderr) = Self::ssh_exec(sess, "nitro-cli describe-enclaves")
-            .context("could not describe enclaves")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Error describing enclaves");
-        }
-
-        Ok(stdout.trim() != "[]")
-    }
+    // pub async fn run_enclave_impl(
+    //     &self,
+    //     job_id: &str,
+    //     family: &str,
+    //     instance_id: &str,
+    //     region: &str,
+    //     image_url: &str,
+    //     req_vcpu: i32,
+    //     req_mem: i64,
+    //     bandwidth: u64,
+    //     debug: bool,
+    //     init_params: &[u8],
+    // ) -> Result<()> {
+    //     if family != "salmon" && family != "tuna" {
+    //         return Err(anyhow!("unsupported image family"));
+    //     }
+
+    //     // make a ssh session
+    //     let public_ip_address = self
+    //         .get_instance_ip(instance_id, region)
+    //         .await
+    //         .context("could not fetch instance ip")?;
+    //     let sess = &self
+    //         .ssh_connect(&(public_ip_address + ":22"))
+    //         .await
+    //         .context("error establishing ssh connection")?;
+
+    //     // set up ephemeral ports for the host
+    //     Self::run_fragment_ephemeral_ports(sess)?;
+    //     // set up nitro enclaves allocator
+    //     Self::run_fragment_allocator(sess, req_vcpu, req_mem)?;
+    //     // download enclave image and perform whitelist/blacklist checks
+    //     self.run_fragment_download_and_check_image(sess, image_url)?;
+    //     // set up bandwidth rate limiting
+    //     Self::run_fragment_bandwidth(sess, bandwidth)?;
+
+    //     if family == "tuna" {
+    //         // set up iptables rules
+    //         Self::run_fragment_iptables_tuna(sess)?;
+    //         // set up job id in the init server
+    //         Self::run_fragment_init_server(sess, job_id, init_params)?;
+    //     } else {
+    //         // set up iptables rules
+    //         Self::run_fragment_iptables_salmon(sess)?;
+    //     }
+
+    //     // set up debug logger if enabled
+    //     Self::run_fragment_logger(sess, debug)?;
+    //     // run the enclave
+    //     Self::run_fragment_enclave(sess, req_vcpu, req_mem, debug)?;
+
+    //     Ok(())
+    // }
 
     /* AWS EC2 UTILITY */
     // [UPDATE NOTE] Should return private IP, there won't be any Public IPs.
@@ -837,7 +268,6 @@ EOF
         &self,
         job: &JobId,
         instance_type: InstanceType,
-        architecture: &str,
         region: &str,
         init_params: &[u8],
         ami_id: &str,
@@ -877,13 +307,12 @@ EOF
             .run_instances()
             .image_id(ami_id)
             .instance_type(instance_type)
-            .key_name(self.key_name.clone())
             .min_count(1)
             .max_count(1)
             .tag_specifications(tags)
             .security_group_ids(sec_group)
             .subnet_id(subnet)
-            .user_data(String::from_utf8_lossy(init_params).to_string())
+            .user_data(BASE64_STANDARD.encode(init_params))
             .send()
             .await
             .context("could not run instance")?
@@ -1129,33 +558,6 @@ EOF
             .into())
     }
 
-    // [UPDATE NOTE] This function is obsolete, no enclaves
-    pub async fn get_enclave_state(&self, instance_id: &str, region: &str) -> Result<String> {
-        let public_ip_address = self
-            .get_instance_ip(instance_id, region)
-            .await
-            .context("could not fetch instance ip")?;
-        let sess = self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
-            .context("error establishing ssh connection")?;
-
-        let (stdout, stderr) = Self::ssh_exec(&sess, "nitro-cli describe-enclaves")
-            .context("could not describe enclaves")?;
-        if !stderr.is_empty() {
-            return Err(anyhow!(stderr)).context("Error describing enclaves");
-        }
-
-        let enclave_data: Vec<HashMap<String, Value>> =
-            serde_json::from_str(&stdout).context("could not parse enclave description")?;
-
-        Ok(enclave_data
-            .first()
-            .and_then(|data| data.get("State").and_then(Value::as_str))
-            .unwrap_or("No state found")
-            .to_owned())
-    }
-
     async fn allocate_ip_addr(&self, job: &JobId, region: &str) -> Result<(String, String)> {
         let (exist, alloc_id, public_ip) = self
             .get_job_elastic_ip(job, region)
@@ -1296,6 +698,7 @@ EOF
         )
     }
 
+    // [UPDATE NOTE] Associate IP address to secondary IP of gateway VM
     async fn associate_address(
         &self,
         instance_id: &str,
@@ -1345,10 +748,9 @@ EOF
         req_vcpu: i32,
         bandwidth: u64,
         image_url: &str,
-        debug: bool,
         init_params: &[u8],
     ) -> Result<()> {
-        let (mut exist, mut instance, state) = self
+        let (mut exist, instance, state) = self
             .get_job_instance_id(job, region)
             .await
             .context("failed to get job instance")?;
@@ -1377,7 +779,7 @@ EOF
         // [UPDATE NOTE] Check AMI corresponding to given job. If dosen't exist then check if snapshot exists.
         // If doesn't exist download image upload as snapshot and register AMI. If snapshot exists register AMI from it.
 
-        let (mut ami_exist, mut ami_id) = self.get_job_ami_id(job, region).await
+        let (ami_exist, mut ami_id) = self.get_job_ami_id(job, region).await
             .context("failed to get job ami")?;
 
         if !ami_exist {
@@ -1401,11 +803,11 @@ EOF
 
                 while let Some(item) = stream.next().await {
                     let chunk = item.context(format!("Failed to read chunk from response stream for job ID {}", job.id))?;
-                    tmp_file.write_all(&chunk).await
+                    tmp_file.write_all(&chunk)
                         .context(format!("Failed to write chunk to temporary file for job ID {}", job.id))?;
                 }
 
-                tmp_file.flush().await
+                tmp_file.flush()
                     .context(format!("Failed to flush temporary file for job ID {}", job.id))?;
 
                 let mut hasher = Sha256::new();
@@ -1444,7 +846,7 @@ EOF
                 }
 
 
-                let uploader = SnapshotUploader::new(self.ebs_client(region).await?);
+                let uploader = SnapshotUploader::new(self.ebs_client(region).await.clone());
                 let managed_tag = aws_sdk_ebs::types::Tag::builder().key("managedBy").value("marlin").build();
                 let project_tag = aws_sdk_ebs::types::Tag::builder().key("project").value("oyster").build();
                 let job_tag = aws_sdk_ebs::types::Tag::builder().key("jobId").value(&job.id).build();
@@ -1463,10 +865,10 @@ EOF
                     contract_tag,
                     chain_tag,
                 ];
-                snapshot_id = uploader.upload_from_file(Path::new(&tmp_file_path), None, None, snapshot_tags, None, None, None).await
+                snapshot_id = uploader.upload_from_file(Path::new(&tmp_file_path), None, None, Some(snapshot_tags), None, None, None).await
                     .context("Failed to upload snapshot from image file")?;
                 info!(snapshot_id, "Snapshot uploaded");
-                let waiter = SnapshotWaiter::new(self.ebs_client(region).await?);
+                let waiter = SnapshotWaiter::new(self.client(region).await.clone());
                 waiter.wait_for_completed(snapshot_id.as_str()).await
                     .context("Failed to wait for snapshot completion")?;
                 info!(snapshot_id, "Snapshot is now completed");
@@ -1474,11 +876,11 @@ EOF
             }
             // Register AMI from snapshot
 
-            let block_dev_mapping = aws_sdk_ec2::models::BlockDeviceMapping::builder()
+            let block_dev_mapping = BlockDeviceMapping::builder()
                 .device_name("/dev/xvda")
                 .ebs(
-                    aws_sdk_ec2::models::EbsBlockDevice::builder()
-                        .snapshot_id(snapshot_id)
+                    EbsBlockDevice::builder()
+                        .snapshot_id(snapshot_id.clone())
                         .build(),
                 )
             .build();
@@ -1505,13 +907,15 @@ EOF
                     info!(architecture);
                 }
             }
-            
             let resp = self.client(region).await
                 .register_image()
                 .name(format!("marlin/oyster/job-{}", job.id))
-                .architecture(architecture)
+                .architecture(FromStr::from_str(&architecture)?)
                 .root_device_name("/dev/xvda")
                 .block_device_mappings(block_dev_mapping)
+                .tpm_support(TpmSupportValues::V20)
+                .virtualization_type("hvm".to_string())
+                .boot_mode(BootModeValues::Uefi)
                 .tag_specifications(
                     TagSpecification::builder()
                         .resource_type(ResourceType::Image)
@@ -1546,31 +950,32 @@ EOF
 
         if !exist {
             // either no old instance or old instance was not enough, launch new one
-            instance = self
-                .spin_up_instance(job, instance_type, region, req_mem, req_vcpu, init_params, ami_id)
+            self
+                .spin_up_instance(job, instance_type, region, req_mem, req_vcpu, init_params, ami_id.as_str())
                 .await
                 .context("failed to spin up instance")?;
         }
 
+        Ok(())
         // [UPDATE NOTE] No enclave deployment needed. Check all the steps in this function if needed
         // Pick following:
         // 1. Rate limit configuration
         // 2. User Data setup
         // 3. Pick user image
-        self.run_enclave_impl(
-            &job.id,
-            family,
-            &instance,
-            region,
-            image_url,
-            req_vcpu,
-            req_mem,
-            bandwidth,
-            debug,
-            init_params,
-        )
-        .await
-        .context("failed to run enclave")
+        // self.run_enclave_impl(
+        //     &job.id,
+        //     family,
+        //     &instance,
+        //     region,
+        //     image_url,
+        //     req_vcpu,
+        //     req_mem,
+        //     bandwidth,
+        //     debug,
+        //     init_params,
+        // )
+        // .await
+        // .context("failed to run enclave")
     }
 
 
@@ -1597,24 +1002,11 @@ EOF
             .send()
             .await
             .context("could not describe instance types")?;
-        let mut architecture = "amd64".to_string();
         let mut v_cpus: i32 = 4;
         let mut mem: i64 = 8192;
 
         let instance_types = resp.instance_types();
         for instance in instance_types {
-            let supported_architectures = instance
-                .processor_info()
-                .ok_or(anyhow!("error fetching instance processor info"))?
-                .supported_architectures();
-            if let Some(arch) = supported_architectures.iter().next() {
-                if arch.as_str() == "x86_64" {
-                    "amd64".clone_into(&mut architecture);
-                } else {
-                    "arm64".clone_into(&mut architecture);
-                }
-                info!(architecture);
-            }
             v_cpus = instance
                 .v_cpu_info()
                 .ok_or(anyhow!("error fetching instance v_cpu info"))?
@@ -1633,7 +1025,7 @@ EOF
             return Err(anyhow!("Required memory or vcpus are more than available"));
         }
         let instance = self
-            .launch_instance(job, instance_type, &architecture, region, init_params, ami_id)
+            .launch_instance(job, instance_type, region, init_params, ami_id)
             .await
             .context("could not launch instance")?;
         sleep(Duration::from_secs(100)).await;
@@ -1727,7 +1119,6 @@ impl InfraProvider for Aws {
         req_vcpu: i32,
         bandwidth: u64,
         image_url: &str,
-        debug: bool,
         init_params: &[u8],
     ) -> Result<()> {
         self.spin_up_impl(
@@ -1738,7 +1129,6 @@ impl InfraProvider for Aws {
             req_vcpu,
             bandwidth,
             image_url,
-            debug,
             init_params,
         )
         .await
@@ -1791,12 +1181,78 @@ impl InfraProvider for Aws {
         if !exists || (state != "running" && state != "pending") {
             return Ok(false);
         }
+        // TODO: check wether state == pending is fine or not
+        Ok(true)
+    }
+}
 
-        let res = self
-            .get_enclave_state(&instance_id, region)
+// write a test module for AWS struct spin up function
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::market::InfraProvider;
+    use crate::market::JobId;
+
+    #[tokio::test]
+    async fn test_aws_spin_up_down() {
+        let mut aws = Aws::new(
+            "cp".to_string(),
+            &["ap-southeast-2".to_string()],
+            "cp".to_string(),
+            None,
+            None
+        ).await;
+        let job = JobId {
+            id: "test-job".to_string(),
+            operator: "test-operator".to_string(),
+            chain: "test-chain".to_string(),
+            contract: "test-contract".to_string(),
+        };
+        let region = "ap-southeast-2";
+        let instance_type = "t4g.micro";
+        let req_mem = 1024;
+        let req_vcpu = 2;
+        let bandwidth = 100;
+        let image_url = "https://example.com";
+        let init_params = b"test-init-params";
+
+        // Spin up
+        let spin_up_result = aws
+            .spin_up(
+                &job,
+                instance_type,
+                region,
+                req_mem,
+                req_vcpu,
+                bandwidth,
+                image_url,
+                init_params,
+            )
+            .await;
+        assert!(spin_up_result.is_ok(), "Spin up failed: {:?}", spin_up_result.err());
+
+        // Check if running
+        let is_running = aws
+            .check_enclave_running(&job, region)
             .await
-            .context("could not get current enclace state")?;
-        // There can be 2 states - RUNNING or TERMINATING
-        Ok(res == "RUNNING")
+            .expect("Failed to check if enclave is running");
+        assert!(is_running, "Enclave should be running after spin up");
+
+        // Get job IP
+        let job_ip_result = aws.get_job_ip(&job, region).await;
+        assert!(job_ip_result.is_ok(), "Get job IP failed: {:?}", job_ip_result.err());
+        let job_ip = job_ip_result.unwrap();
+        println!("Job IP: {}", job_ip);
+
+        // Spin down
+        let spin_down_result = aws.spin_down(&job, region).await;
+        assert!(spin_down_result.is_ok(), "Spin down failed: {:?}", spin_down_result.err());
+
+        // Check if not running
+        let is_running_after_down = aws
+            .check_enclave_running(&job, region)
+            .await
+            .expect("Failed to check if enclave is running after spin down");
+        assert!(!is_running_after_down, "Enclave should not be running after spin down");
     }
 }
