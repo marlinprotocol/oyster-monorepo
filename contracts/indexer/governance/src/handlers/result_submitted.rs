@@ -38,13 +38,14 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
         BigDecimal::from_str(&total_voting_power.to_string())?,
     );
 
-    let outcome_enum = match outcome.to::<u8>() {
-        0 => ResultOutcome::Pending,
-        1 => ResultOutcome::Passed,
-        2 => ResultOutcome::Failed,
-        3 => ResultOutcome::Vetoed,
-        _ => ResultOutcome::Pending,
-    };
+    let outcome_code = outcome.to::<u8>();
+    let outcome_enum = ResultOutcome::from_code(outcome_code).unwrap_or_else(|| {
+        warn!(
+            code = outcome_code,
+            "unknown outcome code, defaulting to pending"
+        );
+        ResultOutcome::Pending
+    });
 
     info!(
         ?proposal_id,

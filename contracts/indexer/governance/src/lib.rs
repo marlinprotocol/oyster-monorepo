@@ -9,9 +9,9 @@ use alloy::rpc::types::eth::Log;
 use alloy::rpc::types::Filter;
 use alloy::transports::http::reqwest::Url;
 use anyhow::{anyhow, Context, Result};
-use diesel::deserialize::FromSqlRow;
+use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::expression::AsExpression;
-use diesel::pg::Pg;
+use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
 use diesel::serialize::{self, IsNull, Output, ToSql};
 use diesel::ExpressionMethods;
@@ -157,8 +157,9 @@ pub fn start_from(conn: &mut PgConnection, start: u64) -> Result<bool> {
         .context("failed to set start block")
 }
 
-#[derive(Debug, AsExpression, FromSqlRow)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsExpression, FromSqlRow)]
 #[diesel(sql_type = crate::schema::sql_types::ResultOutcome)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
 pub enum ResultOutcome {
     Pending,
     Passed,
@@ -166,14 +167,42 @@ pub enum ResultOutcome {
     Vetoed,
 }
 
+impl ResultOutcome {
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            ResultOutcome::Pending => "PENDING",
+            ResultOutcome::Passed => "PASSED",
+            ResultOutcome::Failed => "FAILED",
+            ResultOutcome::Vetoed => "VETOED",
+        }
+    }
+
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(ResultOutcome::Pending),
+            1 => Some(ResultOutcome::Passed),
+            2 => Some(ResultOutcome::Failed),
+            3 => Some(ResultOutcome::Vetoed),
+            _ => None,
+        }
+    }
+}
+
 impl ToSql<crate::schema::sql_types::ResultOutcome, Pg> for ResultOutcome {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        match *self {
-            ResultOutcome::Pending => out.write_all(b"PENDING")?,
-            ResultOutcome::Passed => out.write_all(b"PASSED")?,
-            ResultOutcome::Failed => out.write_all(b"FAILED")?,
-            ResultOutcome::Vetoed => out.write_all(b"VETOED")?,
-        }
+        out.write_all(self.as_db_str().as_bytes())?;
         Ok(IsNull::No)
+    }
+}
+
+impl FromSql<crate::schema::sql_types::ResultOutcome, Pg> for ResultOutcome {
+    fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
+        match value.as_bytes() {
+            b"PENDING" => Ok(ResultOutcome::Pending),
+            b"PASSED" => Ok(ResultOutcome::Passed),
+            b"FAILED" => Ok(ResultOutcome::Failed),
+            b"VETOED" => Ok(ResultOutcome::Vetoed),
+            other => Err(format!("unknown result_outcome value: {:?}", other).into()),
+        }
     }
 }
