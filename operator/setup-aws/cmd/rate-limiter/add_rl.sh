@@ -1,8 +1,20 @@
 #!/bin/bash
 
-# Check if all 4 arguments are provided
-if [ $# -ne 4 ]; then
-    echo "Usage: $0 <sec_ip> <private_ip> <device_mac> <bandwidth>"
+# [TODO] set -euo pipefail
+
+# Usage: add_rl.sh <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>
+# Adds nft rules, ip rule, tc filters/classes to limit bandwidth
+# Also updates bandwidth usage tracking
+# Arguments:
+#   sec_ip: The secondary IP address of Rate Limit VM
+#   private_ip: The private IP address of the CVM instance
+#   device_mac: The MAC address of the network device
+#   bandwidth: The bandwidth limit to set (in bits/sec)
+#   instance_bandwidth: The total bandwidth limit for the instance (in bits/sec)
+
+# Check if all 5 arguments are provided
+if [ $# -ne 5 ]; then
+    echo "Usage: $0 <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>"
     exit 1
 fi
 
@@ -10,11 +22,46 @@ SEC_IP="$1"
 PRIVATE_IP="$2"
 DEVICE_MAC="$3"
 BANDWIDTH="$4"
+INSTANCE_BANDWIDTH="$5"
+
 
 echo "Security IP: $SEC_IP"
 echo "Private IP: $PRIVATE_IP"
 echo "Device MAC: $DEVICE_MAC"
 echo "Bandwidth: $BANDWIDTH"
+echo "Instance Bandwidth Limit: $INSTANCE_BANDWIDTH"
+
+check_and_update_bandwidth() {
+    local bandwidth="$1"
+    local instance_bandwidth="$2"
+    local bandwidth_usage_file="/var/run/bandwidth_usage.txt"
+    local lock_file="/var/lock/rate_limiter.lock"
+    
+    local lock_fd
+    exec {lock_fd}> "$lock_file" || return 1 
+    flock -x "$lock_fd" || return 1
+
+    if [ ! -f "$bandwidth_usage_file" ]; then
+        sudo touch "$bandwidth_usage_file"
+        echo "0" | sudo tee "$bandwidth_usage_file" > /dev/null
+        sudo chmod 644 "$bandwidth_usage_file"
+    fi
+
+    local current_usage
+    current_usage=$(cat "$bandwidth_usage_file" 2>/dev/null)
+    local new_usage=$((current_usage + bandwidth))
+
+    if [ "$new_usage" -gt "$instance_bandwidth" ]; then
+        echo "Cannot allocate $bandwidth bps. Current usage: $current_usage bps, Instance limit: $instance_bandwidth bps" >&2
+        exec {lock_fd}>&-
+        return 1
+    fi
+
+    echo "$new_usage" | sudo tee "$bandwidth_usage_file" > /dev/null
+    exec {lock_fd}>&-
+    return 0
+}
+
 
 add_nft_rules() {
     local private_ip="$1"
@@ -88,8 +135,9 @@ add_tc_rules() {
         sudo tc filter add dev "$dev" protocol ip parent 1:0 prio 1 u32 match ip src "$sec_ip" flowid 1:"$class_id"
     fi
 }
-
 # TODO: rollback or cleanup if any step fails
+
+check_and_update_bandwidth "$BANDWIDTH" "$INSTANCE_BANDWIDTH" || { echo "check_and_update_bandwidth failed" >&2; exit 1; }
 
 add_nft_rules "$PRIVATE_IP" "$SEC_IP"
 
