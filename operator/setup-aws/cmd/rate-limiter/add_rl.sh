@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# [TODO] set -euo pipefail
 
 # Usage: add_rl.sh <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>
 # Adds nft rules, ip rule, tc filters/classes to limit bandwidth
@@ -17,6 +16,8 @@ if [ $# -ne 5 ]; then
     echo "Usage: $0 <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>"
     exit 1
 fi
+
+source "$(dirname "$0")/common_rl.sh"
 
 SEC_IP="$1"
 PRIVATE_IP="$2"
@@ -66,15 +67,29 @@ check_and_update_bandwidth() {
 add_nft_rules() {
     local private_ip="$1"
     local sec_ip="$2"
-    
     sudo nft add rule ip raw prerouting ip saddr "$private_ip" notrack ip saddr set "$sec_ip"
+
+    if [ $? -ne 0 ]; then
+        echo "Failed to add nft rule for source address" >&2
+        return 1
+    fi
+
     sudo nft add rule ip raw prerouting ip daddr "$sec_ip" notrack ip daddr set "$private_ip"
+
+    if [ $? -ne 0 ]; then
+        echo "Failed to add nft rule for destination address" >&2
+        
+        # Rollback the previously added SNAT rule
+        rule="ip saddr $private_ip notrack ip saddr set $sec_ip"
+        handle=$(sudo nft -a list chain ip raw prerouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
+        
+        if [ -n "$handle" ]; then
+            sudo nft delete rule ip raw prerouting handle "$handle"
+        fi
+        return 1
+    fi
 }
 
-get_dev_name() {
-    local device_mac="$1"
-    ip -o link show | grep "$device_mac" | awk -F': ' '{print $2}'
-}
 
 add_ip_rule() {
     local sec_ip="$1"
@@ -87,13 +102,12 @@ add_ip_rule() {
         echo "Device for MAC $device_mac not found" >&2
         return 1
     fi
-
-    # Avoid adding duplicate rule
-    if ip rule show | grep -qE "from[[:space:]]+$sec_ip.*(lookup|table)[[:space:]]+$dev"; then
-        return 0
-    fi
-
     sudo ip rule add from "$sec_ip" table "$dev"
+
+    if [ $? -ne 0 ]; then
+        echo "Failed to add ip rule from $sec_ip to table $dev" >&2
+        return 1
+    fi
 }
 
 add_tc_rules() {
@@ -131,16 +145,38 @@ add_tc_rules() {
     fi
 
     # Add filter matching source IP to this class if not present
-    if ! tc filter show dev "$dev" parent 1:0 | grep -q "$sec_ip"; then
-        sudo tc filter add dev "$dev" protocol ip parent 1:0 prio 1 u32 match ip src "$sec_ip" flowid 1:"$class_id"
+    sudo tc filter add dev "$dev" protocol ip parent 1:0 prio 1 u32 match ip src "$sec_ip" flowid 1:"$class_id"
+    if [ $? -ne 0 ]; then
+        echo "Failed to add tc filter for source IP $sec_ip" >&2
+        # Rollback class addition
+        sudo tc class del dev "$dev" parent 1: classid 1:"$class_id"
+        return 1
     fi
 }
-# TODO: rollback or cleanup if any step fails
 
-check_and_update_bandwidth "$BANDWIDTH" "$INSTANCE_BANDWIDTH" || { echo "check_and_update_bandwidth failed" >&2; exit 1; }
+check_and_update_bandwidth "$BANDWIDTH" "$INSTANCE_BANDWIDTH"
+
+if [ $? -ne 0 ]; then
+    exit 1
+fi
 
 add_nft_rules "$PRIVATE_IP" "$SEC_IP"
+if [ $? -ne 0 ]; then
+    free_bandwidth_usage "$BANDWIDTH"
+    exit 1
+fi
 
 add_ip_rule "$SEC_IP" "$DEVICE_MAC"
+if [ $? -ne 0 ]; then
+    remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
+    free_bandwidth_usage "$BANDWIDTH"
+    exit 1
+fi
 
 add_tc_rules "$DEVICE_MAC" "$SEC_IP" "$BANDWIDTH"
+if [ $? -ne 0 ]; then
+    remove_ip_rule "$SEC_IP" "$DEVICE_MAC"
+    remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
+    free_bandwidth_usage "$BANDWIDTH"
+    exit 1
+fi

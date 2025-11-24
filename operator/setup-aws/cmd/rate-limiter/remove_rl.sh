@@ -21,43 +21,7 @@ PRIVATE_IP="$2"
 DEVICE_MAC="$3"
 BANDWIDTH="$4"
 
-get_dev_name() {
-    local device_mac="$1"
-    ip -o link show | grep -i "$device_mac" | awk -F': ' '{print $2}'
-}
-
-remove_nft_rules() {
-    local private_ip="$1"
-    local sec_ip="$2"
-
-    # Find rule handles in ip raw prerouting that reference both IPs and delete them
-    rule="ip saddr $private_ip notrack ip saddr set $sec_ip"
-    handle=$(sudo nft -a list chain ip raw prerouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
-    if [ -n "$handle" ]; then
-        sudo nft delete rule ip raw prerouting handle "$handle"
-    fi
-
-    rule="ip daddr $sec_ip notrack ip daddr set $private_ip"
-    handle=$(sudo nft -a list chain ip raw prerouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
-    if [ -n "$handle" ]; then
-        sudo nft delete rule ip raw prerouting handle "$handle"
-    fi
-}
-
-remove_ip_rule() {
-    local sec_ip="$1"
-    local device_mac="$2"
-
-    local dev
-    dev=$(get_dev_name "$device_mac")
-
-    if [ -z "$dev" ]; then
-        return 0
-    fi
-
-    # Remove matching ip rule (ignore errors if not present)
-    sudo ip rule del from "$sec_ip" table "$dev" 2>/dev/null || true
-}
+source "$(dirname "$0")/common_rl.sh"
 
 remove_tc_rules() {
     local device_mac="$1"
@@ -69,7 +33,6 @@ remove_tc_rules() {
     if [ -z "$dev" ]; then
         return 0
     fi
-    # TODO: get exact filter handle and classid instead of hardcoding from show output
     # Convert sec_ip to hex decimal string for filter handle
     sec_ip_hex=$(echo "$sec_ip" | awk -F. '{printf "%02x%02x%02x%02x\n", $1, $2, $3, $4}')
 
@@ -86,28 +49,9 @@ remove_tc_rules() {
 
 }
 
-update_bandwidth_usage() {
-    local bandwidth="$1"
-    local lock_file="/var/lock/rate_limiter.lock"
-    local usage_file="/var/run/bandwidth_usage.txt"
-
-    local lock_fd
-    exec {lock_fd}> "$lock_file" || return 1
-    flock -x "$lock_fd" || return 1
-
-    local current_usage
-    current_usage=$(cat "$usage_file" 2>/dev/null)
-
-    local new_usage=$((current_usage - bandwidth))
-    [ "$new_usage" -lt 0 ] && new_usage=0
-
-    echo "$new_usage" | sudo tee "$usage_file" > /dev/null
-
-    exec {lock_fd}>&-
-}
 
 # Run removals in safe order (filters/classes -> ip rule -> nft)
 remove_tc_rules "$DEVICE_MAC" "$SEC_IP"
 remove_ip_rule "$SEC_IP" "$DEVICE_MAC"
 remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
-update_bandwidth_usage "$BANDWIDTH"
+free_bandwidth_usage "$BANDWIDTH"
