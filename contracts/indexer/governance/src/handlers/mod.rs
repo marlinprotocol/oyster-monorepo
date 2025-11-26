@@ -28,9 +28,9 @@ static PROPOSAL_CREATED: [u8; 32] = event!(
 static PROPOSAL_EXECUTED: [u8; 32] = event!("ProposalExecuted(bytes32)");
 
 // deposit logs
-static DEPOSIT_LOCKED: [u8; 32] = event!("DepositLocked(bytes32,address,uint256)");
-static DEPOSIT_REFUNDED: [u8; 32] = event!("DepositRefunded(bytes32,address,uint256)");
-static DEPOSIT_SLASHED: [u8; 32] = event!("DepositSlashed(bytes32,address,uint256)");
+// static DEPOSIT_LOCKED: [u8; 32] = event!("DepositLocked(bytes32,address,uint256)");
+// static DEPOSIT_REFUNDED: [u8; 32] = event!("DepositRefunded(bytes32,address,uint256)");
+// static DEPOSIT_SLASHED: [u8; 32] = event!("DepositSlashed(bytes32,address,uint256)");
 
 // vote logs
 static VOTE_SUBMITTED: [u8; 32] =
