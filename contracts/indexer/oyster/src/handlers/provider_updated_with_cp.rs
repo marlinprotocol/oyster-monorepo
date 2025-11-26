@@ -59,7 +59,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::test_utils::TestDb;
 
     use super::*;
 
@@ -75,6 +76,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -82,6 +87,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -96,11 +105,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -130,8 +143,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(2));
@@ -144,11 +159,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some random cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -169,6 +188,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -176,6 +199,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -190,11 +217,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -224,8 +255,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(2));
@@ -238,11 +271,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 )
             ])
@@ -263,6 +300,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -273,6 +314,8 @@ mod tests {
             Ok((
                 "0x7777777777777777777777777777777777777777".to_owned(),
                 "some other cp".to_owned(),
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                 true
             ))
         );
@@ -301,8 +344,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(
@@ -315,7 +360,9 @@ mod tests {
             Ok((
                 "0x7777777777777777777777777777777777777777".to_owned(),
                 "some other cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -334,6 +381,10 @@ mod tests {
             .values((
                 providers::id.eq("0x7777777777777777777777777777777777777777"),
                 providers::cp.eq("some other cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -341,6 +392,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(false),
             ))
             .execute(conn)?;
@@ -355,11 +410,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     false,
                 )
             ])
@@ -389,8 +448,10 @@ mod tests {
             },
         };
 
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(
@@ -407,11 +468,15 @@ mod tests {
                 (
                     "0x7777777777777777777777777777777777777777".to_owned(),
                     "some other cp".to_owned(),
+                    42,
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
                     true,
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     "some cp".to_owned(),
+                    42,
+                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
                     false,
                 )
             ])

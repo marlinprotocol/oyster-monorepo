@@ -1,0 +1,28 @@
+[package]
+name = "oyster-sui-market-indexer"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+alloy-primitives = "1.3.1"
+anyhow = "1.0.95"
+bcs = "0.1.6"
+clap = { version = "4.5.23", features = ["derive"] }
+dotenvy = "0.15.7"
+indexer-framework = { version = "0.1.0", path = "../framework" }
+reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1.0.217", features = ["derive"] }
+sui_rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-rpc"}
+sui_sdk_types = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-sdk-types"}
+tokio = { version = "1.46.1", features = ["full"] }
+tokio-retry = "0.3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"

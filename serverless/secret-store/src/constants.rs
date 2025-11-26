@@ -11,6 +11,7 @@ pub const ACKNOWLEDGEMENT_TIMEOUT_TXN_RESEND_DEADLINE_SECS: u64 = 20;
 pub const SEND_TRANSACTION_BUFFER_SECS: u64 = 5;
 // Buffer time (in secs) for removing an expired secret
 pub const SECRET_EXPIRATION_BUFFER_SECS: u64 = 5;
+pub const RPC_ERROR_RETRY_DELAY_SECS: u64 = 1;
 
 // Domain separator constant for SecretManager Transactions
 pub const DOMAIN_SEPARATOR: Eip712Domain = eip712_domain! {

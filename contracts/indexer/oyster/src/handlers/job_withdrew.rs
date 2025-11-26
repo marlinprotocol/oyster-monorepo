@@ -1,6 +1,7 @@
 use std::ops::Sub;
 use std::str::FromStr;
 
+use crate::constants::RATE_SCALING_FACTOR;
 use crate::schema::jobs;
 use crate::schema::transactions;
 use alloy::hex::ToHexExt;
@@ -13,6 +14,7 @@ use anyhow::Result;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
+use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
@@ -39,9 +41,31 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     info!(id, ?amount, "withdrawing from job");
 
+    // get the current rate of the job to calculate how much time needs to be removed from the job
+    // target sql:
+    // SELECT rate FROM jobs
+    // WHERE id = "<id>" AND is_closed = false;
+    let rate = jobs::table
+        .filter(jobs::id.eq(&id))
+        .filter(jobs::is_closed.eq(false))
+        .select(jobs::rate)
+        .get_result::<BigDecimal>(conn);
+
+    if rate.is_err() {
+        // !!! should never happen
+        // the only reason this would happen is if the job does not exist or is closed
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("failed to find rate for job"));
+    }
+
+    let rate = rate.unwrap();
+    let duration_removed = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
+
+    info!(?rate, ?duration_removed, "duration removed");
+
     // target sql:
     // UPDATE jobs
-    // SET balance = balance - <amount>
+    // SET balance = balance - <amount>, end_epoch = end_epoch - <duration_removed>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -50,7 +74,10 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         // we do it by only updating rows where is_closed is false
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
-        .set(jobs::balance.eq(jobs::balance.sub(&amount)))
+        .set((
+            jobs::balance.eq(jobs::balance.sub(&amount)),
+            jobs::end_epoch.eq(jobs::end_epoch.sub(&duration_removed)),
+        ))
         .execute(conn)
         .context("failed to update job")?;
 
@@ -92,7 +119,8 @@ mod tests {
     use ethp::{event, keccak256};
 
     use crate::handlers::handle_log;
-    use crate::handlers::test_db::TestDb;
+    use crate::handlers::test_utils::MockProvider;
+    use crate::handlers::test_utils::TestDb;
     use crate::schema::providers;
 
     use super::*;
@@ -109,6 +137,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -130,6 +162,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -150,6 +185,9 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    creation_timestamp + (20 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -174,7 +212,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -195,6 +235,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -206,6 +247,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -250,8 +292,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(creation_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        handle_log(conn, log)?;
+        handle_log(conn, log, &provider)?;
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -260,7 +303,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -281,6 +326,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
+                    BigDecimal::from(creation_timestamp + (15 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -292,6 +338,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -337,6 +384,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -358,6 +409,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -382,7 +436,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -402,6 +458,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             )])
         );
 
@@ -445,8 +502,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -455,11 +513,16 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find rate for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -476,6 +539,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
+                BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             )])
         );
 
@@ -509,6 +573,10 @@ mod tests {
             .values((
                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
                 providers::cp.eq("some cp"),
+                providers::block.eq(42i64),
+                providers::tx_hash.eq(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                ),
                 providers::is_active.eq(true),
             ))
             .execute(conn)?;
@@ -530,6 +598,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (7 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -550,6 +621,9 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(true),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    creation_timestamp + (20 * RATE_SCALING_FACTOR),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -574,7 +648,9 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
@@ -595,6 +671,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -606,6 +683,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );
@@ -650,8 +728,9 @@ mod tests {
             },
         };
 
+        let provider = MockProvider::new(original_timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log);
+        let res = handle_log(conn, log, &provider);
 
         // checks
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
@@ -660,11 +739,16 @@ mod tests {
             Ok((
                 "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                 "some cp".to_owned(),
-                true
+                42,
+                "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+                true,
             ))
         );
 
-        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "failed to find rate for job"
+        );
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
             jobs::table
@@ -682,6 +766,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     true,
+                    BigDecimal::from(creation_timestamp + (20 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -693,6 +778,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
+                    BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
         );

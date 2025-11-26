@@ -1,13 +1,12 @@
 use std::fs;
 use std::net::SocketAddr;
 
-use alloy::hex::ToHexExt;
-use alloy::primitives::{Address, B256};
-use alloy::providers::{Provider, ProviderBuilder};
-use alloy::transports::ws::WsConnect;
-use anyhow::Context;
-use anyhow::Result;
+use alloy_primitives::hex::ToHexExt;
+use alloy_primitives::B256;
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::Row;
 use tracing::Instrument;
 use tracing::{error, info, info_span};
 use tracing_subscriber::EnvFilter;
@@ -36,9 +35,9 @@ struct Cli {
     )]
     regions: String,
 
-    /// RPC url
+    /// Market DB url
     #[clap(long, value_parser)]
-    rpc: String,
+    db_url: String,
 
     /// Rates location
     #[clap(long, value_parser)]
@@ -112,17 +111,26 @@ async fn parse_bandwidth_rates_file(filepath: String) -> Result<Vec<market::GBRa
     Ok(rates)
 }
 
-async fn get_chain_id_from_rpc_url(url: String) -> Result<String> {
-    let provider = ProviderBuilder::new()
-        .on_ws(WsConnect::new(url))
+async fn get_chain_state(db_url: &str) -> Result<(String, i64)> {
+    let pool = PgPoolOptions::new()
+        .connect(db_url)
         .await
-        .context("failed to create websocket provider")?;
-    let chain_id = provider
-        .get_chain_id()
-        .await
-        .context("failed to fetch chain id")?;
+        .context("Failed to connect to the DATABASE_URL")?;
 
-    Ok(chain_id.to_string())
+    let row = sqlx::query("SELECT chain_id, extra_decimals FROM indexer_state WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .context("Failed to query 'indexer_state' table")?;
+
+    let chain_id = row
+        .get::<Option<String>, _>("chain_id")
+        .ok_or_else(|| anyhow!("Chain ID not yet set in the DB by the indexer"))?;
+
+    let extra_decimals = row
+        .get::<Option<i64>, _>("extra_decimals")
+        .ok_or_else(|| anyhow!("Extra decimals not yet set in the DB by the indexer"))?;
+
+    Ok((chain_id, extra_decimals))
 }
 
 async fn run() -> Result<()> {
@@ -130,7 +138,7 @@ async fn run() -> Result<()> {
 
     info!(?cli.profile);
     info!(?cli.key_name);
-    info!(?cli.rpc);
+    info!(?cli.db_url);
     info!(?cli.rates);
     info!(?cli.bandwidth);
     info!(?cli.contract);
@@ -213,12 +221,13 @@ async fn run() -> Result<()> {
     let address_whitelist: &'static [String] = Box::leak(address_whitelist_vec.into_boxed_slice());
     let address_blacklist: &'static [String] = Box::leak(address_blacklist_vec.into_boxed_slice());
     let regions: &'static [String] = Box::leak(regions.into_boxed_slice());
-    let chain = get_chain_id_from_rpc_url(cli.rpc.clone())
+
+    let (chain, extra_decimals) = get_chain_state(&cli.db_url)
         .await
-        .context("Failed to fetch chain_id")?;
+        .context("Failed to fetch chain state from the DB")?;
 
     // Initialize job registry for terminated jobs
-    let job_registry = market::JobRegistry::new("terminated_jobs.txt".to_string()).await?;
+    let job_registry = market::JobRegistry::new(cli.db_url.clone()).await?;
 
     // Start periodic job registry persistence task
     let registry_clone = job_registry.clone();
@@ -245,26 +254,15 @@ async fn run() -> Result<()> {
         .instrument(info_span!("server")),
     );
 
-    let ethers = market::EthersProvider {
-        contract: cli
-            .contract
-            .parse::<Address>()
-            .context("failed to parse contract address")?,
-        provider: cli
-            .provider
-            .parse::<Address>()
-            .context("failed to parse provider address")?,
-    };
-
     market::run(
         aws,
-        ethers,
-        cli.rpc,
+        cli.db_url,
         regions,
         compute_rates,
         bandwidth_rates,
         address_whitelist,
         address_blacklist,
+        extra_decimals,
         job_id,
         job_registry,
     )
