@@ -78,19 +78,25 @@ pub fn handle_vote_submitted(conn: &mut PgConnection, log: Log) -> Result<()> {
     // target sql:
     // INSERT INTO votes (proposal_id, voter, delegator, tx_hash, delegator_chain_id)
     // VALUES ("<proposal_id>", "<voter>", "<delegator>", "<tx_hash>", "<delegator_chain_id>");
-    // ON CONFLICT (proposal_id, voter) DO UPDATE SET tx_hash = "<tx_hash>"
+    // ON CONFLICT (proposal_id, voter)
+    // DO UPDATE SET tx_hash = "<tx_hash>", delegator_chain_id = "<delegator_chain_id>", vote_idx = "<vote_idx>", delegator = "<delegator>"
     diesel::insert_into(votes::table)
         .values((
             votes::proposal_id.eq(&proposal_id),
             votes::voter.eq(&voter),
             votes::delegator.eq(&delegator),
             votes::tx_hash.eq(&tx_hash),
-            votes::delegator_chain_id.eq(delegator_chain_id),
-            votes::vote_idx.eq(vote_idx),
+            votes::delegator_chain_id.eq(&delegator_chain_id),
+            votes::vote_idx.eq(&vote_idx),
         ))
         .on_conflict((votes::proposal_id, votes::voter))
         .do_update()
-        .set(votes::tx_hash.eq(&tx_hash))
+        .set((
+            votes::delegator.eq(&delegator),
+            votes::tx_hash.eq(&tx_hash),
+            votes::delegator_chain_id.eq(&delegator_chain_id),
+            votes::vote_idx.eq(&vote_idx),
+        ))
         .execute(conn)
         .context("failed to create vote")?;
 
