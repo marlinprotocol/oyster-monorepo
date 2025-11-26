@@ -9,6 +9,7 @@ use diesel::RunQueryDsl;
 use tracing::{info, instrument};
 
 use crate::schema::proposals;
+use crate::ResultOutcome;
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
 pub fn handle_proposal_executed(conn: &mut PgConnection, log: Log) -> Result<()> {
@@ -27,8 +28,10 @@ pub fn handle_proposal_executed(conn: &mut PgConnection, log: Log) -> Result<()>
     // SET executed = true
     // WHERE id = "<proposal_id>"
     // AND executed = false
+    // AND outcome = "PASSED"
     let count = diesel::update(proposals::table)
         .filter(proposals::id.eq(&proposal_id))
+        .filter(proposals::outcome.eq(ResultOutcome::Passed))
         .filter(proposals::executed.eq(false))
         .set(proposals::executed.eq(true))
         .execute(conn)
