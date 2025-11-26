@@ -1,6 +1,8 @@
 use std::str::FromStr;
 
+use crate::schema::proposals;
 use crate::schema::votes;
+use crate::ResultOutcome;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
 use alloy::primitives::Bytes;
@@ -13,6 +15,7 @@ use anyhow::Result;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
+use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
@@ -48,6 +51,29 @@ pub fn handle_vote_submitted(conn: &mut PgConnection, log: Log) -> Result<()> {
         ?vote_encrypted,
         "creating vote"
     );
+
+    // check if proposal exists with pending outcome and is not executed
+    // target sql:
+    // SELECT COUNT(*)
+    // FROM proposals
+    // WHERE id = "<proposal_id>"
+    // AND outcome = "PENDING"
+    // AND executed = false;
+    let count = proposals::table
+        .filter(proposals::id.eq(&proposal_id))
+        .filter(proposals::outcome.eq(ResultOutcome::Pending))
+        .filter(proposals::executed.eq(false))
+        .count()
+        .get_result::<i64>(conn)
+        .context("failed to check if proposal exists with pending outcome")?;
+
+    if count != 1 {
+        // !!! should never happen
+        // we have failed to make any changes
+        // the only real condition is when the proposal does not exist, is no longer pending, or is already executed
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("could not find proposal"));
+    }
 
     // target sql:
     // INSERT INTO votes (proposal_id, voter, delegator, tx_hash, delegator_chain_id)
