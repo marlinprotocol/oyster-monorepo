@@ -1,5 +1,6 @@
 use crate::args::wallet::WalletArgs;
-use crate::configs::global::{MIN_DEPOSIT_AMOUNT, OYSTER_MARKET_ADDRESS};
+use crate::configs;
+use crate::configs::global::MIN_DEPOSIT_AMOUNT;
 use crate::utils::{
     provider::create_provider,
     usdc::{approve_usdc, format_usdc},
@@ -16,6 +17,10 @@ use tracing::info;
 /// Deposit funds to an existing job
 #[derive(Args)]
 pub struct DepositArgs {
+    /// Deployment target
+    #[arg(long, default_value = "arb1")]
+    deployment: String,
+
     /// Job ID
     #[arg(short, long, required = true)]
     job_id: String,
@@ -54,17 +59,17 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     let amount_u256 = U256::from(amount);
 
     // Setup provider
-    let provider = create_provider(wallet_private_key)
+    let provider = create_provider(&args.deployment, wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
     // Create contract instance
-    let market = OysterMarket::new(
-        OYSTER_MARKET_ADDRESS
-            .parse()
-            .context("Failed to parse market address")?,
-        provider.clone(),
-    );
+    let market_address = match args.deployment.as_ref() {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
+    let market = OysterMarket::new(market_address, provider.clone());
 
     // Check if job exists and get current balance
     let job = market
@@ -78,7 +83,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     info!("Depositing: {:.6} USDC", format_usdc(amount_u256));
 
     // First approve USDC transfer
-    approve_usdc(amount_u256, provider.clone()).await?;
+    approve_usdc(&args.deployment, amount_u256, provider.clone()).await?;
 
     // Call jobDeposit function
     let tx_hash = market

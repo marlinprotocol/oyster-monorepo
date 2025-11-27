@@ -1,5 +1,5 @@
 use crate::utils::provider::create_provider;
-use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
+use crate::{args::wallet::WalletArgs, configs};
 use alloy::{
     primitives::{Address, B256},
     providers::{Provider, WalletProvider},
@@ -14,6 +14,10 @@ use tracing::info;
 /// Stop an Oyster CVM instance
 #[derive(Args)]
 pub struct StopArgs {
+    /// Deployment target
+    #[arg(long, default_value = "arb1")]
+    deployment: String,
+
     /// Job ID
     #[arg(short = 'j', long, required = true)]
     job_id: String,
@@ -37,7 +41,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     info!("  Job ID: {}", job_id);
 
     // Setup provider
-    let provider = create_provider(wallet_private_key)
+    let provider = create_provider(&args.deployment, wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
@@ -50,9 +54,11 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     );
 
     // Create contract instance
-    let market_address = OYSTER_MARKET_ADDRESS
-        .parse()
-        .context("Failed to parse market address")?;
+    let market_address = match args.deployment.as_ref() {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
     let market = OysterMarket::new(market_address, provider);
 
     // Parse job ID once
