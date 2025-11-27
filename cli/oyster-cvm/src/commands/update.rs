@@ -70,7 +70,7 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
     }
 
     if let Some(image_url) = image_url {
-        metadata["url"] = serde_json::Value::String(image_url.into());
+        metadata["url"] = serde_json::Value::String(image_url);
     }
 
     if let Some(init_params) = args

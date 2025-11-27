@@ -1,6 +1,6 @@
 use alloy::signers::k256::sha2::{Digest, Sha256};
 use anyhow::{Context, Result};
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Args;
 use k256::sha2::Sha384;
 use tracing::info;
@@ -27,7 +27,7 @@ pub struct ImageArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 
-    /// debug mode 
+    /// debug mode
     #[arg(long)]
     debug: bool,
 }
@@ -37,7 +37,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
         .init_params
         .pcrs
         .clone()
-        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug)) 
+        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug))
         .context("Failed to load PCRs")?;
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args
@@ -59,7 +59,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
     let mut hasher = Sha256::new();
     // bitflags denoting what pcrs are part of the computation
     // this one has 0, 1, 2 and 16
-    hasher.update(&((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
+    hasher.update(((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
     hasher.update(hex::decode(pcrs.0).unwrap());
     hasher.update(hex::decode(pcrs.1).unwrap());
     hasher.update(hex::decode(pcrs.2).unwrap());

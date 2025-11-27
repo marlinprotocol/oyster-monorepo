@@ -1,6 +1,6 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    commands::log::{stream_logs, LogArgs},
+    commands::log::{LogArgs, stream_logs},
     configs::global::OYSTER_MARKET_ADDRESS,
     types::Platform,
     utils::{
@@ -11,13 +11,11 @@ use crate::{
 };
 
 use alloy::{
-    network::Ethereum,
-    primitives::{keccak256, Address, B256 as H256, U256},
+    primitives::{Address, B256 as H256, U256, keccak256},
     providers::{Provider, WalletProvider},
     sol,
-    transports::http::Http,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -26,7 +24,7 @@ use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
 use tracing::info;
 
-use super::simulate::{simulate, SimulateArgs, LOCAL_DEV_IMAGE};
+use super::simulate::{LOCAL_DEV_IMAGE, SimulateArgs, simulate};
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
@@ -289,7 +287,7 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
         expose_ports: args.simulate_expose_ports,
         dev_image: LOCAL_DEV_IMAGE.to_string(),
         container_memory: None,
-        job_name: if args.job_name == "" {
+        job_name: if args.job_name.is_empty() {
             "oyster_local_dev_container".to_string()
         } else {
             args.job_name
@@ -298,7 +296,7 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
         no_local_images: true,
     };
 
-    return simulate(simulate_args).await;
+    simulate(simulate_args).await
 }
 
 async fn create_new_oyster_job(
@@ -306,7 +304,7 @@ async fn create_new_oyster_job(
     provider_addr: Address,
     rate: U256,
     balance: U256,
-    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider + Clone,
+    provider: impl Provider + WalletProvider + Clone,
 ) -> Result<H256> {
     let market_address = OYSTER_MARKET_ADDRESS.parse::<Address>()?;
 
@@ -413,10 +411,10 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
         info!("Response from IP endpoint: {}", last_response);
 
         // Check for IP in response
-        if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str()) {
-            if !ip.is_empty() {
-                return Ok(ip.to_string());
-            }
+        if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str())
+            && !ip.is_empty()
+        {
+            return Ok(ip.to_string());
         }
 
         info!("IP not found yet, waiting {} seconds...", IP_CHECK_INTERVAL);
@@ -588,7 +586,7 @@ async fn calculate_total_cost(
 
 async fn get_operator_cp(
     provider_address: &str,
-    provider: impl Provider<Http<Client>, Ethereum> + WalletProvider,
+    provider: impl Provider + WalletProvider,
 ) -> Result<String> {
     let market_address = Address::from_str(OYSTER_MARKET_ADDRESS)?;
     let provider_address = Address::from_str(provider_address)?;
@@ -597,7 +595,7 @@ async fn get_operator_cp(
     let market = OysterMarket::new(market_address, provider);
 
     // Call providers function to get CP URL
-    let cp_url = market.providers(provider_address).call().await?.cp;
+    let cp_url = market.providers(provider_address).call().await?;
 
     Ok(cp_url)
 }
