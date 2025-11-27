@@ -11,9 +11,9 @@ remove_nft_rules() {
 
     # Find rule handles in ip raw prerouting that reference both IPs and delete them
     rule="ip saddr $private_ip notrack ip saddr set $sec_ip"
-    handle=$(sudo nft -a list chain ip raw prerouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
+    handle=$(sudo nft -a list chain ip raw postrouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
     if [ -n "$handle" ]; then
-        sudo nft delete rule ip raw prerouting handle "$handle"
+        sudo nft delete rule ip raw postrouting handle "$handle"
     fi
 
     rule="ip daddr $sec_ip notrack ip daddr set $private_ip"
@@ -24,7 +24,7 @@ remove_nft_rules() {
 }
 
 remove_ip_rule() {
-    local sec_ip="$1"
+    local private_ip="$1"
     local device_mac="$2"
 
     local dev
@@ -35,7 +35,7 @@ remove_ip_rule() {
     fi
 
     # Remove matching ip rule (ignore errors if not present)
-    sudo ip rule del from "$sec_ip" table "$dev"
+    sudo ip rule del from "$private_ip" table "$dev"
 }
 
 free_bandwidth_usage() {

@@ -67,7 +67,7 @@ check_and_update_bandwidth() {
 add_nft_rules() {
     local private_ip="$1"
     local sec_ip="$2"
-    sudo nft add rule ip raw prerouting ip saddr "$private_ip" notrack ip saddr set "$sec_ip"
+    sudo nft add rule ip raw postrouting ip saddr "$private_ip" notrack ip saddr set "$sec_ip"
 
     if [ $? -ne 0 ]; then
         echo "Failed to add nft rule for source address" >&2
@@ -81,10 +81,10 @@ add_nft_rules() {
         
         # Rollback the previously added SNAT rule
         rule="ip saddr $private_ip notrack ip saddr set $sec_ip"
-        handle=$(sudo nft -a list chain ip raw prerouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
+        handle=$(sudo nft -a list chain ip raw postrouting 2>/dev/null | grep "$rule" | awk '{print $NF}')
         
         if [ -n "$handle" ]; then
-            sudo nft delete rule ip raw prerouting handle "$handle"
+            sudo nft delete rule ip raw postrouting handle "$handle"
         fi
         return 1
     fi
@@ -92,7 +92,7 @@ add_nft_rules() {
 
 
 add_ip_rule() {
-    local sec_ip="$1"
+    local private_ip="$1"
     local device_mac="$2"
 
     local dev
@@ -102,10 +102,10 @@ add_ip_rule() {
         echo "Device for MAC $device_mac not found" >&2
         return 1
     fi
-    sudo ip rule add from "$sec_ip" table "$dev"
+    sudo ip rule add from "$private_ip" table "$dev"
 
     if [ $? -ne 0 ]; then
-        echo "Failed to add ip rule from $sec_ip to table $dev" >&2
+        echo "Failed to add ip rule from $private_ip to table $dev" >&2
         return 1
     fi
 }
@@ -134,7 +134,7 @@ add_tc_rules() {
     for attempt in $(seq 1 $max_attempts); do
         # combine RANDOMs to get a wider range, ensure between 10 and 65535
         class_id=$(( (RANDOM % 65535) + 1 ))
-        if sudo tc class add dev "$dev" parent 1: classid 1:"$class_id" htb rate "$bandwidth" burst 15k 2>/dev/null; then
+        if sudo tc class add dev "$dev" parent 1: classid 1:"$class_id" htb rate "$bandwidth" burst 4000m 2>/dev/null; then
             break
         fi
     done
@@ -166,7 +166,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-add_ip_rule "$SEC_IP" "$DEVICE_MAC"
+add_ip_rule "$PRIVATE_IP" "$DEVICE_MAC"
 if [ $? -ne 0 ]; then
     remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
     free_bandwidth_usage "$BANDWIDTH"
@@ -175,7 +175,7 @@ fi
 
 add_tc_rules "$DEVICE_MAC" "$SEC_IP" "$BANDWIDTH"
 if [ $? -ne 0 ]; then
-    remove_ip_rule "$SEC_IP" "$DEVICE_MAC"
+    remove_ip_rule "$PRIVATE_IP" "$DEVICE_MAC"
     remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
     free_bandwidth_usage "$BANDWIDTH"
     exit 1

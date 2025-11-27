@@ -52,6 +52,6 @@ remove_tc_rules() {
 
 # Run removals in safe order (filters/classes -> ip rule -> nft)
 remove_tc_rules "$DEVICE_MAC" "$SEC_IP"
-remove_ip_rule "$SEC_IP" "$DEVICE_MAC"
+remove_ip_rule "$PRIVATE_IP" "$DEVICE_MAC"
 remove_nft_rules "$PRIVATE_IP" "$SEC_IP"
 free_bandwidth_usage "$BANDWIDTH"
