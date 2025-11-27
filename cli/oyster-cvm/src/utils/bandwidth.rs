@@ -33,14 +33,13 @@ pub async fn get_bandwidth_rate_for_region(region_code: &str, cp_url: &str) -> R
             if let (Some(code), Some(rate_str)) = (
                 rate.get("region_code").and_then(|c| c.as_str()),
                 rate.get("rate").and_then(|r| r.as_str()),
-            ) {
-                if code == region_code {
+            )
+                && code == region_code {
                     // Parse hex rate string (removing "0x" prefix) to u256
                     let rate_u256 = U256::from_str_radix(&rate_str[2..], 16)
                         .context("Failed to parse bandwidth rate")?;
                     return Ok(rate_u256);
                 }
-            }
         }
     }
 
