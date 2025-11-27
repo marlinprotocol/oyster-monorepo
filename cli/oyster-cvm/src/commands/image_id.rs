@@ -59,7 +59,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
     let mut hasher = Sha256::new();
     // bitflags denoting what pcrs are part of the computation
     // this one has 0, 1, 2 and 16
-    hasher.update(&((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
+    hasher.update(((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
     hasher.update(hex::decode(pcrs.0).unwrap());
     hasher.update(hex::decode(pcrs.1).unwrap());
     hasher.update(hex::decode(pcrs.2).unwrap());

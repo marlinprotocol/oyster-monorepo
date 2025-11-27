@@ -380,20 +380,20 @@ pub async fn simulate(args: SimulateArgs) -> Result<()> {
         .context("Failed to wait on container")?;
     info!("Dev container exited with status: {}", exit_status);
 
-    let _ = monitor_stats_task.join().unwrap();
+    monitor_stats_task.join().unwrap();
 
     // Clean up the temporary utf8 init params directory created for simulation
     if let Err(err) = fs::remove_dir_all(&init_params_path) {
         info!("Failed to remove {} directory: {}", init_params_path, err);
     }
 
-    if args.cleanup_cache {
-        if let Err(err) = fs::remove_dir_all(LOCAL_DEV_DIRECTORY) {
-            info!(
-                "Failed to remove {} directory: {}",
-                LOCAL_DEV_DIRECTORY, err
-            );
-        }
+    if args.cleanup_cache
+        && let Err(err) = fs::remove_dir_all(LOCAL_DEV_DIRECTORY)
+    {
+        info!(
+            "Failed to remove {} directory: {}",
+            LOCAL_DEV_DIRECTORY, err
+        );
     }
 
     Ok(())
@@ -432,7 +432,7 @@ fn get_required_images(docker_compose: &str) -> Result<HashSet<String>> {
 
 fn get_local_image_id(image_name: &str) -> Result<String> {
     let output = Command::new("docker")
-        .args(&["image", "inspect", image_name, "--format", "{{.Id}}"])
+        .args(["image", "inspect", image_name, "--format", "{{.Id}}"])
         .output()
         .context("Failed to call docker inspect")?;
     if output.status.success() {
@@ -456,7 +456,7 @@ fn get_local_image_path(image_name: &str, image_id: &str, cache_path: &str) -> S
 
 fn is_present_in_cache(image_name: &str, image_id: &str, cache_path: &str) -> bool {
     let path = PathBuf::from(get_local_image_path(image_name, image_id, cache_path));
-    return path.exists();
+    path.exists()
 }
 
 fn load_image_in_cache(image_name: &str, image_id: &str, cache_path: &str) -> Result<()> {
@@ -493,17 +493,16 @@ fn remove_outdated_images(image_name: &str, cache_path: &str) -> Result<()> {
         };
 
         let path = entry.path();
-        if path.is_file() {
-            if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
-                if file_name.starts_with(&image_name.replace([':', '/'], "_")) {
-                    if let Err(err) = fs::remove_file(&path) {
-                        info!("Failed to remove an outdated cached image: {}", err);
-                        continue;
-                    };
+        if path.is_file()
+            && let Some(file_name) = path.file_name().and_then(|f| f.to_str())
+            && file_name.starts_with(&image_name.replace([':', '/'], "_"))
+        {
+            if let Err(err) = fs::remove_file(&path) {
+                info!("Failed to remove an outdated cached image: {}", err);
+                continue;
+            };
 
-                    info!("Cache file deleted: {}", path.display());
-                }
-            }
+            info!("Cache file deleted: {}", path.display());
         }
     }
 
@@ -532,19 +531,18 @@ fn monitor_container_stats(container_name: &str) {
             ])
             .output();
 
-        if let Ok(stats_output) = stats_output {
-            if stats_output.status.success() {
-                if let Ok(stats) = serde_json::from_slice::<DockerStats>(&stats_output.stdout) {
-                    let memory_usage = parse_memory(&stats.mem_usage);
-                    let cpu_usage = parse_cpu(&stats.cpu_perc);
+        if let Ok(stats_output) = stats_output
+            && stats_output.status.success()
+            && let Ok(stats) = serde_json::from_slice::<DockerStats>(&stats_output.stdout)
+        {
+            let memory_usage = parse_memory(&stats.mem_usage);
+            let cpu_usage = parse_cpu(&stats.cpu_perc);
 
-                    if memory_usage > max_memory_usage {
-                        max_memory_usage = memory_usage;
-                    }
-                    if cpu_usage > max_cpu_usage {
-                        max_cpu_usage = cpu_usage;
-                    }
-                }
+            if memory_usage > max_memory_usage {
+                max_memory_usage = memory_usage;
+            }
+            if cpu_usage > max_cpu_usage {
+                max_cpu_usage = cpu_usage;
             }
         }
 
@@ -552,19 +550,16 @@ fn monitor_container_stats(container_name: &str) {
             .args(["inspect", "--size", container_name])
             .output();
 
-        if let Ok(inspect_output) = inspect_output {
-            if inspect_output.status.success() {
-                if let Ok(inspect_stats) =
-                    serde_json::from_slice::<Vec<DockerInspectStats>>(&inspect_output.stdout)
-                {
-                    if let Some(stat) = inspect_stats.get(0) {
-                        let size_usage = parse_size(stat.size_rw);
+        if let Ok(inspect_output) = inspect_output
+            && inspect_output.status.success()
+            && let Ok(inspect_stats) =
+                serde_json::from_slice::<Vec<DockerInspectStats>>(&inspect_output.stdout)
+            && let Some(stat) = inspect_stats.first()
+        {
+            let size_usage = parse_size(stat.size_rw);
 
-                        if size_usage > max_disk_usage {
-                            max_disk_usage = size_usage;
-                        }
-                    }
-                }
+            if size_usage > max_disk_usage {
+                max_disk_usage = size_usage;
             }
         }
 
@@ -608,12 +603,12 @@ fn parse_memory(mem_usage: &str) -> f64 {
     let parts: Vec<&str> = mem_usage.split('/').collect();
     if let Some(value) = parts.first() {
         let value = value.trim();
-        if value.ends_with("GiB") {
-            value[..value.len() - 3].parse::<f64>().unwrap_or(0.0) * 1024.0
-        } else if value.ends_with("MiB") {
-            value[..value.len() - 3].parse::<f64>().unwrap_or(0.0)
-        } else if value.ends_with("KiB") {
-            value[..value.len() - 3].parse::<f64>().unwrap_or(0.0) / 1024.0
+        if let Some(value) = value.strip_suffix("GiB") {
+            value.parse::<f64>().unwrap_or(0.0) * 1024.0
+        } else if let Some(value) = value.strip_suffix("MiB") {
+            value.parse::<f64>().unwrap_or(0.0)
+        } else if let Some(value) = value.strip_suffix("KiB") {
+            value.parse::<f64>().unwrap_or(0.0) / 1024.0
         } else {
             0.0
         }

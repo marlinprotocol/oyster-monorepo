@@ -145,7 +145,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
     info!("Enclave public key: {}", hex::encode(decoded.public_key));
-    info!("Image id: {}", hex::encode(&decoded.image_id));
+    info!("Image id: {}", hex::encode(decoded.image_id));
     info!("User data: {}", hex::encode(&decoded.user_data));
     if let Ok(user_data) = String::from_utf8(decoded.user_data.to_vec()) {
         info!("User data, decoded as UTF-8: {user_data}");
@@ -162,12 +162,12 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         pcr1 = attestation_expectations.pcrs.map(|x| hex::encode(x[1])),
         pcr2 = attestation_expectations.pcrs.map(|x| hex::encode(x[2])),
         pcr16 = attestation_expectations.pcrs.map(|x| hex::encode(x[3])),
-        enclave_public_key = attestation_expectations.public_key.map(|x| hex::encode(x)),
-        user_data = attestation_expectations.user_data.map(|x| hex::encode(x)),
+        enclave_public_key = attestation_expectations.public_key.map(hex::encode),
+        user_data = attestation_expectations.user_data.map(hex::encode),
         root_public_key = attestation_expectations
             .root_public_key
-            .map(|x| hex::encode(x)),
-        image_id = attestation_expectations.image_id.map(|x| hex::encode(x)),
+            .map(hex::encode),
+        image_id = attestation_expectations.image_id.map(hex::encode),
         "Verified against expectations: "
     );
     Ok(())

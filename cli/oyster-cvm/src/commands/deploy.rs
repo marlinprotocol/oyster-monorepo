@@ -289,7 +289,7 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
         expose_ports: args.simulate_expose_ports,
         dev_image: LOCAL_DEV_IMAGE.to_string(),
         container_memory: None,
-        job_name: if args.job_name == "" {
+        job_name: if args.job_name.is_empty() {
             "oyster_local_dev_container".to_string()
         } else {
             args.job_name
@@ -298,7 +298,7 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
         no_local_images: true,
     };
 
-    return simulate(simulate_args).await;
+    simulate(simulate_args).await
 }
 
 async fn create_new_oyster_job(
@@ -413,11 +413,10 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
         info!("Response from IP endpoint: {}", last_response);
 
         // Check for IP in response
-        if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str()) {
-            if !ip.is_empty() {
+        if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str())
+            && !ip.is_empty() {
                 return Ok(ip.to_string());
             }
-        }
 
         info!("IP not found yet, waiting {} seconds...", IP_CHECK_INTERVAL);
         tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
