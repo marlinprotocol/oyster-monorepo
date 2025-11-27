@@ -9,8 +9,8 @@ use alloy::{
     hex::FromHex,
     signers::k256::sha2::{Digest, Sha256},
 };
-use anyhow::{anyhow, bail, Context, Result};
-use base64::{prelude::BASE64_STANDARD, Engine};
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Args;
 use k256::sha2::Sha384;
 use lazy_static::lazy_static;

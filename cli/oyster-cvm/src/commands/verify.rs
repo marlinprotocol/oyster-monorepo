@@ -1,13 +1,13 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use hex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::read;
 use tracing::info;
 
-use oyster::attestation::{get, AttestationExpectations, AWS_ROOT_KEY};
+use oyster::attestation::{AWS_ROOT_KEY, AttestationExpectations, get};
 
-use crate::args::pcr::{preset_to_pcr_preset, PcrArgs};
+use crate::args::pcr::{PcrArgs, preset_to_pcr_preset};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
 use crate::types::Platform;
 
@@ -108,7 +108,9 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
 
         attestation_doc
     } else {
-        bail!("Could not get attestation, either enclave-ip, attestation-hex or attestation-hex-file must be specified")
+        bail!(
+            "Could not get attestation, either enclave-ip, attestation-hex or attestation-hex-file must be specified"
+        )
     };
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;

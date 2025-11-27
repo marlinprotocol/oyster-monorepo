@@ -1,6 +1,6 @@
 use alloy::signers::k256::sha2::{Digest, Sha256};
 use anyhow::{Context, Result};
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Args;
 use k256::sha2::Sha384;
 use tracing::info;
@@ -27,7 +27,7 @@ pub struct ImageArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 
-    /// debug mode 
+    /// debug mode
     #[arg(long)]
     debug: bool,
 }
@@ -37,7 +37,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
         .init_params
         .pcrs
         .clone()
-        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug)) 
+        .load_required(preset_to_pcr_preset(&args.preset, &args.arch, args.debug))
         .context("Failed to load PCRs")?;
     let mut pcr16 = [0u8; 48];
     if let Some(init_param_b64) = args

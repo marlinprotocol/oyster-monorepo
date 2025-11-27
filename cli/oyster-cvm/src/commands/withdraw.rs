@@ -6,7 +6,7 @@ use alloy::{
     providers::{Provider, WalletProvider},
     sol,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};

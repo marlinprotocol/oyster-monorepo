@@ -9,7 +9,7 @@ use alloy::{
     providers::Provider,
     sol,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use tracing::info;
 

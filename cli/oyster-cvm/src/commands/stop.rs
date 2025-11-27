@@ -5,7 +5,7 @@ use alloy::{
     providers::{Provider, WalletProvider},
     sol,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use std::time::Duration;
 use tokio::time::sleep;

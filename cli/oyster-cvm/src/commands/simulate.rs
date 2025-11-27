@@ -1,5 +1,5 @@
 use alloy::signers::k256::sha2::{Digest, Sha256};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use serde::Deserialize;
 use serde_yaml::Value;

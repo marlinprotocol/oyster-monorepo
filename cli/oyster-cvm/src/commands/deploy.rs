@@ -1,6 +1,6 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    commands::log::{stream_logs, LogArgs},
+    commands::log::{LogArgs, stream_logs},
     configs::global::OYSTER_MARKET_ADDRESS,
     types::Platform,
     utils::{
@@ -12,12 +12,12 @@ use crate::{
 
 use alloy::{
     network::Ethereum,
-    primitives::{keccak256, Address, B256 as H256, U256},
+    primitives::{Address, B256 as H256, U256, keccak256},
     providers::{Provider, WalletProvider},
     sol,
     transports::http::Http,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ use std::time::Duration as StdDuration;
 use tokio::net::TcpStream;
 use tracing::info;
 
-use super::simulate::{simulate, SimulateArgs, LOCAL_DEV_IMAGE};
+use super::simulate::{LOCAL_DEV_IMAGE, SimulateArgs, simulate};
 
 // Retry Configuration
 const IP_CHECK_RETRIES: u32 = 20;
