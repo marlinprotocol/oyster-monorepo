@@ -3,7 +3,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     sol,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use tracing::info;
 

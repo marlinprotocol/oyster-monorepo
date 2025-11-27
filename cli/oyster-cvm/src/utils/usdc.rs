@@ -6,7 +6,7 @@ use alloy::{
     sol,
     transports::http::Http,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use tracing::info;
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alloy::signers::k256::sha2::{Digest, Sha256};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use lazy_static::lazy_static;
 use tracing::info;

@@ -1,6 +1,6 @@
 use std::fs;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 
 #[derive(Args, Debug)]
