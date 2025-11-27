@@ -110,6 +110,11 @@ func create_ami(keyPairName string, keyStoreLocation string, profile string, reg
 func SetupPreRequisites(client *connect.SshClient, publicIP string, instanceID string, profile string, region string, arch string) {
 	RunCommand(client, "sudo apt-get -y update && sudo apt-get -y upgrade")
 
+	// copy scripts
+	connect.TransferFile(client.Config, publicIP, "./cmd/rate-limiter/add_rl.sh", "/home/ubuntu/add_rl.sh")
+	connect.TransferFile(client.Config, publicIP, "./cmd/rate-limiter/common_rl.sh", "/home/ubuntu/common_rl.sh")
+	connect.TransferFile(client.Config, publicIP, "./cmd/rate-limiter/remove_rl.sh", "/home/ubuntu/remove_rl.sh")
+
 	// Setup nftables for nat
 	RunCommand(client, "sudo apt install -y nftables")
 	RunCommand(client, `cat <<EOF | sudo tee /etc/nftables.conf > /dev/null
@@ -120,6 +125,9 @@ flush ruleset
 table ip raw {
     chain prerouting {
         type filter hook prerouting priority raw; policy accept;
+    }
+	chain postrouting {
+        type filter hook postrouting priority raw; policy accept;
     }
 }
 EOF`)
