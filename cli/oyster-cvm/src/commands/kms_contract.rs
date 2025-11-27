@@ -8,8 +8,7 @@ use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
 use crate::{
-    args::wallet::WalletArgs, configs::global::ARBITRUM_ONE_RPC_URL,
-    utils::provider::create_provider,
+    args::wallet::WalletArgs, configs::arb::ARBITRUM_ONE_RPC_URL, utils::provider::create_provider,
 };
 
 // Codegen from artifact.
@@ -81,7 +80,7 @@ pub async fn kms_contract(args: KmsContractArgs) -> Result<()> {
 
 async fn kms_contract_deploy(args: KmsContractDeployArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_provider("arb1", &args.wallet.load_required()?).await?;
 
     // deploy the contract
     let contract = KmsVerifiable::deploy(provider, vec![])
@@ -97,7 +96,7 @@ async fn kms_contract_deploy(args: KmsContractDeployArgs) -> Result<()> {
 
 async fn kms_contract_approve(args: KmsActionArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_provider("arb1", &args.wallet.load_required()?).await?;
 
     // create contract object
     let contract = KmsVerifiable::new(args.contract_address.parse::<Address>()?, provider.clone());
@@ -126,7 +125,7 @@ async fn kms_contract_approve(args: KmsActionArgs) -> Result<()> {
 
 async fn kms_contract_revoke(args: KmsActionArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_provider("arb1", &args.wallet.load_required()?).await?;
 
     // create contract object
     let contract = KmsVerifiable::new(args.contract_address.parse::<Address>()?, provider.clone());

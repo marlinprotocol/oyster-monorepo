@@ -1,13 +1,14 @@
-use crate::configs::global::ARBITRUM_ONE_RPC_URL;
+use crate::configs;
 use alloy::{
     network::EthereumWallet,
     primitives::FixedBytes,
     providers::{Provider, ProviderBuilder, WalletProvider},
     signers::local::PrivateKeySigner,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 pub async fn create_provider(
+    deployment: &str,
     wallet_private_key: &str,
 ) -> Result<impl Provider + WalletProvider + Clone + use<>> {
     let private_key = FixedBytes::<32>::from_slice(
@@ -18,11 +19,14 @@ pub async fn create_provider(
         .context("Failed to create signer from private key")?;
     let wallet = EthereumWallet::from(signer);
 
-    let provider = ProviderBuilder::new().wallet(wallet).connect_http(
-        ARBITRUM_ONE_RPC_URL
-            .parse()
-            .context("Failed to parse RPC URL")?,
-    );
+    let rpc_url = match deployment {
+        "arb1" => configs::arb::ARBITRUM_ONE_RPC_URL,
+        "bsc" => configs::bsc::ARBITRUM_ONE_RPC_URL,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(rpc_url.parse().context("Failed to parse RPC URL")?);
 
     Ok(provider)
 }

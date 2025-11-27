@@ -1,15 +1,20 @@
 use crate::args::init_params::InitParamsArgs;
 use crate::types::Platform;
 use crate::utils::provider::create_provider;
-use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
+use crate::{args::wallet::WalletArgs, configs};
+use alloy::primitives::Address;
 use alloy::sol;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use tracing::info;
 
 /// Update existing deployments
 #[derive(Args)]
 pub struct UpdateArgs {
+    /// Deployment target
+    #[arg(long, default_value = "arb1")]
+    deployment: String,
+
     /// Job ID
     #[arg(long)]
     job_id: String,
@@ -51,11 +56,16 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
     let debug = args.debug;
     let image_url = args.image_url;
 
-    let provider = create_provider(wallet_private_key)
+    let provider = create_provider(&args.deployment, wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
-    let market = OysterMarket::new(OYSTER_MARKET_ADDRESS.parse()?, provider);
+    let market_address = match args.deployment.as_ref() {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
+    let market = OysterMarket::new(market_address, provider);
 
     let mut metadata = serde_json::from_str::<serde_json::Value>(
         &market.jobs(job_id.parse()?).call().await?.metadata,

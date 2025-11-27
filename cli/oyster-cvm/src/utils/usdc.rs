@@ -1,4 +1,4 @@
-use crate::configs::global::{OYSTER_MARKET_ADDRESS, USDC_ADDRESS};
+use crate::configs;
 use alloy::{
     primitives::{Address, U256},
     providers::{Provider, WalletProvider},
@@ -15,13 +15,21 @@ sol!(
 );
 
 /// Approves USDC transfer to the Oyster Market contract if the current allowance is insufficient
-pub async fn approve_usdc(amount: U256, provider: impl Provider + WalletProvider) -> Result<()> {
-    let usdc_address: Address = USDC_ADDRESS
-        .parse()
-        .context("Failed to parse USDC address")?;
-    let market_address: Address = OYSTER_MARKET_ADDRESS
-        .parse()
-        .context("Failed to parse market address")?;
+pub async fn approve_usdc(
+    deployment: &str,
+    amount: U256,
+    provider: impl Provider + WalletProvider,
+) -> Result<()> {
+    let usdc_address = match deployment {
+        "arb1" => configs::arb::USDC_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::USDC_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
+    let market_address = match deployment {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
     let signer_address = provider
         .signer_addresses()
         .next()

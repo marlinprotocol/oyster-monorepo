@@ -1,7 +1,7 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     commands::log::{LogArgs, stream_logs},
-    configs::global::OYSTER_MARKET_ADDRESS,
+    configs,
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
@@ -51,6 +51,10 @@ sol!(
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
 pub struct DeployArgs {
+    /// Deployment target
+    #[arg(long, default_value = "arb1")]
+    deployment: String,
+
     /// Preset for parameters (e.g. blue)
     #[arg(long, default_value = "blue")]
     preset: String,
@@ -146,10 +150,10 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     tracing::info!("Starting deployment...");
 
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_provider(&args.deployment, &args.wallet.load_required()?).await?;
 
     // Get CP URL using the configured provider
-    let cp_url = get_operator_cp(&args.operator, provider.clone())
+    let cp_url = get_operator_cp(&args.deployment, &args.operator, provider.clone())
         .await
         .context("Failed to get CP URL")?;
     info!("CP URL for operator: {}", cp_url);
@@ -240,10 +244,11 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     );
 
     // Approve USDC and create job
-    approve_usdc(total_cost, provider.clone()).await?;
+    approve_usdc(&args.deployment, total_cost, provider.clone()).await?;
 
     // Create job
     let job_id = create_new_oyster_job(
+        &args.deployment,
         metadata,
         args.operator.parse()?,
         total_rate,
@@ -300,13 +305,18 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
 }
 
 async fn create_new_oyster_job(
+    deployment: &str,
     metadata: String,
     provider_addr: Address,
     rate: U256,
     balance: U256,
     provider: impl Provider + WalletProvider + Clone,
 ) -> Result<H256> {
-    let market_address = OYSTER_MARKET_ADDRESS.parse::<Address>()?;
+    let market_address = match deployment {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
 
     // Load OysterMarket contract using Alloy
     let provider_clone = provider.clone();
@@ -585,10 +595,15 @@ async fn calculate_total_cost(
 }
 
 async fn get_operator_cp(
+    deployment: &str,
     provider_address: &str,
     provider: impl Provider + WalletProvider,
 ) -> Result<String> {
-    let market_address = Address::from_str(OYSTER_MARKET_ADDRESS)?;
+    let market_address = match deployment {
+        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
+        _ => Err(anyhow!("unknown deployment"))?,
+    };
     let provider_address = Address::from_str(provider_address)?;
 
     // Create contract instance
