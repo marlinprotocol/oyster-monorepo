@@ -412,9 +412,10 @@ async fn wait_for_ip_address(url: &str, job_id: H256, region: &str) -> Result<St
 
         // Check for IP in response
         if let Some(ip) = json.get("ip").and_then(|ip| ip.as_str())
-            && !ip.is_empty() {
-                return Ok(ip.to_string());
-            }
+            && !ip.is_empty()
+        {
+            return Ok(ip.to_string());
+        }
 
         info!("IP not found yet, waiting {} seconds...", IP_CHECK_INTERVAL);
         tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
