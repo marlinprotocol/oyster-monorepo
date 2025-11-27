@@ -164,9 +164,7 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
         pcr16 = attestation_expectations.pcrs.map(|x| hex::encode(x[3])),
         enclave_public_key = attestation_expectations.public_key.map(hex::encode),
         user_data = attestation_expectations.user_data.map(hex::encode),
-        root_public_key = attestation_expectations
-            .root_public_key
-            .map(hex::encode),
+        root_public_key = attestation_expectations.root_public_key.map(hex::encode),
         image_id = attestation_expectations.image_id.map(hex::encode),
         "Verified against expectations: "
     );
