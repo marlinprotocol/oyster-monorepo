@@ -135,7 +135,7 @@ Optional args:
 - `--auth-token`: Auth token value for provided Sui chain gRPC URL
 - `--usdc-coin`: USDC Coin ID for enclave payment on Sui chain
 - `--gas-coin`: Coin ID for gas payment on Sui chain
-- `--operator`: Operator address [default: 0xe10fa12f580e660ecd593ea4119cebc90509d642(ARB), 0xD379eAb71eC709B20A85e953EbD3d395E032a9Af(BSC), Required for Sui]
+- `--operator`: Operator address [default: 0xe10fa12f580e660ecd593ea4119cebc90509d642(ARB), 0xD379eAb71eC709B20A85e953EbD3d395E032a9Af(BSC), 0x31777daafca0aac90f1171039735c87d3a933c95b997d34cc4fb2ea323f48ff4(Sui)]
 - `--preset`: Preset for parameters (e.g. blue) [default: blue]
 - `--arch`: Platform architecture [default: arm64] [possible values: amd64, arm64]
 - `--image-url`: URL of the enclave image (defaults to base image)
