@@ -2,7 +2,7 @@ use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     chain::{ChainType, adapter::JobTransactionKind, get_chain_adapter},
     commands::log::{LogArgs, stream_logs},
-    configs::{arb, bsc},
+    configs::{arb, bsc, sui},
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
@@ -60,11 +60,11 @@ pub struct DeployArgs {
     #[arg(long)]
     auth_token: Option<String>,
 
-    /// USDC coin ID for Sui chain based enclave payment
+    /// USDC coin ID for Sui chain based enclave payment (optional, will be picked automatically from user's account if not provided)
     #[arg(long)]
     usdc_coin: Option<String>,
 
-    /// Gas coin ID for Sui chain transactions
+    /// Gas coin ID for Sui chain transactions (optional, will be chosen automatically from user's account via simulation results)
     #[arg(long)]
     gas_coin: Option<String>,
 
@@ -152,7 +152,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     tracing::info!("Starting deployment...");
 
-    let operator = parse_operator(&args.chain, args.operator)?;
+    let operator = parse_operator(&args.chain, args.operator);
 
     let mut chain_adapter = get_chain_adapter(
         args.chain,
@@ -174,7 +174,9 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     let cp_url = chain_adapter
         .get_operator_cp(&operator, &provider)
         .await
-        .context("Failed to get CP URL")?;
+        .context("Failed to get CP URL")?
+        .trim_end_matches('/')
+        .to_owned();
     info!("CP URL for operator: {}", cp_url);
 
     // Fetch operator specs from CP URL
@@ -337,17 +339,18 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
     simulate(simulate_args).await
 }
 
-fn parse_operator(chain: &ChainType, operator: Option<String>) -> Result<String> {
+fn parse_operator(chain: &ChainType, operator: Option<String>) -> String {
     match chain {
-        ChainType::Arbitrum => Ok(operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string())),
-        ChainType::BSC => Ok(operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string())),
-        ChainType::Sui => Ok(operator.ok_or_else(|| anyhow!("Operator address not provided!"))?),
+        ChainType::Arbitrum => operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string()),
+        ChainType::BSC => operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
+        ChainType::Sui => operator.unwrap_or(sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
     }
 }
 
 async fn fetch_operator_spec(url: &str) -> Result<Operator> {
     let client = Client::new();
     let response = client.get(url).send().await?;
+    info!("Operator spec response: {:?}", response); // TODO: remove
     let operator: Operator = response.json().await?;
     Ok(operator)
 }
@@ -452,7 +455,7 @@ async fn wait_for_ip_address(url: &str, job_id: String, region: &str) -> Result<
     let mut last_response = String::new();
 
     // Construct the IP endpoint URL with query parameters
-    let ip_url = format!("{}/ip?id={:?}&region={}", url, job_id, region);
+    let ip_url = format!("{}/ip?id={}&region={}", url, job_id, region);
 
     for attempt in 1..=IP_CHECK_RETRIES {
         info!(

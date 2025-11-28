@@ -36,7 +36,7 @@ pub struct UpdateArgs {
     #[arg(long)]
     auth_token: Option<String>,
 
-    /// Gas coin ID for Sui chain transactions
+    /// Gas coin ID for Sui chain transactions (optional, will be chosen automatically from user's account via simulation results)
     #[arg(long)]
     gas_coin: Option<String>,
 
