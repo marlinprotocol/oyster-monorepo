@@ -1,6 +1,6 @@
 use crate::handler::{
     __path_contracts, __path_delete_config, __path_encryption_key, __path_hello_handler,
-    __path_image_id, __path_kms_root_server_key, __path_load_config,
+    __path_image_id, __path_is_config_loaded, __path_kms_root_server_key, __path_load_config,
     __path_proposal_encryption_key, __path_proposal_hashes, __path_status,
 };
 use utoipa::OpenApi;
@@ -22,7 +22,8 @@ use utoipa_swagger_ui::SwaggerUi;
     load_config,
     delete_config,
     kms_root_server_key,
-    contracts
+    contracts,
+    is_config_loaded
 ))]
 struct ApiDoc;
 

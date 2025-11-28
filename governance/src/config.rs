@@ -57,6 +57,14 @@ pub async fn create_config<K: KMS + Send + Sync>(kms: Arc<K>, msg: &[u8]) -> Res
     Ok(())
 }
 
+pub async fn if_config_exists() -> Result<bool> {
+    if fs::exists("./config.json")? {
+        return Ok(true);
+    } else {
+        return Ok(false);
+    }
+}
+
 /// Deletes the config
 pub async fn delete_config_file() -> Result<()> {
     let path = Path::new("./config.json");
