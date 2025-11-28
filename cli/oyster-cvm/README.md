@@ -127,7 +127,7 @@ Deploys an Oyster CVM instance.
 
 Required args:
 - `--chain`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
 - `--duration-in-minutes`: Duration in minutes
 
 Optional args:
