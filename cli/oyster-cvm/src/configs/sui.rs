@@ -16,4 +16,5 @@ pub const SUI_CLOCK_ID: &str = "0x6";
 pub const SUI_CLOCK_INITIAL_VERSION: u64 = 1;
 
 // TODO: FILL THE VALUE AND UPDATE IN commands/deploy.rs file
-pub const DEFAULT_OPERATOR_ADDRESS: &str = "";
+pub const DEFAULT_OPERATOR_ADDRESS: &str =
+    "0x31777daafca0aac90f1171039735c87d3a933c95b997d34cc4fb2ea323f48ff4";
