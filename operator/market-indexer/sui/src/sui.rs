@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ops::Div;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -116,7 +117,7 @@ impl FromLog for SuiLog {
                     metadata: decoded_data.metadata,
                     rate: U256::from(decoded_data.rate),
                     balance: U256::from(decoded_data.balance),
-                    timestamp: decoded_data.timestamp.saturating_to(),
+                    timestamp: decoded_data.timestamp.div(1000).saturating_to(),
                 })))
             }
             "JobClosed" => {
@@ -144,7 +145,7 @@ impl FromLog for SuiLog {
                 Ok(Some(JobEvent::Settled(events::JobSettled {
                     job_id: decoded_data.job_id.to_string(),
                     amount: U256::from(decoded_data.amount),
-                    timestamp: decoded_data.settled_until_ms.saturating_to(),
+                    timestamp: decoded_data.settled_until_ms.div(1000).saturating_to(),
                 })))
             }
             "JobMetadataUpdated" => {
