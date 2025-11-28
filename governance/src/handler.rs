@@ -132,7 +132,7 @@ async fn hello_handler() -> actix_web::Result<HttpResponse> {
     responses(
         (status = 200, description = "Checks if config is loaded"),
     ),
-    tag = "Config."
+    tag = "Config"
 )]
 async fn is_config_loaded() -> actix_web::Result<HttpResponse> {
     let is_loaded = config::if_config_exists().await.map_err(json_error)?;
