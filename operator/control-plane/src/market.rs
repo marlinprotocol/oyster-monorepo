@@ -60,7 +60,7 @@ pub trait InfraProvider {
         init_params: &[u8],
     ) -> impl Future<Output = Result<()>> + Send;
 
-    fn spin_down(&mut self, job: &JobId, region: &str) -> impl Future<Output = Result<()>> + Send;
+    fn spin_down(&mut self, job: &JobId, region: &str, bandwidth: u64) -> impl Future<Output = Result<()>> + Send;
 
     fn get_job_ip(&self, job: &JobId, region: &str) -> impl Future<Output = Result<String>> + Send;
 
@@ -100,8 +100,8 @@ where
             .await
     }
 
-    async fn spin_down(&mut self, job: &JobId, region: &str) -> Result<()> {
-        (**self).spin_down(job, region).await
+    async fn spin_down(&mut self, job: &JobId, region: &str, bandwidth: u64) -> Result<()> {
+        (**self).spin_down(job, region, bandwidth).await
     }
 
     async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
@@ -592,7 +592,7 @@ struct JobState<'a> {
     original_rate: U256,
     min_rate: U256,
     bandwidth: u64,
-    eif_url: String,
+    eif_url: String, // [Update Note] TODO: Change name of eif
     instance_type: String,
     region: String,
     req_vcpus: i32,
@@ -733,7 +733,7 @@ impl<'a> JobState<'a> {
             true
         } else {
             // terminate mode
-            let res = infra_provider.spin_down(&self.job_id, &self.region).await;
+            let res = infra_provider.spin_down(&self.job_id, &self.region, self.bandwidth).await;
             if let Err(err) = res {
                 error!(?err, "Failed to terminate instance");
                 return false;

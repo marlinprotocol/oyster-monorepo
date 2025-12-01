@@ -167,7 +167,7 @@ impl InfraProvider for TestAws {
         Ok(())
     }
 
-    async fn spin_down(&mut self, job: &JobId, region: &str) -> Result<()> {
+    async fn spin_down(&mut self, job: &JobId, region: &str, bandwidth: u64) -> Result<()> {
         self.outcomes
             .push(TestAwsOutcome::SpinDown(SpinDownOutcome {
                 time: Instant::now(),
