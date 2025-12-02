@@ -33,9 +33,6 @@
       "${nixpkgs}/nixos/modules/profiles/perlless.nix"
       # build as a one-shot appliance since it will never get updated
       "${nixpkgs}/nixos/modules/profiles/image-based-appliance.nix"
-
-      # image.repart support
-      "${nixpkgs}/nixos/modules/image/repart.nix"
     ];
 
     # NOTE: perlless.nix also sets initrd to be systemd based
@@ -70,33 +67,79 @@
       };
     };
 
-    # use image.repart to create the nixos data partition and the dm-verity hash partition
-    # ref: https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/image/repart-verity-store.nix#L92
-    image.repart.name = "store";
-    image.repart.version = "v0.1.0";
-    # image.repart.sectorSize = 4096;
-    image.repart.partitions = {
-      # hash partition
-      "10-store-verity".repartConfig = {
-        Type = "usr-x86-64-verity";
-        Verity = "hash";
-        VerityMatchKey = "store";
-        Label = "store-verity";
-        Minimize = "best";
+    # create the nixos data partition and the dm-verity hash partition
+    # image.repart is the usual way to do this
+    # but it runs into issues because of the use of unshare
+    # hence it is done manually here
+    system.build.image = let
+      # compute a closure over the data that has to be copied onto the image
+      closureInfo = pkgs.closureInfo {
+        rootPaths = [config.system.build.toplevel];
       };
-      # data partition
-      "20-store" = {
-        storePaths = [config.system.build.toplevel];
-        repartConfig = {
-          Type = "usr-x86-64";
-          Format = "erofs";
-          Verity = "data";
-          VerityMatchKey = "store";
-          Label = "store";
-          Minimize = "best";
-        };
-      };
-    };
+
+      # prepare an output that looks like the root filesystem to be copied over
+      populatedRoot =
+        pkgs.runCommand "populated-root" {} ''
+          mkdir -p $out/nix/store
+
+          echo "Populating Nix Store..."
+
+          # read the list of paths and copy them to our output directory
+          # use xargs to handle the potentially long list of paths
+          cat ${closureInfo}/store-paths | xargs -I {} cp -a {} $out/nix/store/
+
+          echo "Populating Top Level..."
+
+          # Copy the toplevel symlinks (bin, etc, init) to the root
+          cp -a ${config.system.build.toplevel}/* $out/
+        '';
+
+      # prepare the partitions
+      repartVerityConf = pkgs.writeText "10-store-verity.conf" ''
+        [Partition]
+        Type=usr-x86-64-verity
+        Label=store-verity
+        Verity=hash
+        VerityMatchKey=store
+        Minimize=best
+      '';
+
+      repartStoreConf = pkgs.writeText "20-store.conf" ''
+        [Partition]
+        Type=usr-x86-64
+        Label=store
+        Format=erofs
+        Verity=data
+        VerityMatchKey=store
+        Minimize=best
+        CopyFiles=${populatedRoot}:/
+      '';
+    in
+      pkgs.runCommand "build-image" {
+        nativeBuildInputs = with pkgs; [
+          systemd
+          erofs-utils
+          fakeroot
+        ];
+      } ''
+        mkdir -p repart.d
+        mkdir -p $out
+
+        # symlink our config files into the directory repart expects
+        ln -s ${repartVerityConf} repart.d/10-store-verity.conf
+        ln -s ${repartStoreConf}  repart.d/20-store.conf
+
+        echo "Building image with systemd-repart..."
+
+        # fakeroot required here to not error out due to root issues
+        fakeroot systemd-repart \
+          --definitions=repart.d \
+          --size=auto \
+          --dry-run=no \
+          --empty=create \
+          --json=pretty \
+          $out/image.raw | tee $out/repart-output.json
+      '';
 
     # disable bash completions
     programs.bash.completion.enable = false;
