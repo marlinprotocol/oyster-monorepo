@@ -94,7 +94,42 @@
           cp -a ${config.system.build.toplevel}/* $out/
         '';
 
+      # create a file for cmdline
+      # this could be done inline, but it is safer to do it this way to account for special characters
+      kernelParamsFile = pkgs.writeText "kernel-params" (toString config.boot.kernelParams);
+
+      # ukify needs this
+      osRelease = pkgs.writeText "os-release" ''
+        ID=marlin
+        NAME=Marlin
+        VERSION_ID="${config.system.image.version}"
+        PRETTY_NAME="Marlin ${config.system.image.version}"
+      '';
+
+      # prepare the UKI
+      uki = pkgs.runCommand "uki" {
+        nativeBuildInputs = [ pkgs.systemdUkify ];
+      } ''
+        ukify build \
+          --linux=${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
+          --initrd=${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile} \
+          --cmdline=@${kernelParamsFile} \
+          --stub=${pkgs.systemd}/lib/systemd/boot/efi/linuxx64.efi.stub \
+          --os-release=@${osRelease} \
+          --output=$out
+      '';
+
       # prepare the partitions
+      repartEspConf = pkgs.writeText "00-esp.conf" ''
+        [Partition]
+        Type=esp
+        Label=ESP
+        Format=vfat
+        SizeMinBytes=64M
+        SizeMaxBytes=128M
+        CopyFiles=${uki}:/EFI/BOOT/BOOTX64.EFI
+      '';
+
       repartVerityConf = pkgs.writeText "10-store-verity.conf" ''
         [Partition]
         Type=usr-x86-64-verity
@@ -118,14 +153,17 @@
       pkgs.runCommand "build-image" {
         nativeBuildInputs = with pkgs; [
           systemd
-          erofs-utils
           fakeroot
+          erofs-utils
+          dosfstools
+          mtools
         ];
       } ''
         mkdir -p repart.d
         mkdir -p $out
 
         # symlink our config files into the directory repart expects
+        ln -s ${repartEspConf} repart.d/00-esp.conf
         ln -s ${repartVerityConf} repart.d/10-store-verity.conf
         ln -s ${repartStoreConf}  repart.d/20-store.conf
 
