@@ -41,6 +41,8 @@
     # TODO: review if this is desirable
     # a lot of things will need to change if not
 
+    # image id
+    system.image.id = "Marlin";
     # image version
     system.image.version = "v0.1.0";
 
