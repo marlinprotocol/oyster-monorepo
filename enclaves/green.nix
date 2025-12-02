@@ -47,7 +47,7 @@
     system.image.version = "v0.1.0";
 
     # state version
-    system.stateVersion = "25.05";
+    system.stateVersion = "25.11";
 
     # forbid dependencies to ensure they truly do not get included
     # mainly to reduce image bloat
