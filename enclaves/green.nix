@@ -66,33 +66,8 @@
       };
     };
 
-    # create the nixos data partition and the dm-verity hash partition
-    # image.repart is the usual way to do this
-    # but it runs into issues because of the use of unshare
-    # hence it is done manually here
-    system.build.image = let
-      # compute a closure over the data that has to be copied onto the image
-      closureInfo = pkgs.closureInfo {
-        rootPaths = [config.system.build.toplevel];
-      };
-
-      # prepare an output that looks like the root filesystem to be copied over
-      populatedRoot =
-        pkgs.runCommand "populated-root" {} ''
-          mkdir -p $out/nix/store
-
-          echo "Populating Nix Store..."
-
-          # read the list of paths and copy them to our output directory
-          # use xargs to handle the potentially long list of paths
-          cat ${closureInfo}/store-paths | xargs -I {} cp -a {} $out/nix/store/
-
-          echo "Populating Top Level..."
-
-          # Copy the toplevel symlinks (bin, etc, init) to the root
-          cp -a ${config.system.build.toplevel}/* $out/
-        '';
-
+    # create the UKI
+    system.build.uki = let
       # create a file for cmdline
       # this could be done inline, but it is safer to do it this way to account for special characters
       kernelParamsFile = pkgs.writeText "kernel-params" (toString config.boot.kernelParams);
@@ -104,18 +79,43 @@
         VERSION_ID="${config.system.image.version}"
         PRETTY_NAME="Marlin ${config.system.image.version}"
       '';
+    in
+      nixpkgs.lib.mkForce (pkgs.runCommand "uki" {
+          nativeBuildInputs = [pkgs.systemdUkify];
+        } ''
+          ukify build \
+            --linux=${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
+            --initrd=${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile} \
+            --cmdline=@${kernelParamsFile} \
+            --stub=${pkgs.systemd}/lib/systemd/boot/efi/linux${systemConfig.efi_arch}.efi.stub \
+            --os-release=@${osRelease} \
+            --output=$out
+        '');
 
-      # prepare the UKI
-      uki = pkgs.runCommand "uki" {
-        nativeBuildInputs = [ pkgs.systemdUkify ];
-      } ''
-        ukify build \
-          --linux=${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
-          --initrd=${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile} \
-          --cmdline=@${kernelParamsFile} \
-          --stub=${pkgs.systemd}/lib/systemd/boot/efi/linux${systemConfig.efi_arch}.efi.stub \
-          --os-release=@${osRelease} \
-          --output=$out
+    # create the nixos data partition and the dm-verity hash partition
+    # image.repart is the usual way to do this
+    # but it runs into issues because of the use of unshare
+    # hence it is done manually here
+    system.build.image = let
+      # compute a closure over the data that has to be copied onto the image
+      closureInfo = pkgs.closureInfo {
+        rootPaths = [config.system.build.toplevel];
+      };
+
+      # prepare an output that looks like the root filesystem to be copied over
+      populatedRoot = pkgs.runCommand "populated-root" {} ''
+        mkdir -p $out/nix/store
+
+        echo "Populating Nix Store..."
+
+        # read the list of paths and copy them to our output directory
+        # use xargs to handle the potentially long list of paths
+        cat ${closureInfo}/store-paths | xargs -I {} cp -a {} $out/nix/store/
+
+        echo "Populating Top Level..."
+
+        # Copy the toplevel symlinks (bin, etc, init) to the root
+        cp -a ${config.system.build.toplevel}/* $out/
       '';
 
       # prepare the partitions
@@ -126,7 +126,7 @@
         Format=vfat
         SizeMinBytes=64M
         SizeMaxBytes=128M
-        CopyFiles=${uki}:/EFI/BOOT/BOOT${systemConfig.efi_boot_arch}.EFI
+        CopyFiles=${config.system.build.uki}:/EFI/BOOT/BOOT${systemConfig.efi_boot_arch}.EFI
       '';
 
       repartVerityConf = pkgs.writeText "10-store-verity.conf" ''
@@ -193,6 +193,7 @@
   };
 in {
   default = nixosSystem.config.system.build.image;
+  uki = nixosSystem.config.system.build.uki;
 }
 #
 # 4.0K	./g2gzfhkhmxf74rm60kqdhry8px8i54gk-user-generators
