@@ -11,6 +11,7 @@ use aws_types::region::Region;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use coldsnap::{SnapshotUploader, SnapshotWaiter};
 use rand_core::OsRng;
+use regex::Regex;
 use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use ssh2::Session;
@@ -217,61 +218,6 @@ impl Aws {
         Ok((stdout, stderr))
     }
 
-    // [UPDATE NOTE] This function is obsolete, no enclaves
-    // pub async fn run_enclave_impl(
-    //     &self,
-    //     job_id: &str,
-    //     family: &str,
-    //     instance_id: &str,
-    //     region: &str,
-    //     image_url: &str,
-    //     req_vcpu: i32,
-    //     req_mem: i64,
-    //     bandwidth: u64,
-    //     debug: bool,
-    //     init_params: &[u8],
-    // ) -> Result<()> {
-    //     if family != "salmon" && family != "tuna" {
-    //         return Err(anyhow!("unsupported image family"));
-    //     }
-
-    //     // make a ssh session
-    //     let public_ip_address = self
-    //         .get_instance_ip(instance_id, region)
-    //         .await
-    //         .context("could not fetch instance ip")?;
-    //     let sess = &self
-    //         .ssh_connect(&(public_ip_address + ":22"))
-    //         .await
-    //         .context("error establishing ssh connection")?;
-
-    //     // set up ephemeral ports for the host
-    //     Self::run_fragment_ephemeral_ports(sess)?;
-    //     // set up nitro enclaves allocator
-    //     Self::run_fragment_allocator(sess, req_vcpu, req_mem)?;
-    //     // download enclave image and perform whitelist/blacklist checks
-    //     self.run_fragment_download_and_check_image(sess, image_url)?;
-    //     // set up bandwidth rate limiting
-    //     Self::run_fragment_bandwidth(sess, bandwidth)?;
-
-    //     if family == "tuna" {
-    //         // set up iptables rules
-    //         Self::run_fragment_iptables_tuna(sess)?;
-    //         // set up job id in the init server
-    //         Self::run_fragment_init_server(sess, job_id, init_params)?;
-    //     } else {
-    //         // set up iptables rules
-    //         Self::run_fragment_iptables_salmon(sess)?;
-    //     }
-
-    //     // set up debug logger if enabled
-    //     Self::run_fragment_logger(sess, debug)?;
-    //     // run the enclave
-    //     Self::run_fragment_enclave(sess, req_vcpu, req_mem, debug)?;
-
-    //     Ok(())
-    // }
-
     /* AWS EC2 UTILITY */
     pub async fn get_instance_public_ip(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
@@ -335,7 +281,6 @@ impl Aws {
             .get_security_group(region)
             .await
             .context("could not get subnet")?;
-        // [UPDATE NOTE] Add user data to launch instance
         Ok(self
             .client(region)
             .await
@@ -781,20 +726,19 @@ impl Aws {
         )
     }
 
-    // [UPDATE NOTE] Associate IP address to secondary IP of gateway VM
     async fn associate_address(
         &self,
         alloc_id: &str,
         region: &str,
         eni_id: &str,
-        sec_id: &str,
+        private_ip: &str,
     ) -> Result<()> {
         self.client(region)
             .await
             .associate_address()
             .allocation_id(alloc_id)
             .network_interface_id(eni_id)
-            .private_ip_address(sec_id)
+            .private_ip_address(private_ip)
             .allow_reassociation(true)
             .send()
             .await
@@ -824,7 +768,6 @@ impl Aws {
         Ok(())
     }
 
-    // [UPDATE NOTE] Spin up instance is only kept, no run enclaves needed
     async fn spin_up_impl(
         &mut self,
         job: &JobId,
@@ -862,7 +805,7 @@ impl Aws {
             }
         }
 
-        // [UPDATE NOTE] Check AMI corresponding to given job. If dosen't exist then check if snapshot exists.
+        // Check AMI corresponding to given job. If dosen't exist then check if snapshot exists.
         // If doesn't exist download image upload as snapshot and register AMI. If snapshot exists register AMI from it.
 
         let (ami_exist, mut ami_id) = self
@@ -1091,30 +1034,8 @@ impl Aws {
         }
 
         Ok(())
-        // [UPDATE NOTE] No enclave deployment needed. Check all the steps in this function if needed
-        // Pick following:
-        // 1. Rate limit configuration
-        // 2. User Data setup
-        // 3. Pick user image
-        // self.run_enclave_impl(
-        //     &job.id,
-        //     family,
-        //     &instance,
-        //     region,
-        //     image_url,
-        //     req_vcpu,
-        //     req_mem,
-        //     bandwidth,
-        //     debug,
-        //     init_params,
-        // )
-        // .await
-        // .context("failed to run enclave")
     }
 
-    // [UPDATE NOTE] New things to add:
-    // 1. Pick AMI corresponding to given image_url
-    // 2. Setup user data
     pub async fn spin_up_instance(
         &self,
         job: &JobId,
@@ -1183,13 +1104,9 @@ impl Aws {
         region: &str,
         bandwidth: u64,
     ) -> Result<()> {
-        // [Update Note] do the networking here
-        // Allocate Elastic IP
-        // Check capacity on existing Rate Limit VM
-        // Create secondary IP on Rate Limit VM
-        // Modifictations on Rate Limit VM with NAT and tc
+        // allocate Elastic IP
+        // select and configure rate limiter
         // associate secondary IP and Elastic IP
-        // Return
         let (alloc_id, ip) = self
             .allocate_ip_addr(job, region)
             .await
@@ -1280,6 +1197,48 @@ impl Aws {
             .to_string())
     }
 
+    pub async fn get_instance_bandwidth_limit(&self, instance_type: InstanceType) -> Result<u64> {
+        let res = self
+            .client("ap-southeast-2")
+            .await
+            .describe_instance_types()
+            .instance_types(instance_type)
+            .send()
+            .await
+            .context("could not describe instance types")?;
+        let mut bandwidth_limit_res: &str = "";
+        let instance_types = res.instance_types();
+        for instance in instance_types {
+            bandwidth_limit_res = instance
+                .network_info()
+                .ok_or(anyhow!("error fetching instance network info"))?
+                .network_performance()
+                .ok_or(anyhow!("error fetching instance network performance"))?;
+            info!(bandwidth_limit_res);
+        }
+        // bandwidth_limit is string like "Up to 12.5 Gigabit", "Up to 10 Gigabit", "10 Gigabit"
+        // We need to parse this string and return bandwidth in bit/sec
+        let re = Regex::new(r"^(?i)(?:Up to\s+)?([\d\.]+)\s+Gigabit$")
+            .context(anyhow!("Failed to initialise bandwidth capturing regular expression"))?;
+        let captures = re
+            .captures(bandwidth_limit_res)
+            .ok_or(anyhow!("Could not parse bandwidth limit from string"))?;
+
+        let bandwidth_limit_str = captures
+            .get(1)
+            .ok_or(anyhow!("Could not capture bandwidth limit value"))?
+            .as_str();
+
+        let value: f64 = bandwidth_limit_str
+            .parse()
+            .context("Could not parse bandwidth limit value to float")?;
+
+        const MULTIPLIER: f64 = 1_000_000_000.0; // Gigabit to bit
+
+        let bandwidth_limit_bps = (value * MULTIPLIER).round() as u64;
+
+        Ok(bandwidth_limit_bps)
+    }
     // TODO: update the route table of user subnet to send traffic via rate limiter instance
     async fn select_rate_limiter(
         &self,
@@ -1323,7 +1282,10 @@ impl Aws {
                     );
                     continue;
                 }
-                let instance_bandwidth_limit: u64 = 10e10 as u64; // TODO fetch from tag or instance metadata
+                let instance_bandwidth_limit = self.get_instance_bandwidth_limit(
+                    instance.instance_type().ok_or(anyhow!("could not parse instance type"))?.clone()
+                ).await
+                .context("could not get instance bandwidth limit")?;
                 for eni in instance.network_interfaces() {
                     
                     if let Some(eni_id) = eni.network_interface_id() {
@@ -1568,24 +1530,13 @@ impl InfraProvider for Aws {
             .context("could not spin down enclave")
     }
 
-    // [UPDATE NOTE] Due to Gateway VM rate limit, instance IP won't be equal to elastic IP. Instead, Gateway VM
-    // secondary IPs are used.
     async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
-        let instance = self
-            .get_job_instance_id(job, region)
-            .await
-            .context("could not get instance id for job instance ip")?;
-
-        if !instance.0 {
-            return Err(anyhow!("Instance not found for job - {}", job.id));
-        }
-
+        
         let (found, _, elastic_ip, _, _, _, _) = self
             .get_job_elastic_ip(job, region, true)
             .await
             .context("could not get job elastic ip")?;
 
-        // It is possible that instance is still initializing and elastic IP is not yet associated
         if found {
             return Ok(elastic_ip);
         }
@@ -1702,5 +1653,52 @@ mod tests {
             !is_running_after_down,
             "Enclave should not be running after spin down"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_bandwidth_limit() {
+        let aws = Aws::new(
+            "cp".to_string(),
+            &["ap-southeast-2".to_string()],
+            "rlgen".to_string(),
+            None,
+            None,
+        )
+        .await;
+        let instance_type = InstanceType::C6aXlarge;
+        let bandwidth_limit_result = aws
+            .get_instance_bandwidth_limit(instance_type)
+            .await;
+        assert!(
+            bandwidth_limit_result.is_ok(),
+            "Get instance bandwidth limit failed: {:?}",
+            bandwidth_limit_result.err()
+        );
+        let bandwidth_limit = bandwidth_limit_result.unwrap();
+        println!("Instance Bandwidth Limit: {} bps", bandwidth_limit);
+
+        let instance_type = InstanceType::M6a12xlarge;
+        let bandwidth_limit_result = aws
+            .get_instance_bandwidth_limit(instance_type)
+            .await;
+        assert!(
+            bandwidth_limit_result.is_ok(),
+            "Get instance bandwidth limit failed: {:?}",
+            bandwidth_limit_result.err()
+        );
+        let bandwidth_limit = bandwidth_limit_result.unwrap();
+        println!("Instance Bandwidth Limit: {} bps", bandwidth_limit);
+
+        let instance_type = InstanceType::M5Xlarge;
+        let bandwidth_limit_result = aws
+            .get_instance_bandwidth_limit(instance_type)
+            .await;
+        assert!(
+            bandwidth_limit_result.is_ok(),
+            "Get instance bandwidth limit failed: {:?}",
+            bandwidth_limit_result.err()
+        );
+        let bandwidth_limit = bandwidth_limit_result.unwrap();
+        println!("Instance Bandwidth Limit: {} bps", bandwidth_limit);
     }
 }
