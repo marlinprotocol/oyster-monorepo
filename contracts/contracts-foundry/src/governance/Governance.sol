@@ -647,6 +647,8 @@ contract Governance is
 
         // Mark the proposal as queued for execution
         executionQueue[_proposalId] = true;
+
+        emit ProposalQueued(_proposalId);
     }
 
     //-------------------------------- Result end --------------------------------//

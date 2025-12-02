@@ -19,6 +19,7 @@ interface IGovernanceEvents is IGovernanceTypes {
     event MinQuorumThresholdSet(uint256 minQuorum);
     event VetoSlashRateSet(uint256 vetoSlashRate);
     event ExpiredProposalRefunded(bytes32 indexed proposalId);
+    event ProposalQueued(bytes32 indexed proposalId);
 
     event DepositLocked(bytes32 indexed proposalId, address token, uint256 amount);
     event DepositRefunded(bytes32 indexed proposalId, address token, uint256 amount);

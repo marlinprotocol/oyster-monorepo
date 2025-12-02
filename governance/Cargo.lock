@@ -1929,6 +1929,7 @@ dependencies = [
  "lock_api",
  "once_cell",
  "openssl",
+ "parking_lot",
  "rand_core 0.6.4",
  "sha2",
  "wasm-bindgen",

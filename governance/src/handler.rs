@@ -302,7 +302,8 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
     Ok(HttpResponse::Ok().json(json!(
         {
             "proposal_id": proposal_id,
-            "encryption_key": format!("0x{}", hex::encode(pk.serialize()))
+            "encryption_key": format!("0x{}", hex::encode(pk.serialize())),
+            "encryption_key_compressed": format!("0x{}", hex::encode(pk.serialize_compressed()))
         }
     )))
 }
@@ -316,14 +317,15 @@ async fn proposal_encryption_key<K: KMS + Send + Sync>(
     tag = "Deprecated"
 )]
 async fn encryption_key<K: KMS + Send + Sync>(kms: Data<K>) -> actix_web::Result<impl Responder> {
-    let pk = kms
+    let pk: EncryptionPublicKey = kms
         .get_persistent_encryption_public_key()
         .await
         .map_err(|e| json_error(format!("encryption key error: {e}")))?;
 
     Ok(HttpResponse::Ok().json(json!(
         {
-            "encryption_key": format!("0x{}", hex::encode(pk.serialize()))
+            "encryption_key": format!("0x{}", hex::encode(pk.serialize())),
+            "encryption_key_compressed": format!("0x{}", hex::encode(pk.serialize_compressed()))
         }
     )))
 }
