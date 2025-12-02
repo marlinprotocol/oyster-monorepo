@@ -73,13 +73,12 @@ in {
     kernelConfig = kernelConfig;
     nsmKo = nsmKo;
     cmdline = (
-      if eifArch == "aarch64" then
-        "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
-      else if eifArch == "x86_64" then
-        builtins.readFile nitro.blobs.${eifArch}.cmdLine
-      else
-        abort "Unsupported architecture '${eifArch}'"
-      );
+      if eifArch == "aarch64"
+      then "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
+      else if eifArch == "x86_64"
+      then builtins.readFile nitro.blobs.${eifArch}.cmdLine
+      else abort "Unsupported architecture '${eifArch}'"
+    );
 
     entrypoint = "/app/setup.sh";
     env = "";

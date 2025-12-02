@@ -2,8 +2,8 @@
   nixpkgs,
   systemConfig,
   supervisord,
-  keygen, 
-  attestation-server-mock, 
+  keygen,
+  attestation-server-mock,
   derive-server-mock,
 }: let
   system = systemConfig.system;
@@ -34,16 +34,15 @@
     cp ${setup} $out/app/setup.sh
     chmod +x $out/app/*
     cp ${supervisorConf} $out/etc/supervisord.conf
-  '';  
-
+  '';
 in {
   default = pkgs.dockerTools.buildImage {
     name = "marlinorg/local-dev-image";
 
     copyToRoot = pkgs.buildEnv {
       name = "image-root";
-      paths = [ app pkgs.docker pkgs.busybox pkgs.cacert ];
-      pathsToLink = ["/bin" "/app" "/etc" "/tmp" ];
+      paths = [app pkgs.docker pkgs.busybox pkgs.cacert];
+      pathsToLink = ["/bin" "/app" "/etc" "/tmp"];
     };
 
     config = {
