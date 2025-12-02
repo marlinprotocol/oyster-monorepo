@@ -114,7 +114,7 @@
           --linux=${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
           --initrd=${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile} \
           --cmdline=@${kernelParamsFile} \
-          --stub=${pkgs.systemd}/lib/systemd/boot/efi/linuxx64.efi.stub \
+          --stub=${pkgs.systemd}/lib/systemd/boot/efi/linux${systemConfig.efi_arch}.efi.stub \
           --os-release=@${osRelease} \
           --output=$out
       '';
@@ -127,12 +127,12 @@
         Format=vfat
         SizeMinBytes=64M
         SizeMaxBytes=128M
-        CopyFiles=${uki}:/EFI/BOOT/BOOTX64.EFI
+        CopyFiles=${uki}:/EFI/BOOT/BOOT${systemConfig.efi_boot_arch}.EFI
       '';
 
       repartVerityConf = pkgs.writeText "10-store-verity.conf" ''
         [Partition]
-        Type=usr-x86-64-verity
+        Type=usr-${systemConfig.repart_arch}-verity
         Label=store-verity
         Verity=hash
         VerityMatchKey=store
@@ -141,7 +141,7 @@
 
       repartStoreConf = pkgs.writeText "20-store.conf" ''
         [Partition]
-        Type=usr-x86-64
+        Type=usr-${systemConfig.repart_arch}
         Label=store
         Format=erofs
         Verity=data
