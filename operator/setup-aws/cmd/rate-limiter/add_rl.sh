@@ -25,13 +25,6 @@ DEVICE_MAC="$3"
 BANDWIDTH="$4"
 INSTANCE_BANDWIDTH="$5"
 
-
-echo "Security IP: $SEC_IP"
-echo "Private IP: $PRIVATE_IP"
-echo "Device MAC: $DEVICE_MAC"
-echo "Bandwidth: $BANDWIDTH"
-echo "Instance Bandwidth Limit: $INSTANCE_BANDWIDTH"
-
 check_and_update_bandwidth() {
     local bandwidth="$1"
     local instance_bandwidth="$2"
