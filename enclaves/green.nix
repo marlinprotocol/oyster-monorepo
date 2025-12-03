@@ -68,10 +68,25 @@
     # set this to tell nix we know what we are doing
     users.allowNoPasswordLogin = true;
 
-    # FIXME: added for now just so the build works
+    # NOTE: ideally I would like a direct overlay mount on /
+    # does not work for whatever reason, go with /usr mount for now
+    # it also means we might need to bind mount other paths later
+    # ref: https://github.com/aws/nitrotpm-attestation-samples/blob/main/nix/image/verity.nix#L19
     fileSystems = {
       "/" = {
         fsType = "tmpfs";
+        options = ["mode=0755"];
+      };
+
+      "/usr" = {
+        device = "/dev/mapper/usr";
+        options = ["ro"];
+        fsType = "erofs";
+      };
+
+      "/nix/store" = {
+        device = "/usr/nix/store";
+        options = ["bind"];
       };
     };
 
