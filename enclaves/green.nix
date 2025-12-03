@@ -1,12 +1,5 @@
 # goal: build as minimal an image as possible
 #
-# broadly, we aim to build
-# - a bzImage for the kernel
-# - an initrd for the initial ramdisk
-# - a .raw file for the real disk
-# the initrd is more or less a necessary step for bootstrapping
-# since we want the real disk to be verified and/or encrypted in some fashion
-#
 # Green images are supposed to have
 # - a known constant starting point
 # - temporary writable state
@@ -16,6 +9,12 @@
 # - a read only boot disk
 # - dm-verity to verify the disk
 # - a writable overlay on top in memory
+#
+# broadly, we aim to build a .raw file with
+# - a GPT partition table
+# - an esp partition with a unified kernel image (UKI)
+# - a verity partition to hold dm-verity info
+# - a data partition
 {
   nixpkgs,
   systemConfig,
@@ -44,7 +43,7 @@
     # ensure the setup is according to that
 
     # image id
-    system.image.id = "Marlin";
+    system.image.id = "marlin";
     # image version
     system.image.version = "v0.1.0";
 
