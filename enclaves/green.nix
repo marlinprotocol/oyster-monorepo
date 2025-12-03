@@ -189,23 +189,31 @@
     image.repart.version = "v0.1.0";
     # image.repart.sectorSize = 4096;
     image.repart.partitions = {
+      # esp partition
+      "00-esp".repartConfig = {
+        Label = "esp";
+        Type = "esp";
+        Format = "vfat";
+        SizeMinBytes = "128M";
+        SizeMaxBytes = "128M";
+      };
       # hash partition
       "10-store-verity".repartConfig = {
+        Label = "store-verity";
         Type = "usr-x86-64-verity";
         Verity = "hash";
         VerityMatchKey = "store";
-        Label = "store-verity";
         Minimize = "best";
       };
       # data partition
       "20-store" = {
         storePaths = [config.system.build.toplevel];
         repartConfig = {
+          Label = "store";
           Type = "usr-x86-64";
           Format = "erofs";
           Verity = "data";
           VerityMatchKey = "store";
-          Label = "store";
           Minimize = "best";
         };
       };
