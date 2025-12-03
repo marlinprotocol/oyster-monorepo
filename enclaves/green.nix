@@ -241,7 +241,8 @@
     modules = [nixosConfig];
   };
 in {
-  default = nixosSystem.config.system.build.image;
+  # why finalImage -_-
+  default = nixosSystem.config.system.build.finalImage;
   uki = nixosSystem.config.system.build.uki;
 }
 #
