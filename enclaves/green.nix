@@ -239,6 +239,21 @@
     security.sudo.enable = false;
     # disable pam_p11 module
     security.pam.p11.enable = false;
+
+    # extra kernel params
+    # ref: https://github.com/aws/nitrotpm-attestation-samples/blob/main/nix/image/verity.nix#L82
+    boot.kernelParams = [
+      "panic=30"
+      "boot.panic_on_fail" # reboot the machine upon fatal boot issues
+      "lockdown=1"
+      "console=ttyS0,115200n8"
+      "console=tty0"
+      "random.trust_cpu=on"
+      "systemd.verity=1"
+      "systemd.verity_root_options=panic-on-corruption"
+      "tpm_crb.force=1"
+      "systemd.gpt_auto=0" # Disable systemd-gpt-auto-generator to prevent e.g. ESP mounting
+    ];
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
