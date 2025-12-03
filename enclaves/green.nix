@@ -128,7 +128,7 @@
         Format=vfat
         SizeMinBytes=64M
         SizeMaxBytes=128M
-        CopyFiles=${config.system.build.uki}:/EFI/BOOT/BOOT${systemConfig.efi_boot_arch}.EFI
+        CopyFiles=${config.system.build.uki}:/EFI/BOOT/BOOT${systemConfig.efi_arch}.EFI
       '';
 
       repartVerityConf = pkgs.writeText "10-store-verity.conf" ''

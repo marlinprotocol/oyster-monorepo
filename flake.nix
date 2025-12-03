@@ -272,7 +272,6 @@
           eif_arch = "x86_64";
           static = false;
           efi_arch = "x64";
-          efi_boot_arch = "X64";
           repart_arch = "x86-64";
         };
         musl = systemBuilder {
@@ -281,7 +280,6 @@
           eif_arch = "x86_64";
           static = true;
           efi_arch = "x64";
-          efi_boot_arch = "X64";
           repart_arch = "x86-64";
         };
         default = musl;
@@ -293,7 +291,6 @@
           eif_arch = "aarch64";
           static = false;
           efi_arch = "aa64";
-          efi_boot_arch = "AA64";
           repart_arch = "arm64";
         };
         musl = systemBuilder {
@@ -302,7 +299,6 @@
           eif_arch = "aarch64";
           static = true;
           efi_arch = "aa64";
-          efi_boot_arch = "AA64";
           repart_arch = "arm64";
         };
         default = musl;
@@ -314,7 +310,6 @@
           eif_arch = "aarch64";
           static = false;
           efi_arch = "aa64";
-          efi_boot_arch = "AA64";
           repart_arch = "arm64";
         };
         # TODO: Figure out how to organize this properly
@@ -324,7 +319,6 @@
           eif_arch = "aarch64";
           static = false;
           efi_arch = "aa64";
-          efi_boot_arch = "AA64";
           repart_arch = "arm64";
         };
         default = musl;
