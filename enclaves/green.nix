@@ -218,6 +218,14 @@
         };
       };
     };
+    # use verityStore to populate the esp partition
+    image.repart.verityStore = {
+      # enable it
+      enable = true;
+      # use a different placement path than the default of verityStore
+      # TODO: check if this is needed in prod
+      ukiPath = "/EFI/BOOT/BOOT${systemConfig.efi_arch}.EFI";
+    };
 
     # disable bash completions
     programs.bash.completion.enable = false;
