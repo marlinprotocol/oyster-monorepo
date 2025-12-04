@@ -1112,7 +1112,7 @@ impl Aws {
             .await
             .context("error allocating ip address")?;
         info!(ip, "Elastic Ip allocated");
-        
+
         let (sec_ip, eni_id) = self
             .select_rate_limiter(region, bandwidth, instance_id)
             .await
@@ -1287,7 +1287,7 @@ impl Aws {
                 ).await
                 .context("could not get instance bandwidth limit")?;
                 for eni in instance.network_interfaces() {
-                    
+
                     if let Some(eni_id) = eni.network_interface_id() {
                         let Some(eni_mac) = eni.mac_address() else {
                             debug!(
@@ -1320,7 +1320,7 @@ impl Aws {
                                     .private_ip_address()
                                     .ok_or(anyhow!("no private ip address found"))?
                                     .to_string();
-                                
+
                                 // RL IP, secondary IP,
                                 if self.configure_rate_limiter(
                                     instance_id,
@@ -1354,7 +1354,7 @@ impl Aws {
                         }
                     }
                 }
-                
+
             }
         }
         Err(anyhow!(
@@ -1381,6 +1381,49 @@ impl Aws {
             .await
             .context("failed to terminate instance")?;
 
+        self.deregister_ami(job, region).await.context("failed to deregister ami")?;
+        self.delete_snapshot(job, region)
+            .await
+            .context("failed to delete snapshot")?;
+
+        Ok(())
+    }
+
+    async fn deregister_ami(&self, job: &JobId, region: &str) -> Result<()> {
+        let (ami_exist, ami_id) = self
+            .get_job_ami_id(job, region)
+            .await
+            .context("failed to get job ami")?;
+        if !ami_exist {
+            return Ok(());
+        }
+        self.client(region)
+            .await
+            .deregister_image()
+            .image_id(ami_id)
+            .send()
+            .await
+            .context("could not deregister ami")?;
+        Ok(())
+    }
+
+    async fn delete_snapshot(&self, job: &JobId, region: &str) -> Result<()> {
+        let (ss_exist, snapshot_id) = self
+            .get_job_snapshot_id(job, region)
+            .await
+            .context("failed to get job snapshot")?;
+        if !ss_exist {
+            info!("No snapshot to delete");
+            return Ok(());
+        }
+        info!(snapshot_id, "Deleting snapshot");
+        self.client(region)
+            .await
+            .delete_snapshot()
+            .snapshot_id(snapshot_id)
+            .send()
+            .await
+            .context("could not delete snapshot")?;
         Ok(())
     }
 
@@ -1451,7 +1494,7 @@ impl Aws {
         Ok(())
     }
 
-    // TODO: handle all error cases, continue cleanup even if some steps fail or will it be retried later? 
+    // TODO: handle all error cases, continue cleanup even if some steps fail or will it be retried later?
     async fn spin_down_instance(
         &self,
         instance_id: &str,
@@ -1463,7 +1506,7 @@ impl Aws {
             .get_job_elastic_ip(job, region, true)
             .await
             .context("could not get elastic ip of job")?;
-        
+
         if exist {
             self.disassociate_address(association_id.as_str(), region)
                 .await
@@ -1475,7 +1518,7 @@ impl Aws {
             let private_ip = self.get_instance_private_ip(instance_id, region)
                 .await
                 .context("could not get private ip of instance")?;
-            
+
             self.remove_rate_limiter_config(&rl_instance_id, &sec_ip, &private_ip, &eni_mac, bandwidth)
                 .await
                 .context("could not remove rate limiter config")?;
@@ -1489,7 +1532,7 @@ impl Aws {
                 .context("could not release address")?;
             info!("Elastic IP released");
         }
-        
+
         self.terminate_instance(instance_id, region)
             .await
             .context("could not terminate instance")?;
@@ -1531,7 +1574,7 @@ impl InfraProvider for Aws {
     }
 
     async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
-        
+
         let (found, _, elastic_ip, _, _, _, _) = self
             .get_job_elastic_ip(job, region, true)
             .await
@@ -1577,7 +1620,7 @@ mod tests {
             .with_max_level(tracing::Level::INFO)
             .with_env_filter(filter)
             .init();
-        
+
         let mut aws = Aws::new(
             "cp".to_string(),
             &["ap-southeast-2".to_string()],
