@@ -106,7 +106,7 @@
       # hash partition
       "10-store-verity".repartConfig = {
         Label = "store-verity";
-        Type = "usr-x86-64-verity";
+        Type = "usr-${systemConfig.repart_arch}-verity";
         Verity = "hash";
         VerityMatchKey = "store";
         Minimize = "best";
@@ -116,7 +116,7 @@
         storePaths = [config.system.build.toplevel];
         repartConfig = {
           Label = "store";
-          Type = "usr-x86-64";
+          Type = "usr-${systemConfig.repart_arch}";
           Format = "erofs";
           Verity = "data";
           VerityMatchKey = "store";
