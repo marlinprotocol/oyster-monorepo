@@ -17,6 +17,10 @@ for link in $links; do
     table_id=$((table_id + 1))
 done
 
+# There is a bug that after tc qdisc add, systemd-networkd restarts and removes the routes. We wait for 2 seconds and
+# then add the routes
+sleep 2
+
 for link in $links; do
     gateway_ip=$(ip route show dev "$link" default | awk '{print $3}')
     while [ -z "$gateway_ip" ]; do

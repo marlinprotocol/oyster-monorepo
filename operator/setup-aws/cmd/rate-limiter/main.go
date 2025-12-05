@@ -140,6 +140,33 @@ EOF`)
 	// Enable IP forwarding
 	RunCommand(client, "echo \"net.ipv4.ip_forward = 1\" | sudo tee /etc/sysctl.d/99-ip-forward.conf")
 
+	// Add uplink setup script and service
+	connect.TransferFile(
+		client.Config,
+		publicIP,
+		"./cmd/rate-limiter/uplink_setup.sh",
+		"/home/ubuntu/uplink_setup.sh",
+	)
+
+	RunCommand(client, "sudo mv /home/ubuntu/uplink_setup.sh /usr/local/sbin/uplink_setup.sh")
+
+	RunCommand(client, `cat <<EOF | sudo tee /etc/systemd/system/uplink-setup.service > /dev/null
+[Unit]
+Description=Uplink tc qdisc and route table setup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/uplink_setup.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF`)
+
+	RunCommand(client, "sudo systemctl daemon-reload")
+	RunCommand(client, "sudo systemctl enable uplink-setup.service")
+
 	// Remove ssh authorized keys
 	RunCommand(client, "sudo rm /home/ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys")
 
