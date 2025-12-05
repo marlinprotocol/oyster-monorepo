@@ -89,8 +89,9 @@ impl ChainAdapter for SuiAdapter {
             client = client.with_headers(headers);
         }
 
-        let (user_wallet, address) =
-            decode_wallet_key(wallet_private_key).context("Failed to initialize user wallet")?;
+        let (user_wallet, address) = self
+            .decode_wallet_key(wallet_private_key)
+            .context("Failed to initialize user wallet")?;
 
         self.sender_address = Some(address);
 
@@ -484,7 +485,7 @@ impl ChainAdapter for SuiAdapter {
         let mut client = provider.client.clone();
 
         let transaction = ChainTransaction::Sui(Box::new(
-            kind_to_transaction(&mut client, transaction_kind, sender, self.gas_coin_id)
+            self.kind_to_transaction(&mut client, transaction_kind, sender, self.gas_coin_id)
                 .await
                 .context("Failed to build merge coin transaction for USDC fund")?,
         ));
@@ -816,7 +817,8 @@ impl ChainAdapter for SuiAdapter {
         let mut client = provider.client.clone();
 
         Ok(ChainTransaction::Sui(Box::new(
-            kind_to_transaction(&mut client, transaction_kind, sender, self.gas_coin_id).await?,
+            self.kind_to_transaction(&mut client, transaction_kind, sender, self.gas_coin_id)
+                .await?,
         )))
     }
 
@@ -912,136 +914,87 @@ impl ChainAdapter for SuiAdapter {
     }
 }
 
-fn decode_wallet_key(value: &str) -> Result<(SimpleKeypair, Address)> {
-    let bytes = if value.starts_with(SUI_PRIV_KEY_PREFIX) {
-        let (parsed, data) =
-            bech32::decode(value).context("Failed to bech32 decode the wallet key")?;
-        if parsed.as_str() != SUI_PRIV_KEY_PREFIX {
-            return Err(anyhow!("Invalid bech32 wallet key"));
-        }
-        data
-    } else {
-        general_purpose::STANDARD
-            .decode(value)
-            .context("Failed to base64 decode the wallet key")?
-    };
-
-    match SignatureScheme::from_byte(
-        bytes
-            .first()
-            .ok_or_else(|| anyhow!("Invalid length"))?
-            .to_owned(),
-    ) {
-        Ok(x) => match x {
-            SignatureScheme::Ed25519 => {
-                let key = Ed25519PrivateKey::new(
-                    bytes
-                        .get(1..)
-                        .ok_or_else(|| anyhow!("Invalid length"))?
-                        .try_into()?,
-                );
-                let address = key.public_key().derive_address();
-
-                Ok((SimpleKeypair::from(key), address))
+impl SuiAdapter {
+    fn decode_wallet_key(&self, value: &str) -> Result<(SimpleKeypair, Address)> {
+        let bytes = if value.starts_with(SUI_PRIV_KEY_PREFIX) {
+            let (parsed, data) =
+                bech32::decode(value).context("Failed to bech32 decode the wallet key")?;
+            if parsed.as_str() != SUI_PRIV_KEY_PREFIX {
+                return Err(anyhow!("Invalid bech32 wallet key"));
             }
-            SignatureScheme::Secp256k1 => {
-                let key = Secp256k1PrivateKey::new(
-                    bytes
-                        .get(1..)
-                        .ok_or_else(|| anyhow!("Invalid length"))?
-                        .try_into()?,
-                )
-                .context("Invalid key bytes")?;
-                let address = key.public_key().derive_address();
+            data
+        } else {
+            general_purpose::STANDARD
+                .decode(value)
+                .context("Failed to base64 decode the wallet key")?
+        };
 
-                Ok((SimpleKeypair::from(key), address))
-            }
-            SignatureScheme::Secp256r1 => {
-                let key = Secp256r1PrivateKey::new(
-                    bytes
-                        .get(1..)
-                        .ok_or_else(|| anyhow!("Invalid length"))?
-                        .try_into()?,
-                );
-                let address = key.public_key().derive_address();
+        match SignatureScheme::from_byte(
+            bytes
+                .first()
+                .ok_or_else(|| anyhow!("Invalid length"))?
+                .to_owned(),
+        ) {
+            Ok(x) => match x {
+                SignatureScheme::Ed25519 => {
+                    let key = Ed25519PrivateKey::new(
+                        bytes
+                            .get(1..)
+                            .ok_or_else(|| anyhow!("Invalid length"))?
+                            .try_into()?,
+                    );
+                    let address = key.public_key().derive_address();
 
-                Ok((SimpleKeypair::from(key), address))
-            }
-            _ => Err(anyhow!("Invalid flag byte")),
-        },
+                    Ok((SimpleKeypair::from(key), address))
+                }
+                SignatureScheme::Secp256k1 => {
+                    let key = Secp256k1PrivateKey::new(
+                        bytes
+                            .get(1..)
+                            .ok_or_else(|| anyhow!("Invalid length"))?
+                            .try_into()?,
+                    )
+                    .context("Invalid key bytes")?;
+                    let address = key.public_key().derive_address();
 
-        _ => Err(anyhow!("Invalid bytes")),
-    }
-}
+                    Ok((SimpleKeypair::from(key), address))
+                }
+                SignatureScheme::Secp256r1 => {
+                    let key = Secp256r1PrivateKey::new(
+                        bytes
+                            .get(1..)
+                            .ok_or_else(|| anyhow!("Invalid length"))?
+                            .try_into()?,
+                    );
+                    let address = key.public_key().derive_address();
 
-async fn kind_to_transaction(
-    client: &mut Client,
-    transaction_kind: TransactionKind,
-    sender: Address,
-    gas_coin_id: Option<Address>,
-) -> Result<Transaction> {
-    let gas_price = client
-        .get_reference_gas_price()
-        .await
-        .context("Failed to fetch reference gas price")?;
-
-    if let Some(gas_coin) = gas_coin_id {
-        let coin_object = client
-            .ledger_client()
-            .get_object(
-                GetObjectRequest::const_default()
-                    .with_object_id(gas_coin)
-                    .with_read_mask(FieldMask {
-                        paths: vec![
-                            "balance".into(),
-                            "object_id".into(),
-                            "version".into(),
-                            "digest".into(),
-                        ],
-                    }),
-            )
-            .await?
-            .into_inner()
-            .object
-            .ok_or_else(|| anyhow!("Failed to retrieve details about the provided gas coin"))?;
-
-        let budget = min(coin_object.balance(), MAX_GAS_BUDGET);
-        let gas = ObjectReference::new(
-            gas_coin,
-            coin_object.version(),
-            Digest::from_str(coin_object.digest())?,
-        );
-
-        return Ok(Transaction {
-            kind: transaction_kind,
-            sender,
-            gas_payment: GasPayment {
-                objects: vec![gas],
-                owner: sender,
-                price: gas_price,
-                budget,
+                    Ok((SimpleKeypair::from(key), address))
+                }
+                _ => Err(anyhow!("Invalid flag byte")),
             },
-            expiration: TransactionExpiration::None,
-        });
+
+            _ => Err(anyhow!("Invalid bytes")),
+        }
     }
 
-    match estimate_gas(client, transaction_kind.clone(), sender).await {
-        Ok(gas_payment) => Ok(Transaction {
-            kind: transaction_kind,
-            sender,
-            gas_payment,
-            expiration: TransactionExpiration::None,
-        }),
-        Err(err) => {
-            error!("Failed to estimate gas for the transaction: {}", err);
-            let coin_type = "0x2::coin::Coin<0x2::sui::SUI>";
+    pub async fn kind_to_transaction(
+        &self,
+        client: &mut Client,
+        transaction_kind: TransactionKind,
+        sender: Address,
+        gas_coin_id: Option<Address>,
+    ) -> Result<Transaction> {
+        let gas_price = client
+            .get_reference_gas_price()
+            .await
+            .context("Failed to fetch reference gas price")?;
 
-            let objects = client
-                .state_client()
-                .list_owned_objects(
-                    ListOwnedObjectsRequest::const_default()
-                        .with_owner(sender)
-                        .with_object_type(coin_type)
+        if let Some(gas_coin) = gas_coin_id {
+            let coin_object = client
+                .ledger_client()
+                .get_object(
+                    GetObjectRequest::const_default()
+                        .with_object_id(gas_coin)
                         .with_read_mask(FieldMask {
                             paths: vec![
                                 "balance".into(),
@@ -1053,72 +1006,128 @@ async fn kind_to_transaction(
                 )
                 .await?
                 .into_inner()
-                .objects;
+                .object
+                .ok_or_else(|| anyhow!("Failed to retrieve details about the provided gas coin"))?;
 
-            let max_gas_object = objects
-                .iter()
-                .max_by_key(|obj| obj.balance())
-                .ok_or_else(|| anyhow!("No sui gas coins found for the owner"))?;
+            let budget = min(coin_object.balance(), MAX_GAS_BUDGET);
+            let gas = ObjectReference::new(
+                gas_coin,
+                coin_object.version(),
+                Digest::from_str(coin_object.digest())?,
+            );
 
-            Ok(Transaction {
+            return Ok(Transaction {
                 kind: transaction_kind,
                 sender,
                 gas_payment: GasPayment {
-                    objects: vec![ObjectReference::new(
-                        Address::from_str(max_gas_object.object_id())?,
-                        max_gas_object.version(),
-                        Digest::from_str(max_gas_object.digest())?,
-                    )],
+                    objects: vec![gas],
                     owner: sender,
                     price: gas_price,
-                    budget: min(max_gas_object.balance(), MAX_GAS_BUDGET),
+                    budget,
                 },
                 expiration: TransactionExpiration::None,
-            })
+            });
+        }
+
+        match self
+            .estimate_gas(client, transaction_kind.clone(), sender)
+            .await
+        {
+            Ok(gas_payment) => Ok(Transaction {
+                kind: transaction_kind,
+                sender,
+                gas_payment,
+                expiration: TransactionExpiration::None,
+            }),
+            Err(err) => {
+                error!("Failed to estimate gas for the transaction: {}", err);
+                let coin_type = "0x2::coin::Coin<0x2::sui::SUI>";
+
+                let objects = client
+                    .state_client()
+                    .list_owned_objects(
+                        ListOwnedObjectsRequest::const_default()
+                            .with_owner(sender)
+                            .with_object_type(coin_type)
+                            .with_read_mask(FieldMask {
+                                paths: vec![
+                                    "balance".into(),
+                                    "object_id".into(),
+                                    "version".into(),
+                                    "digest".into(),
+                                ],
+                            }),
+                    )
+                    .await?
+                    .into_inner()
+                    .objects;
+
+                let max_gas_object = objects
+                    .iter()
+                    .max_by_key(|obj| obj.balance())
+                    .ok_or_else(|| anyhow!("No sui gas coins found for the owner"))?;
+
+                Ok(Transaction {
+                    kind: transaction_kind,
+                    sender,
+                    gas_payment: GasPayment {
+                        objects: vec![ObjectReference::new(
+                            Address::from_str(max_gas_object.object_id())?,
+                            max_gas_object.version(),
+                            Digest::from_str(max_gas_object.digest())?,
+                        )],
+                        owner: sender,
+                        price: gas_price,
+                        budget: min(max_gas_object.balance(), MAX_GAS_BUDGET),
+                    },
+                    expiration: TransactionExpiration::None,
+                })
+            }
         }
     }
-}
 
-async fn estimate_gas(
-    client: &mut Client,
-    transaction_kind: TransactionKind,
-    sender: Address,
-) -> Result<GasPayment> {
-    let simulate_response = client
-        .execution_client()
-        .simulate_transaction(
-            SimulateTransactionRequest::const_default()
-                .with_transaction(
-                    TransactionProto::const_default()
-                        .with_kind(transaction_kind)
-                        .with_sender(sender),
-                )
-                .with_do_gas_selection(true),
-        )
-        .await?
-        .into_inner();
-    let gas_payment = simulate_response
-        .transaction
-        .ok_or_else(|| anyhow!("Executed transaction not found in simulation response!"))?
-        .transaction
-        .ok_or_else(|| anyhow!("Transaction field empty in the simulation response!"))?
-        .gas_payment
-        .ok_or_else(|| anyhow!("Gas payment field empty in the simulation response"))?;
+    async fn estimate_gas(
+        &self,
+        client: &mut Client,
+        transaction_kind: TransactionKind,
+        sender: Address,
+    ) -> Result<GasPayment> {
+        let simulate_response = client
+            .execution_client()
+            .simulate_transaction(
+                SimulateTransactionRequest::const_default()
+                    .with_transaction(
+                        TransactionProto::const_default()
+                            .with_kind(transaction_kind)
+                            .with_sender(sender),
+                    )
+                    .with_do_gas_selection(true),
+            )
+            .await?
+            .into_inner();
+        let gas_payment = simulate_response
+            .transaction
+            .ok_or_else(|| anyhow!("Executed transaction not found in simulation response!"))?
+            .transaction
+            .ok_or_else(|| anyhow!("Transaction field empty in the simulation response!"))?
+            .gas_payment
+            .ok_or_else(|| anyhow!("Gas payment field empty in the simulation response"))?;
 
-    Ok(GasPayment {
-        objects: gas_payment
-            .objects
-            .iter()
-            .map(|obj| {
-                Ok(ObjectReference::new(
-                    Address::from_str(obj.object_id())?,
-                    obj.version(),
-                    Digest::from_str(obj.digest())?,
-                ))
-            })
-            .collect::<Result<Vec<ObjectReference>>>()?,
-        owner: sender,
-        price: gas_payment.price(),
-        budget: min(gas_payment.budget() + GAS_BUDGET_BUFFER, MAX_GAS_BUDGET),
-    })
+        Ok(GasPayment {
+            objects: gas_payment
+                .objects
+                .iter()
+                .map(|obj| {
+                    Ok(ObjectReference::new(
+                        Address::from_str(obj.object_id())?,
+                        obj.version(),
+                        Digest::from_str(obj.digest())?,
+                    ))
+                })
+                .collect::<Result<Vec<ObjectReference>>>()?,
+            owner: sender,
+            price: gas_payment.price(),
+            budget: min(gas_payment.budget() + GAS_BUDGET_BUFFER, MAX_GAS_BUDGET),
+        })
+    }
 }

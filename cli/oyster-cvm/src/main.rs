@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use commands::{
     build::BuildArgs, deploy::DeployArgs, deposit::DepositArgs, derive::KmsDeriveArgs,
     doctor::DoctorArgs, image_id::ImageArgs, kms_contract::KmsContractArgs, list::ListArgs,
-    log::LogArgs, simulate::SimulateArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs,
+    log::LogArgs, register::RegisterArgs, simulate::SimulateArgs, stop::StopArgs, update::UpdateArgs, upload::UploadArgs,
     verify::VerifyArgs, withdraw::WithdrawArgs,
 };
 
@@ -49,6 +49,7 @@ enum Commands {
     ComputeImageId(ImageArgs),
     KmsDerive(KmsDeriveArgs),
     KmsContract(KmsContractArgs),
+    Register(RegisterArgs),
 }
 
 #[tokio::main]
@@ -73,6 +74,7 @@ async fn main() -> Result<()> {
         Commands::ComputeImageId(args) => commands::image_id::compute_image_id(args),
         Commands::KmsDerive(args) => commands::derive::kms_derive(args).await,
         Commands::KmsContract(args) => commands::kms_contract::kms_contract(args).await,
+        Commands::Register(args) => commands::register::register_oyster_instance(args).await,
     };
 
     if let Err(e) = result {
