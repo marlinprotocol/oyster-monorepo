@@ -68,6 +68,17 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
         BigDecimal::from_str(&vote_deadline.to_string())?,
     );
 
+    // Convert arrays for database storage
+    let targets: Vec<String> = targets.iter().map(|addr| addr.to_checksum(None)).collect();
+    let values: Vec<BigDecimal> = values
+        .iter()
+        .map(|v| BigDecimal::from_str(&v.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let calldatas: Vec<String> = calldatas
+        .iter()
+        .map(|bytes| bytes.encode_hex_with_prefix())
+        .collect();
+
     info!(
         ?proposal_id,
         ?proposer,
@@ -86,13 +97,16 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
     );
 
     // target sql:
-    // INSERT INTO proposals (id, proposer, nonce, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time, outcome)
-    // VALUES ("<id>", NULL, "<proposer>", "<nonce>", "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>", "PENDING");
+    // INSERT INTO proposals (id, proposer, nonce, targets, values, calldatas, title, description, tx_hash, executed, proposal_created_at, proposal_end_time, voting_start_time, voting_end_time, outcome)
+    // VALUES ("<id>", "<proposer>", "<nonce>", ARRAY["<targets>"], ARRAY["<values>"], ARRAY["<calldatas>"], "<title>", "<description>", "<tx_hash>", "<executed>", "<start_timestamp>", "<proposal_deadline>", "<vote_activation_timestamp>", "<vote_deadline>", "PENDING");
     diesel::insert_into(proposals::table)
         .values((
             proposals::id.eq(&proposal_id),
             proposals::proposer.eq(&proposer),
             proposals::nonce.eq(&nonce),
+            proposals::targets.eq(&targets),
+            proposals::values.eq(&values),
+            proposals::calldatas.eq(&calldatas),
             proposals::title.eq(&title),
             proposals::description.eq(&description),
             proposals::tx_hash.eq(&tx_hash),
@@ -129,6 +143,7 @@ pub fn handle_proposal_created(conn: &mut PgConnection, log: Log) -> Result<()> 
 mod test {
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::Proposal;
     use alloy::{primitives::LogData, rpc::types::Log};
     use diesel::prelude::*;
     use diesel::RunQueryDsl;
@@ -165,7 +180,7 @@ mod test {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                   (12, Vec::<Address>::new(), Vec::<U256>::new(), Vec::<Bytes>::new(), 
+                   (12, vec!["0x1111111111111111111111111111111111111111".parse::<Address>()?, "0x2222222222222222222222222222222222222222".parse::<Address>()?], vec!["1".parse::<U256>()?, "2".parse::<U256>()?], Vec::<Bytes>::new(), 
                    "some title".as_bytes().to_vec(), "some description".as_bytes().to_vec(), (3, 4, 5, 6)
                 ).abi_encode_sequence().into(),
                 )
@@ -179,21 +194,30 @@ mod test {
         // checks
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(3),
-                BigDecimal::from(6),
-                BigDecimal::from(4),
-                BigDecimal::from(5),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: vec![
+                    "0x1111111111111111111111111111111111111111".to_owned(),
+                    "0x2222222222222222222222222222222222222222".to_owned()
+                ],
+                values: vec![BigDecimal::from(1), BigDecimal::from(2)],
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(3),
+                proposal_end_time: BigDecimal::from(6),
+                voting_start_time: BigDecimal::from(4),
+                voting_end_time: BigDecimal::from(5),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         Ok(())
@@ -201,7 +225,6 @@ mod test {
 
     #[test]
     fn test_proposal_created_in_populated_db() -> Result<()> {
-
         let mut db = TestDb::new();
         let conn = &mut db.conn;
 
@@ -209,9 +232,13 @@ mod test {
 
         diesel::insert_into(proposals::table)
             .values((
-                proposals::id.eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                proposals::id
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 proposals::proposer.eq("0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"),
                 proposals::nonce.eq(BigDecimal::from(12)),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::title.eq("some title"),
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
@@ -227,21 +254,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         let log = Log {
@@ -264,7 +297,7 @@ mod test {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                   (14, Vec::<Address>::new(), Vec::<U256>::new(), Vec::<Bytes>::new(), 
+                   (14, vec!["0x1111111111111111111111111111111111111111".parse::<Address>()?, "0x2222222222222222222222222222222222222222".parse::<Address>()?], vec!["1".parse::<U256>()?, "2".parse::<U256>()?], Vec::<Bytes>::new(),
                    "new title".as_bytes().to_vec(), "new description".as_bytes().to_vec(), (7, 8, 9, 10)
                 ).abi_encode_sequence().into(),
                 )
@@ -278,37 +311,52 @@ mod test {
         // checks
         assert_eq!(proposals::table.count().get_result(conn), Ok(2));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).order_by(proposals::id).load(conn),
-            Ok(vec![
-                (
-                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                    BigDecimal::from(12),
-                    "some title".to_owned(),
-                    "some description".to_owned(),
-                    keccak256!("some tx").encode_hex_with_prefix(),
-                    false,
-                    BigDecimal::from(1),
-                    BigDecimal::from(4),
-                    BigDecimal::from(2),
-                    BigDecimal::from(3),
-                    ResultOutcome::Pending,
-                ),
-                (
-                    "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
-                    "0xccBcCCCCCCcCCCcCcCcCcCcccCccCCccccccCCcC".to_owned(),
-                    BigDecimal::from(14),
-                    "new title".to_owned(),
-                    "new description".to_owned(),
-                    keccak256!("txn hash").encode_hex_with_prefix(),
-                    false,
-                    BigDecimal::from(7),
-                    BigDecimal::from(10),
-                    BigDecimal::from(8),
-                    BigDecimal::from(9),
-                    ResultOutcome::Pending,
-                )
-            ])
+            proposals::table
+                .select(Proposal::as_select())
+                .order_by(proposals::id)
+                .load(conn)
+                .unwrap(),
+            vec![
+                Proposal {
+                    id: "0x3333333333333333333333333333333333333333333333333333333333333333"
+                        .to_owned(),
+                    proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                    nonce: BigDecimal::from(12),
+                    targets: Vec::<String>::new(),
+                    values: Vec::<BigDecimal>::new(),
+                    calldatas: Vec::<String>::new(),
+                    title: "some title".to_owned(),
+                    description: "some description".to_owned(),
+                    tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                    executed: false,
+                    proposal_created_at: BigDecimal::from(1),
+                    proposal_end_time: BigDecimal::from(4),
+                    voting_start_time: BigDecimal::from(2),
+                    voting_end_time: BigDecimal::from(3),
+                    outcome: ResultOutcome::Pending,
+                },
+                Proposal {
+                    id: "0x4444444444444444444444444444444444444444444444444444444444444444"
+                        .to_owned(),
+                    proposer: "0xccBcCCCCCCcCCCcCcCcCcCcccCccCCccccccCCcC".to_owned(),
+                    nonce: BigDecimal::from(14),
+                    targets: vec![
+                        "0x1111111111111111111111111111111111111111".to_owned(),
+                        "0x2222222222222222222222222222222222222222".to_owned()
+                    ],
+                    values: vec![BigDecimal::from(1), BigDecimal::from(2)],
+                    calldatas: Vec::<String>::new(),
+                    title: "new title".to_owned(),
+                    description: "new description".to_owned(),
+                    tx_hash: keccak256!("txn hash").encode_hex_with_prefix(),
+                    executed: false,
+                    proposal_created_at: BigDecimal::from(7),
+                    proposal_end_time: BigDecimal::from(10),
+                    voting_start_time: BigDecimal::from(8),
+                    voting_end_time: BigDecimal::from(9),
+                    outcome: ResultOutcome::Pending,
+                }
+            ]
         );
 
         Ok(())
@@ -316,7 +364,6 @@ mod test {
 
     #[test]
     fn test_proposal_created_with_null_chars_in_title_and_description() -> Result<()> {
-
         let mut db = TestDb::new();
         let conn = &mut db.conn;
 
@@ -324,9 +371,13 @@ mod test {
 
         diesel::insert_into(proposals::table)
             .values((
-                proposals::id.eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                proposals::id
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 proposals::proposer.eq("0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"),
                 proposals::nonce.eq(BigDecimal::from(12)),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::title.eq("some title"),
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
@@ -342,21 +393,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok(( 
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         let log = Log {
@@ -379,7 +436,7 @@ mod test {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                   (14, Vec::<Address>::new(), Vec::<U256>::new(), Vec::<Bytes>::new(), 
+                   (14, vec!["0x1111111111111111111111111111111111111111".parse::<Address>()?, "0x2222222222222222222222222222222222222222".parse::<Address>()?], vec!["1".parse::<U256>()?, "2".parse::<U256>()?], Vec::<Bytes>::new(),
                    "new \0title\0".as_bytes().to_vec(), "new \0description\0\0\0\0\0".as_bytes().to_vec(), (7, 8, 9, 10)
                 ).abi_encode_sequence().into(),
                 )
@@ -393,37 +450,52 @@ mod test {
         // checks
         assert_eq!(proposals::table.count().get_result(conn), Ok(2));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).order_by(proposals::id).load(conn),
-            Ok(vec![
-                (
-                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                    BigDecimal::from(12),
-                    "some title".to_owned(),
-                    "some description".to_owned(),
-                    keccak256!("some tx").encode_hex_with_prefix(),
-                    false,
-                    BigDecimal::from(1),
-                    BigDecimal::from(4),
-                    BigDecimal::from(2),
-                    BigDecimal::from(3),
-                    ResultOutcome::Pending,
-                ),
-                (
-                    "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
-                    "0xccBcCCCCCCcCCCcCcCcCcCcccCccCCccccccCCcC".to_owned(),
-                    BigDecimal::from(14),
-                    "new title".to_owned(),
-                    "new description".to_owned(),
-                    keccak256!("txn hash").encode_hex_with_prefix(),
-                    false,
-                    BigDecimal::from(7),
-                    BigDecimal::from(10),
-                    BigDecimal::from(8),
-                    BigDecimal::from(9),
-                    ResultOutcome::Pending,
-                ) 
-            ])
+            proposals::table
+                .select(Proposal::as_select())
+                .order_by(proposals::id)
+                .load(conn)
+                .unwrap(),
+            vec![
+                Proposal {
+                    id: "0x3333333333333333333333333333333333333333333333333333333333333333"
+                        .to_owned(),
+                    proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                    nonce: BigDecimal::from(12),
+                    targets: Vec::<String>::new(),
+                    values: Vec::<BigDecimal>::new(),
+                    calldatas: Vec::<String>::new(),
+                    title: "some title".to_owned(),
+                    description: "some description".to_owned(),
+                    tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                    executed: false,
+                    proposal_created_at: BigDecimal::from(1),
+                    proposal_end_time: BigDecimal::from(4),
+                    voting_start_time: BigDecimal::from(2),
+                    voting_end_time: BigDecimal::from(3),
+                    outcome: ResultOutcome::Pending,
+                },
+                Proposal {
+                    id: "0x4444444444444444444444444444444444444444444444444444444444444444"
+                        .to_owned(),
+                    proposer: "0xccBcCCCCCCcCCCcCcCcCcCcccCccCCccccccCCcC".to_owned(),
+                    nonce: BigDecimal::from(14),
+                    targets: vec![
+                        "0x1111111111111111111111111111111111111111".to_owned(),
+                        "0x2222222222222222222222222222222222222222".to_owned()
+                    ],
+                    values: vec![BigDecimal::from(1), BigDecimal::from(2)],
+                    calldatas: Vec::<String>::new(),
+                    title: "new title".to_owned(),
+                    description: "new description".to_owned(),
+                    tx_hash: keccak256!("txn hash").encode_hex_with_prefix(),
+                    executed: false,
+                    proposal_created_at: BigDecimal::from(7),
+                    proposal_end_time: BigDecimal::from(10),
+                    voting_start_time: BigDecimal::from(8),
+                    voting_end_time: BigDecimal::from(9),
+                    outcome: ResultOutcome::Pending,
+                }
+            ]
         );
 
         Ok(())
@@ -431,7 +503,6 @@ mod test {
 
     #[test]
     fn test_proposal_created_when_it_already_exists() -> Result<()> {
-
         let mut db = TestDb::new();
         let conn = &mut db.conn;
 
@@ -439,9 +510,13 @@ mod test {
 
         diesel::insert_into(proposals::table)
             .values((
-                proposals::id.eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                proposals::id
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 proposals::proposer.eq("0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"),
                 proposals::nonce.eq(BigDecimal::from(12)),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::title.eq("some title"),
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
@@ -457,21 +532,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         let log = Log {
@@ -494,7 +575,7 @@ mod test {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                   (12, Vec::<Address>::new(), Vec::<U256>::new(), Vec::<Bytes>::new(), 
+                   (12, vec!["0x3333333333333333333333333333333333333333".parse::<Address>()?, "0x4444444444444444444444444444444444444444".parse::<Address>()?], vec!["3".parse::<U256>()?, "4".parse::<U256>()?], Vec::<Bytes>::new(),
                    "some title".as_bytes().to_vec(), "some description".as_bytes().to_vec(), (7, 8, 9, 10)
                 ).abi_encode_sequence().into(),
                 )
@@ -503,7 +584,7 @@ mod test {
         };
 
         // use handle_log instead of concrete handler to test dispatch
-        let res =  handle_log(conn, log);
+        let res = handle_log(conn, log);
 
         // checks
         assert_eq!(
@@ -512,24 +593,29 @@ mod test {
         );
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         Ok(())
     }
-
 }
