@@ -13,10 +13,6 @@ use tracing::info;
 /// Update existing deployments
 #[derive(Args)]
 pub struct UpdateArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
-
     /// Job ID
     #[arg(long)]
     job_id: String,

@@ -13,10 +13,6 @@ use tracing::info;
 /// Stop an Oyster CVM instance
 #[derive(Args)]
 pub struct StopArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
-
     /// Job ID
     #[arg(short = 'j', long, required = true)]
     job_id: String,

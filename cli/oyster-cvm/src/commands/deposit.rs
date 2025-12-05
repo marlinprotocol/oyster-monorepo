@@ -14,10 +14,6 @@ use tracing::info;
 /// Deposit funds to an existing job
 #[derive(Args)]
 pub struct DepositArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
-
     /// Job ID
     #[arg(short, long, required = true)]
     job_id: String,

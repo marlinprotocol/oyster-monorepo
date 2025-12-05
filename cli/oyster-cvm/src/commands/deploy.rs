@@ -33,10 +33,6 @@ const TCP_CHECK_INTERVAL: u64 = 15;
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
 pub struct DeployArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
-
     /// Preset for parameters (e.g. blue)
     #[arg(long, default_value = "blue")]
     preset: String,
@@ -350,7 +346,6 @@ fn parse_operator(chain: &ChainType, operator: Option<String>) -> String {
 async fn fetch_operator_spec(url: &str) -> Result<Operator> {
     let client = Client::new();
     let response = client.get(url).send().await?;
-    info!("Operator spec response: {:?}", response); // TODO: remove
     let operator: Operator = response.json().await?;
     Ok(operator)
 }
