@@ -17,10 +17,6 @@ const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
 /// Withdraw funds from an existing job
 #[derive(Args)]
 pub struct WithdrawArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
-
     /// Job ID
     #[arg(short, long, required = true)]
     job_id: String,
