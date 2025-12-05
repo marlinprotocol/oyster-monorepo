@@ -9,6 +9,7 @@ use alloy::rpc::types::eth::Log;
 use alloy::rpc::types::Filter;
 use alloy::transports::http::reqwest::Url;
 use anyhow::{anyhow, Context, Result};
+use bigdecimal::BigDecimal;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
@@ -205,4 +206,24 @@ impl FromSql<crate::schema::sql_types::ResultOutcome, Pg> for ResultOutcome {
             other => Err(format!("unknown result_outcome value: {:?}", other).into()),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Queryable, Selectable)]
+#[diesel(table_name = schema::proposals)]
+pub struct Proposal {
+    pub id: String,
+    pub proposer: String,
+    pub nonce: BigDecimal,
+    pub targets: Vec<String>,
+    pub values: Vec<BigDecimal>,
+    pub calldatas: Vec<String>,
+    pub title: String,
+    pub description: String,
+    pub tx_hash: String,
+    pub executed: bool,
+    pub proposal_created_at: BigDecimal,
+    pub proposal_end_time: BigDecimal,
+    pub voting_start_time: BigDecimal,
+    pub voting_end_time: BigDecimal,
+    pub outcome: ResultOutcome,
 }

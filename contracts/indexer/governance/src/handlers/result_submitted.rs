@@ -104,6 +104,7 @@ pub fn handle_result_submitted(conn: &mut PgConnection, log: Log) -> Result<()> 
 mod test {
     use crate::handlers::handle_log;
     use crate::handlers::test_db::TestDb;
+    use crate::Proposal;
     use alloy::{primitives::LogData, rpc::types::Log};
     use diesel::prelude::*;
     use diesel::RunQueryDsl;
@@ -128,6 +129,9 @@ mod test {
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
                 proposals::executed.eq(false),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::proposal_created_at.eq(BigDecimal::from(1)),
                 proposals::proposal_end_time.eq(BigDecimal::from(4)),
                 proposals::voting_start_time.eq(BigDecimal::from(2)),
@@ -185,21 +189,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Failed,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Failed,
+            }
         );
 
         Ok(())
@@ -222,6 +232,9 @@ mod test {
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
                 proposals::executed.eq(false),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::proposal_created_at.eq(BigDecimal::from(1)),
                 proposals::proposal_end_time.eq(BigDecimal::from(4)),
                 proposals::voting_start_time.eq(BigDecimal::from(2)),
@@ -265,21 +278,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         Ok(())
@@ -302,6 +321,9 @@ mod test {
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
                 proposals::executed.eq(false),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::proposal_created_at.eq(BigDecimal::from(1)),
                 proposals::proposal_end_time.eq(BigDecimal::from(4)),
                 proposals::voting_start_time.eq(BigDecimal::from(2)),
@@ -345,21 +367,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Passed,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Passed,
+            }
         );
 
         Ok(())
@@ -382,6 +410,9 @@ mod test {
                 proposals::description.eq("some description"),
                 proposals::tx_hash.eq(keccak256!("some tx").encode_hex_with_prefix()),
                 proposals::executed.eq(false),
+                proposals::targets.eq(Vec::<String>::new()),
+                proposals::values.eq(Vec::<BigDecimal>::new()),
+                proposals::calldatas.eq(Vec::<String>::new()),
                 proposals::proposal_created_at.eq(BigDecimal::from(1)),
                 proposals::proposal_end_time.eq(BigDecimal::from(4)),
                 proposals::voting_start_time.eq(BigDecimal::from(2)),
@@ -425,21 +456,27 @@ mod test {
 
         assert_eq!(proposals::table.count().get_result(conn), Ok(1));
         assert_eq!(
-            proposals::table.select(proposals::all_columns).first(conn),
-            Ok((
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
-                BigDecimal::from(12),
-                "some title".to_owned(),
-                "some description".to_owned(),
-                keccak256!("some tx").encode_hex_with_prefix(),
-                false,
-                BigDecimal::from(1),
-                BigDecimal::from(4),
-                BigDecimal::from(2),
-                BigDecimal::from(3),
-                ResultOutcome::Pending,
-            ))
+            proposals::table
+                .select(Proposal::as_select())
+                .first(conn)
+                .unwrap(),
+            Proposal {
+                id: "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                proposer: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
+                nonce: BigDecimal::from(12),
+                targets: Vec::<String>::new(),
+                values: Vec::<BigDecimal>::new(),
+                calldatas: Vec::<String>::new(),
+                title: "some title".to_owned(),
+                description: "some description".to_owned(),
+                tx_hash: keccak256!("some tx").encode_hex_with_prefix(),
+                executed: false,
+                proposal_created_at: BigDecimal::from(1),
+                proposal_end_time: BigDecimal::from(4),
+                voting_start_time: BigDecimal::from(2),
+                voting_end_time: BigDecimal::from(3),
+                outcome: ResultOutcome::Pending,
+            }
         );
 
         Ok(())

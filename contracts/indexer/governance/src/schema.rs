@@ -24,6 +24,9 @@ diesel::table! {
         #[max_length = 42]
         proposer -> Bpchar,
         nonce -> Numeric,
+        targets -> Array<Text>,
+        values -> Array<Numeric>,
+        calldatas -> Array<Text>,
         title -> Text,
         description -> Text,
         #[max_length = 66]
