@@ -24,7 +24,10 @@ pub async fn create_provider(
         "bsc" => configs::bsc::ARBITRUM_ONE_RPC_URL,
         _ => Err(anyhow!("unknown deployment"))?,
     };
-    let provider = ProviderBuilder::new()
+    let provider = ProviderBuilder::default()
+        .with_gas_estimation()
+        .with_simple_nonce_management()
+        .fetch_chain_id()
         .wallet(wallet)
         .connect_http(rpc_url.parse().context("Failed to parse RPC URL")?);
 
