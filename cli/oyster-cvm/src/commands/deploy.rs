@@ -319,8 +319,7 @@ async fn create_new_oyster_job(
     };
 
     // Load OysterMarket contract using Alloy
-    let provider_clone = provider.clone();
-    let market = OysterMarket::new(market_address, provider_clone);
+    let market = OysterMarket::new(market_address, provider.clone());
 
     // Create job_open call
     let tx_hash = market
