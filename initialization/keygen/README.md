@@ -113,7 +113,7 @@ Options:
 
 ### Example
 
-keygen-x25519 generates a x25519 key pair and stores it in the file paths provided. The secret key and public key are stored as bytes, with a size of 32 and 32 respectively.
+keygen-x25519 generates a x25519 key pair and stores it in the file paths provided. The secret key and public key are stored as bytes, with a size of 32 and 64 respectively.
 
 ```bash
 $ ./target/release/keygen-x25519 --secret x25519.sec --public x25519.pub
