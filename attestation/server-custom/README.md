@@ -46,7 +46,7 @@ Options:
 
 ## Endpoints
 
-The attestation server exposes attestations through two endpoints which encode the attestation in one of two format - raw and hex. The raw format is a binary format with the raw bytes of the attestation. The hex format is the same attestation, simply hex encoded. Therefore, the raw format is about half the size of the other while the hex format is ASCII letters and numbers only.
+The attestation server exposes attestations through two endpoints which encode the attestation in one of two formats - raw and hex. The raw format is a binary format with the raw bytes of the attestation. The hex format is the same attestation, simply hex encoded. Therefore, the raw format is about half the size of the other while the hex format is ASCII letters and numbers only.
 
 Both endpoints accept query parameters which can be used to set the public key, user data and nonce in the attestation document.
 
