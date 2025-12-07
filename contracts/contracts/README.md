@@ -2,7 +2,7 @@
 
 # Contracts
 
-Contracts pertaining to the Marlin Oyster platform.
+Contracts of the Marlin Oyster platform.
 
 ## Dependencies
 
