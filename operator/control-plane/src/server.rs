@@ -12,13 +12,35 @@ use tracing::info;
 
 use crate::market::{GBRateCard, InfraProvider, JobId, RegionalRates};
 
-enum Error {
-    GetIPFail,
+pub enum Error {
+    EmptyParam(&'static str),
+    NotFound(String),
+    Pending(String),
+    Internal,
 }
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (StatusCode::BAD_REQUEST, "BAD_REQUEST").into_response()
+        match self {
+            Self::EmptyParam(field) => (
+                StatusCode::BAD_REQUEST,
+                format!("Param {} value is empty", field),
+            )
+                .into_response(),
+            Self::NotFound(id) => (
+                StatusCode::NOT_FOUND,
+                format!("Instance not found for job - {}", id),
+            )
+                .into_response(),
+            Self::Pending(id) => (
+                StatusCode::ACCEPTED,
+                format!("Instance is still initializing for job - {}", id),
+            )
+                .into_response(),
+            Self::Internal => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+            }
+        }
     }
 }
 
@@ -56,8 +78,12 @@ async fn handle_ip_request(
     )>,
     Query(query): Query<GetIPRequest>,
 ) -> HandlerResult<Json<GetIPResponse>> {
-    if query.id.is_none() || query.region.is_none() {
-        return Err(Error::GetIPFail);
+    if query.id.is_none() {
+        return Err(Error::EmptyParam("id"));
+    }
+
+    if query.region.is_none() {
+        return Err(Error::EmptyParam("region"));
     }
 
     let client = &state.0;
@@ -72,14 +98,9 @@ async fn handle_ip_request(
             },
             &query.region.unwrap(),
         )
-        .await;
+        .await?;
 
-    if ip.is_err() {
-        return Err(Error::GetIPFail);
-    }
-    let ip = ip.unwrap().to_string();
     let ip = GetIPResponse { ip };
-
     Ok(Json(ip))
 }
 
@@ -261,7 +282,7 @@ mod tests {
         let res = hc
             .do_get(&format!("/ip?id={}&region=ap-south-1", job_id))
             .await?;
-        assert_eq!(res.status(), 400);
+        assert_eq!(res.status(), 404);
 
         let body = res.json_body();
         assert!(body.is_err());
@@ -270,7 +291,7 @@ mod tests {
         assert!(body.is_ok());
 
         let err_message = body.unwrap();
-        assert_eq!(err_message, "BAD_REQUEST");
+        assert_eq!(err_message, "Instance not found for job - 0x0000000000000000000000000000000000000000000000000000000000000005");
 
         Ok(())
     }
@@ -311,7 +332,7 @@ mod tests {
         let res = hc
             .do_get(&format!("/ip?id={}&region=ap-south-1", job_id))
             .await?;
-        assert_eq!(res.status(), 400);
+        assert_eq!(res.status(), 404);
 
         let body = res.json_body();
         assert!(body.is_err());
@@ -320,7 +341,7 @@ mod tests {
         assert!(body.is_ok());
 
         let err_message = body.unwrap();
-        assert_eq!(err_message, "BAD_REQUEST");
+        assert_eq!(err_message, "Instance not found for job - 0x0000000000000000000000000000000000000000000000000000000000000001");
 
         Ok(())
     }
