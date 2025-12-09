@@ -342,16 +342,22 @@ impl Aws {
     }
 
     pub async fn get_subnet(&self, region: &str) -> Result<String> {
-        let filter = Filter::builder()
+        let project_filter = Filter::builder()
             .name("tag:project")
             .values("oyster")
+            .build();
+
+        let type_filter = Filter::builder()
+            .name("tag:type")
+            .values("cvm")
             .build();
 
         Ok(self
             .client(region)
             .await
             .describe_subnets()
-            .filters(filter)
+            .filters(type_filter)
+            .filters(project_filter)
             .send()
             .await
             .context("could not describe subnets")?
@@ -531,7 +537,7 @@ impl Aws {
     }
 
     async fn allocate_ip_addr(&self, job: &JobId, region: &str) -> Result<(String, String)> {
-        let (exist, alloc_id, public_ip, _, _, _, _) = self
+        let (exist, alloc_id, public_ip, _, _, _) = self
             .get_job_elastic_ip(job, region, false)
             .await
             .context("could not get elastic ip for job")?;
@@ -580,13 +586,14 @@ impl Aws {
         ))
     }
 
+    // TODO: clean up return params (private IP, instance ID, interface ID)
     // if with_association is true means, caller expected this elastic associated and return association details
     async fn get_job_elastic_ip(
         &self,
         job: &JobId,
         region: &str,
         with_association: bool,
-    ) -> Result<(bool, String, String, String, String, String, String)> {
+    ) -> Result<(bool, String, String, String, String, String)> {
         let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
         let operator_filter = Filter::builder()
             .name("tag:operator")
@@ -624,10 +631,21 @@ impl Aws {
                     String::new(),
                     String::new(),
                     String::new(),
-                    String::new(),
                 ),
                 Some(addrs) => {
                     if with_association == false {
+                        // store private ip, eni id from tags
+                        let tags = addrs.tags();
+                        let mut private_ip = String::new();
+                        let mut eni_id = String::new();
+                        for tag in tags {
+                            if tag.key().unwrap_or("") == "PrivateIpAddress" {
+                                private_ip = tag.value().unwrap_or("").to_string();
+                            } else if tag.key().unwrap_or("") == "NetworkInterfaceId" {
+                                eni_id = tag.value().unwrap_or("").to_string();
+                            }
+                        }
+
                         (
                             true,
                             addrs
@@ -638,15 +656,13 @@ impl Aws {
                                 .public_ip()
                                 .ok_or(anyhow!("could not parse public ip"))?
                                 .to_string(),
-                            String::new(),
-                            String::new(),
-                            String::new(),
+                            private_ip,
+                            eni_id,
                             String::new(),
                         )
                     } else if addrs.association_id().is_none() {
                         (
                             false,
-                            String::new(),
                             String::new(),
                             String::new(),
                             String::new(),
@@ -669,16 +685,12 @@ impl Aws {
                                 .ok_or(anyhow!("could not parse private ip"))?
                                 .to_string(),
                             addrs
-                                .association_id()
-                                .ok_or(anyhow!("could not parse association id"))?
-                                .to_string(),
-                            addrs
-                                .instance_id()
-                                .ok_or(anyhow!("could not parse instance id"))?
-                                .to_string(),
-                            addrs
                                 .network_interface_id()
                                 .ok_or(anyhow!("could not parse network interface id"))?
+                                .to_string(),
+                            addrs
+                                .association_id()
+                                .ok_or(anyhow!("could not parse association id"))?
                                 .to_string(),
                         )
                     }
@@ -733,6 +745,25 @@ impl Aws {
         eni_id: &str,
         private_ip: &str,
     ) -> Result<()> {
+        let tag_private_ip = Tag::builder()
+            .key("PrivateIpAddress")
+            .value(private_ip)
+            .build();
+        let tag_eni_id = Tag::builder()
+            .key("NetworkInterfaceId")
+            .value(eni_id)
+            .build();
+        let tags = vec![tag_private_ip, tag_eni_id];
+
+        self.client(region)
+            .await
+            .create_tags()
+            .resources(alloc_id)
+            .set_tags(Some(tags))
+            .send()
+            .await
+            .context("failed to set private IP & eni id tag for elastic IP")?;
+
         self.client(region)
             .await
             .associate_address()
@@ -1370,12 +1401,12 @@ impl Aws {
 
         if !exist || state == "shutting-down" || state == "terminated" {
             // instance does not really exist anyway, we are done
-            // TODO: cleanup required for RL config and elastic IP?
             info!("Instance does not exist or is already terminated");
             return Ok(());
         }
 
-        // terminate instance
+
+        // cleanup instance and related resources
         info!(instance, "Terminating existing instance");
         self.spin_down_instance(&instance, job, region, bandwidth)
             .await
@@ -1459,6 +1490,26 @@ impl Aws {
         return Ok(());
     }
 
+    async fn get_rate_limiter_instance_id(&self, eni_id: &str, region: &str) -> Result<String> {
+        Ok(self
+            .client(region)
+            .await
+            .describe_network_interfaces()
+            .network_interface_ids(eni_id)
+            .send()
+            .await
+            .context("could not describe network interfaces")?
+            // response parsing from here
+            .network_interfaces()
+            .first()
+            .ok_or(anyhow!("no network interface found"))?
+            .attachment()
+            .ok_or(anyhow!("no attachment found for network interface"))?
+            .instance_id()
+            .ok_or(anyhow!("could not parse instance id"))?
+            .to_string())
+    }
+
     async fn get_eni_mac_address(&self, eni_id: &str, region: &str) -> Result<String> {
         Ok(self
             .client(region)
@@ -1502,7 +1553,14 @@ impl Aws {
         region: &str,
         bandwidth: u64,
     ) -> Result<()> {
-        let (exist, alloc_id, _, sec_ip, association_id, rl_instance_id, eni_id) = self
+        // Check elastic ip association and cleanup
+        // check rate limiter config and cleanup
+        // check aws secondary ip assignment and unassign
+        // check elastic ip and release
+        // terminate instance if exist
+
+        // disassociation of elastic IP if association exists
+        let (exist, _, _, _, _, association_id) = self
             .get_job_elastic_ip(job, region, true)
             .await
             .context("could not get elastic ip of job")?;
@@ -1511,18 +1569,35 @@ impl Aws {
             self.disassociate_address(association_id.as_str(), region)
                 .await
                 .context("could not disassociate address")?;
+
+        }
+
+        // get eni_id, sec_ip from elastic ip tags
+        let (exist, alloc_id, _, sec_ip, eni_id,  _) = self
+            .get_job_elastic_ip(job, region, false)
+            .await
+            .context("could not get elastic ip of job")?;
+
+        if exist {
             let eni_mac = self
                 .get_eni_mac_address(eni_id.as_str(), region)
                 .await
                 .context("could not get eni mac address")?;
+            let rl_instance_id = self
+                .get_rate_limiter_instance_id(eni_id.as_str(), region)
+                .await
+                .context("could not get rate limiter instance id")?;
             let private_ip = self.get_instance_private_ip(instance_id, region)
                 .await
                 .context("could not get private ip of instance")?;
 
+            // FIXME: make sure bandwidth isn't reduced twice
+            // check exist and remove
             self.remove_rate_limiter_config(&rl_instance_id, &sec_ip, &private_ip, &eni_mac, bandwidth)
                 .await
                 .context("could not remove rate limiter config")?;
 
+            // while unassiging check if error is related to ip not assigned then ignore
             self.unassign_secondary_ip(eni_id.as_str(), sec_ip.as_str(), region)
                 .await
                 .context("could not unassign secondary ip")?;
@@ -1575,7 +1650,7 @@ impl InfraProvider for Aws {
 
     async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
 
-        let (found, _, elastic_ip, _, _, _, _) = self
+        let (found, _, elastic_ip, _, _, _) = self
             .get_job_elastic_ip(job, region, true)
             .await
             .context("could not get job elastic ip")?;
