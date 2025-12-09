@@ -26,7 +26,13 @@ in rec {
     src = ./.;
     CARGO_BUILD_TARGET = target;
     TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
-    nativeBuildInputs = [cc];
+    nativeBuildInputs = [
+      cc
+      pkgs.pkg-config
+    ];
+    buildInputs = [
+      pkgs.tpm2-tss
+    ];
   };
 
   compressed =
