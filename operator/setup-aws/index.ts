@@ -50,7 +50,7 @@ let sgs: { [key: string]: { [key: string]: aws.ec2.SecurityGroup } } = {}
 let enis: { [key: string]: aws.ec2.NetworkInterface } = {}
 let instances: { [key: string]: aws.ec2.Instance } = {}
 let eips: { [key: string]: aws.ec2.Eip } = {}
-let keyPairs: { [key: string]: aws.ec2.KeyPair } = {}
+
 
 regions.forEach((region, ridx) => {
     // providers
@@ -59,12 +59,13 @@ regions.forEach((region, ridx) => {
         profile: new pulumi.Config('aws').get("profile"),
     })
 
-    keyPairs[`${region}-rl`] = new aws.ec2.KeyPair(`${tags.project}-${region}-rl`, {
-        keyName: `${tags.project}-${region}-rl`,
-        publicKey: new pulumi.Config().require(`rlPubKey`),
+    let keyPair = new aws.ec2.KeyPair(`${tags.project}`, {
+        keyName: `${tags.project}`,
+        publicKey: new pulumi.Config().require(`oysterPubKey`),
     }, {
         provider: providers[region],
     })
+
     // vpcs
     vpcs[region] = new aws.ec2.Vpc(`${tags.project}-${region}-vpc`, {
         cidrBlock: `10.${nidx}.${2 * ridx}.0/23`,
@@ -241,7 +242,7 @@ regions.forEach((region, ridx) => {
                 networkInterfaceId: enis[`${region}-rl-eni-3`].id,
             },
         ],
-        keyName: keyPairs[`${region}-rl`].keyName,
+        keyName: keyPair.keyName,
         tags: {...tags, ...{type: "rate-limiter"}},
     }, {
         provider: providers[region],
