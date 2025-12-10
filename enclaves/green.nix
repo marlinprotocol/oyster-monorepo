@@ -164,9 +164,8 @@
       keygen
     ];
 
-    services.getty.autologinUser = lib.mkOverride 10 "root";
-    users.users.root.password = lib.mkOverride 10 "nixos";
-    users.allowNoPasswordLogin = lib.mkOverride 10 false;
+    services.getty.autologinUser = pkgs.lib.mkOverride 10 "root";
+    users.users.root.password = pkgs.lib.mkOverride 10 "nixos";
 
     # systemd service for testing
     systemd.services.hello = {
