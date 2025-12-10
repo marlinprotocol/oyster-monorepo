@@ -26,13 +26,13 @@
   nixosConfig = {config, ...}: {
     # nixos has good presets to get started
     imports = [
-      # use the minimal profile as the starting point
+      # # use the minimal profile as the starting point
       "${nixpkgs}/nixos/modules/profiles/minimal.nix"
-      # it will not really be interactive
-      "${nixpkgs}/nixos/modules/profiles/headless.nix"
-      # trim perl and anything which needs perl
+      # # it will not really be interactive
+      # "${nixpkgs}/nixos/modules/profiles/headless.nix"
+      # # trim perl and anything which needs perl
       "${nixpkgs}/nixos/modules/profiles/perlless.nix"
-      # build as a one-shot appliance since it will never get updated
+      # # build as a one-shot appliance since it will never get updated
       "${nixpkgs}/nixos/modules/profiles/image-based-appliance.nix"
       # build as a qemu guest so virtualization modules are included
       "${nixpkgs}/nixos/modules/profiles/qemu-guest.nix"
@@ -163,6 +163,10 @@
       attestation-server
       keygen
     ];
+
+    services.getty.autologinUser = lib.mkOverride 10 "root";
+    users.users.root.password = lib.mkOverride 10 "nixos";
+    users.allowNoPasswordLogin = lib.mkOverride 10 false;
 
     # systemd service for testing
     systemd.services.hello = {
