@@ -11,6 +11,7 @@ clap = { version = "4.0.18", features = ["derive"] }
 hex = "0.4.3"
 serde_bytes = "0.11"
 tokio = { version = "1", features = ["full"] }
+nitro-tpm-attest = "=1.0.0"
 
 [profile.release]
 strip = true
