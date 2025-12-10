@@ -186,7 +186,7 @@
     };
   };
 
-  systemd.service.attestation = {
+  systemd.services.attestation = {
     description = "attestation server";
     wantedBy = ["multi-user.target"];
     serviceConfig = {
