@@ -176,7 +176,7 @@
         ExecStart = pkgs.writeScript "loop.sh" ''
           #!${pkgs.bash}/bin/bash
 
-          keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
+          ${keygen}/bin/keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
           echo "Hello from kmsg!. key generated" > /dev/kmsg
           cat /etc/ecdsa.pub > /dev/kmsg
         '';
@@ -191,12 +191,14 @@
     wantedBy = ["multi-user.target"];
     serviceConfig = {
       Type = "simple";
-      ExecStart = "oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
+      ExecStart = "${attestation-server}/bin/oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
       Restart = "always";
       StandardError = "journal+console";
       StandardOutput = "journal+console";
     };
   };
+
+  networking.firewall.allowedTCPPorts = [ 1300 ];
 
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
