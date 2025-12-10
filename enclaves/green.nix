@@ -190,7 +190,7 @@
         wantedBy = ["multi-user.target"];
         serviceConfig = {
           Type = "simple";
-          ExecStart = "${attestation-server}/bin/oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
+          ExecStart = "${attestation-server}/bin/oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub";
           Restart = "always";
           StandardError = "journal+console";
           StandardOutput = "journal+console";
