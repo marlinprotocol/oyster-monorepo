@@ -1,8 +1,8 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    chain::{ChainType, adapter::JobTransactionKind, get_chain_adapter},
+    chain::{Deployment, adapter::JobTransactionKind, get_deployment_adapter},
     commands::log::{LogArgs, stream_logs},
-    configs::{arb, bsc, sui},
+    configs,
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
@@ -33,6 +33,10 @@ const TCP_CHECK_INTERVAL: u64 = 15;
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
 pub struct DeployArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long)]
+    deployment: Deployment,
+
     /// Preset for parameters (e.g. blue)
     #[arg(long, default_value = "blue")]
     preset: String,
@@ -40,10 +44,6 @@ pub struct DeployArgs {
     /// Platform architecture (e.g. amd64, arm64)
     #[arg(long, default_value = "arm64")]
     arch: Platform,
-
-    /// Chain (e.g. arb, sui, bsc)
-    #[arg(long)]
-    chain: ChainType,
 
     #[command(flatten)]
     wallet: WalletArgs,
@@ -148,10 +148,10 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     tracing::info!("Starting deployment...");
 
-    let operator = parse_operator(&args.chain, args.operator);
+    let operator = parse_operator(&args.deployment, args.operator);
 
-    let mut chain_adapter = get_chain_adapter(
-        args.chain,
+    let mut chain_adapter = get_deployment_adapter(
+        args.deployment,
         args.rpc,
         args.auth_token,
         args.usdc_coin
@@ -335,11 +335,13 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
     simulate(simulate_args).await
 }
 
-fn parse_operator(chain: &ChainType, operator: Option<String>) -> String {
+fn parse_operator(chain: &Deployment, operator: Option<String>) -> String {
     match chain {
-        ChainType::Arbitrum => operator.unwrap_or(arb::DEFAULT_OPERATOR_ADDRESS.to_string()),
-        ChainType::BSC => operator.unwrap_or(bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
-        ChainType::Sui => operator.unwrap_or(sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
+        Deployment::Arbitrum => {
+            operator.unwrap_or(configs::arb::DEFAULT_OPERATOR_ADDRESS.to_string())
+        }
+        Deployment::BSC => operator.unwrap_or(configs::bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
+        Deployment::Sui => operator.unwrap_or(configs::sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
     }
 }
 

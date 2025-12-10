@@ -1,6 +1,6 @@
 use crate::args::wallet::WalletArgs;
 use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{ChainType, get_chain_adapter};
+use crate::chain::{Deployment, get_deployment_adapter};
 use crate::configs::global::MIN_WITHDRAW_AMOUNT;
 use crate::utils::format_usdc;
 use alloy::primitives::U256;
@@ -17,6 +17,10 @@ const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
 /// Withdraw funds from an existing job
 #[derive(Args)]
 pub struct WithdrawArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long)]
+    deployment: Deployment,
+
     /// Job ID
     #[arg(short, long, required = true)]
     job_id: String,
@@ -31,10 +35,6 @@ pub struct WithdrawArgs {
 
     #[command(flatten)]
     wallet: WalletArgs,
-
-    /// Chain (e.g. arb, sui, bsc)
-    #[arg(long)]
-    chain: ChainType,
 
     /// RPC URL (optional)
     #[arg(long)]
@@ -57,8 +57,8 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
 
     info!("Starting withdrawal process...");
 
-    let mut chain_adapter = get_chain_adapter(
-        args.chain,
+    let mut chain_adapter = get_deployment_adapter(
+        args.deployment,
         args.rpc,
         args.auth_token,
         None,

@@ -61,7 +61,7 @@ pub enum JobTransactionKind {
 }
 
 #[async_trait]
-pub trait ChainAdapter: Send + Sync {
+pub trait DeploymentAdapter: Send + Sync {
     async fn create_provider_with_wallet(
         &mut self,
         wallet_private_key: &str,

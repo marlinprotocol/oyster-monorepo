@@ -1,6 +1,6 @@
 use crate::args::wallet::WalletArgs;
 use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{ChainType, get_chain_adapter};
+use crate::chain::{Deployment, get_deployment_adapter};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -13,16 +13,16 @@ use tracing::info;
 /// Stop an Oyster CVM instance
 #[derive(Args)]
 pub struct StopArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long)]
+    deployment: Deployment,
+
     /// Job ID
     #[arg(short = 'j', long, required = true)]
     job_id: String,
 
     #[command(flatten)]
     wallet: WalletArgs,
-
-    /// Chain (e.g. arb, sui, bsc)
-    #[arg(long)]
-    chain: ChainType,
 
     /// RPC URL (optional)
     #[arg(long)]
@@ -44,8 +44,8 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     info!("Stopping oyster instance with:");
     info!("  Job ID: {}", job_id);
 
-    let mut chain_adapter = get_chain_adapter(
-        args.chain,
+    let mut chain_adapter = get_deployment_adapter(
+        args.deployment,
         args.rpc,
         args.auth_token,
         None,

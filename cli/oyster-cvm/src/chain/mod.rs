@@ -2,7 +2,7 @@ use clap::{ValueEnum, builder::PossibleValue};
 use sui_sdk_types::Address;
 
 use crate::{
-    chain::{adapter::ChainAdapter, evm::EvmAdapter, sui::SuiAdapter},
+    chain::{adapter::DeploymentAdapter, evm::EvmAdapter, sui::SuiAdapter},
     configs::{
         arb::{ARBITRUM_ONE_RPC_URL, OYSTER_MARKET_ADDRESS, USDC_ADDRESS},
         bsc::{self, BSC_RPC_URL},
@@ -15,23 +15,23 @@ pub mod evm;
 pub mod sui;
 
 #[derive(Clone, Debug)]
-pub enum ChainType {
+pub enum Deployment {
     Arbitrum,
     BSC,
     Sui,
 }
 
-impl ChainType {
+impl Deployment {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ChainType::Arbitrum => "arb",
-            ChainType::BSC => "bsc",
-            ChainType::Sui => "sui",
+            Deployment::Arbitrum => "arb",
+            Deployment::BSC => "bsc",
+            Deployment::Sui => "sui",
         }
     }
 }
 
-impl ValueEnum for ChainType {
+impl ValueEnum for Deployment {
     fn value_variants<'a>() -> &'a [Self] {
         &[Self::Arbitrum, Self::BSC, Self::Sui]
     }
@@ -41,27 +41,27 @@ impl ValueEnum for ChainType {
     }
 }
 
-pub fn get_chain_adapter(
-    chain_type: ChainType,
+pub fn get_deployment_adapter(
+    chain_type: Deployment,
     rpc_url: Option<String>,
     auth_token: Option<String>,
     usdc_coin: Option<Address>,
     gas_coin: Option<Address>,
-) -> Box<dyn ChainAdapter> {
+) -> Box<dyn DeploymentAdapter> {
     match chain_type {
-        ChainType::Arbitrum => Box::new(EvmAdapter {
+        Deployment::Arbitrum => Box::new(EvmAdapter {
             rpc_url: rpc_url.unwrap_or(ARBITRUM_ONE_RPC_URL.to_owned()),
             market_address: OYSTER_MARKET_ADDRESS.to_owned(),
             usdc_address: USDC_ADDRESS.to_owned(),
             sender_address: None,
         }),
-        ChainType::BSC => Box::new(EvmAdapter {
+        Deployment::BSC => Box::new(EvmAdapter {
             rpc_url: rpc_url.unwrap_or(BSC_RPC_URL.to_owned()),
             market_address: bsc::OYSTER_MARKET_ADDRESS.to_owned(),
             usdc_address: bsc::USDC_ADDRESS.to_owned(),
             sender_address: None,
         }),
-        ChainType::Sui => Box::new(SuiAdapter {
+        Deployment::Sui => Box::new(SuiAdapter {
             rpc_url: rpc_url.unwrap_or(SUI_GRPC_URL.to_owned()),
             auth_token,
             market_package_id: Address::from_static(OYSTER_MARKET_PACKAGE_ID),

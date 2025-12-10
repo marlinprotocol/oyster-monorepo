@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use crate::args::wallet::WalletArgs;
 use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{ChainType, get_chain_adapter};
+use crate::chain::{Deployment, get_deployment_adapter};
 use crate::configs::global::MIN_DEPOSIT_AMOUNT;
 use crate::utils::format_usdc;
 use alloy::primitives::U256;
@@ -14,6 +14,10 @@ use tracing::info;
 /// Deposit funds to an existing job
 #[derive(Args)]
 pub struct DepositArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long)]
+    deployment: Deployment,
+
     /// Job ID
     #[arg(short, long, required = true)]
     job_id: String,
@@ -24,10 +28,6 @@ pub struct DepositArgs {
 
     #[command(flatten)]
     wallet: WalletArgs,
-
-    /// Chain (e.g. arb, sui, bsc)
-    #[arg(long)]
-    chain: ChainType,
 
     /// RPC URL (optional)
     #[arg(long)]
@@ -64,8 +64,8 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     // Convert amount to U256 with 6 decimals (USDC has 6 decimals)
     let amount_u256 = U256::from(amount);
 
-    let mut chain_adapter = get_chain_adapter(
-        args.chain,
+    let mut chain_adapter = get_deployment_adapter(
+        args.deployment,
         args.rpc,
         args.auth_token,
         args.usdc_coin
