@@ -174,11 +174,8 @@
           #!${pkgs.bash}/bin/bash
 
           keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
-          while true; do
-            echo "Hello from stdout!"
-            echo "Hello from kmsg!" > /dev/kmsg
-            sleep 1
-          done
+          echo "Hello from kmsg!. key generated" > /dev/kmsg
+          cat /etc/ecdsa.pub > /dev/kmsg
         '';
         StandardOutput = "journal+console";
         StandardError = "journal+console";
@@ -191,7 +188,7 @@
     wantedBy = ["multi-user.target"];
     serviceConfig = {
       Type = "simple";
-      ExecStart = "oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub";
+      ExecStart = "oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
       Restart = "always";
       StandardError = "journal+console";
       StandardOutput = "journal+console";
