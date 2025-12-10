@@ -3,7 +3,7 @@ use std::str::FromStr;
 use crate::args::init_params::InitParamsArgs;
 use crate::args::wallet::WalletArgs;
 use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{ChainType, get_chain_adapter};
+use crate::chain::{Deployment, get_deployment_adapter};
 use crate::types::Platform;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -13,16 +13,16 @@ use tracing::info;
 /// Update existing deployments
 #[derive(Args)]
 pub struct UpdateArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long)]
+    deployment: Deployment,
+
     /// Job ID
     #[arg(long)]
     job_id: String,
 
     #[command(flatten)]
     wallet: WalletArgs,
-
-    /// Chain (e.g. arb, sui, bsc)
-    #[arg(long)]
-    chain: ChainType,
 
     /// RPC URL (optional)
     #[arg(long)]
@@ -63,8 +63,8 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
     let debug = args.debug;
     let image_url = args.image_url;
 
-    let mut chain_adapter = get_chain_adapter(
-        args.chain,
+    let mut chain_adapter = get_deployment_adapter(
+        args.deployment,
         args.rpc,
         args.auth_token,
         None,

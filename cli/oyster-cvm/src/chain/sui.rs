@@ -30,7 +30,7 @@ use sui_sdk_types::{
 use tracing::{error, info};
 
 use crate::chain::adapter::{
-    ChainAdapter, ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
+    DeploymentAdapter, ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
 };
 
 const SUI_PRIV_KEY_PREFIX: &str = "suiprivkey";
@@ -74,7 +74,7 @@ struct JobOpened {
 }
 
 #[async_trait]
-impl ChainAdapter for SuiAdapter {
+impl DeploymentAdapter for SuiAdapter {
     async fn create_provider_with_wallet(
         &mut self,
         wallet_private_key: &str,

@@ -22,7 +22,7 @@ use crate::chain::adapter::{
     ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
 };
 
-use super::adapter::ChainAdapter;
+use super::adapter::DeploymentAdapter;
 
 sol!(
     #[allow(missing_docs)]
@@ -60,7 +60,7 @@ pub struct EvmAdapter {
 }
 
 #[async_trait]
-impl ChainAdapter for EvmAdapter {
+impl DeploymentAdapter for EvmAdapter {
     async fn create_provider_with_wallet(
         &mut self,
         wallet_private_key: &str,
