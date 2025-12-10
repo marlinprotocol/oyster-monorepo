@@ -18,6 +18,8 @@
 {
   nixpkgs,
   systemConfig,
+  attestation-server,
+  keygen,
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
@@ -157,6 +159,11 @@
       "systemd.gpt_auto=0" # Disable systemd-gpt-auto-generator to prevent e.g. ESP mounting
     ];
 
+    environment.systemPackages = [ 
+      attestation-server
+      keygen
+    ];
+
     # systemd service for testing
     systemd.services.hello = {
       description = "Hello";
@@ -166,6 +173,7 @@
         ExecStart = pkgs.writeScript "loop.sh" ''
           #!${pkgs.bash}/bin/bash
 
+          keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
           while true; do
             echo "Hello from stdout!"
             echo "Hello from kmsg!" > /dev/kmsg
@@ -177,6 +185,19 @@
       };
     };
   };
+
+  systemd.service.attestation = {
+    description = "attestation server";
+    wantedBy = ["multi-user.target"];
+    serviceConfig = {
+      Type = "simple";
+      ExecStart = "oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub";
+      Restart = "always";
+      StandardError = "journal+console";
+      StandardOutput = "journal+console";
+    };
+  };
+
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
     modules = [nixosConfig];
