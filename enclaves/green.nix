@@ -168,37 +168,39 @@
     users.users.root.password = pkgs.lib.mkOverride 10 "nixos";
 
     # systemd service for testing
-    systemd.services.hello = {
-      description = "Hello";
-      wantedBy = ["multi-user.target"];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = pkgs.writeScript "loop.sh" ''
-          #!${pkgs.bash}/bin/bash
+    systemd.services = {
+      hello = {
+        description = "Hello";
+        wantedBy = ["multi-user.target"];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = pkgs.writeScript "loop.sh" ''
+            #!${pkgs.bash}/bin/bash
 
-          ${keygen}/bin/keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
-          echo "Hello from kmsg!. key generated" > /dev/kmsg
-          cat /etc/ecdsa.pub > /dev/kmsg
-        '';
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
+            ${keygen}/bin/keygen-secp256k1 --secret /etc/ecdsa.sec --public /etc/ecdsa.pub
+            echo "Hello from kmsg!. key generated" > /dev/kmsg
+            cat /etc/ecdsa.pub > /dev/kmsg
+          '';
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+        };
+      };
+      attestation = {
+        description = "attestation server";
+        wantedBy = ["multi-user.target"];
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${attestation-server}/bin/oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
+          Restart = "always";
+          StandardError = "journal+console";
+          StandardOutput = "journal+console";
+        };
       };
     };
-  };
 
-  systemd.services.attestation = {
-    description = "attestation server";
-    wantedBy = ["multi-user.target"];
-    serviceConfig = {
-      Type = "simple";
-      ExecStart = "${attestation-server}/bin/oyster-attestation-server --ip-addr 0.0.0.0:1300 --pub-key /etc/ecdsa.pub > /dev/kmsg";
-      Restart = "always";
-      StandardError = "journal+console";
-      StandardOutput = "journal+console";
-    };
+    networking.firewall.enable = true;
+    networking.firewall.allowedTCPPorts = [ 1300 ];
   };
-
-  networking.firewall.allowedTCPPorts = [ 1300 ];
 
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
