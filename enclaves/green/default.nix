@@ -1,5 +1,3 @@
-# goal: build as minimal an image as possible
-#
 # Green images are supposed to have
 # - a known constant starting point
 # - temporary writable state
@@ -21,51 +19,20 @@
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
-  nixosConfig = {config, ...}: {
+  nixosConfig = {config, modulesPath, ...}: {
     # nixos has good presets to get started
     imports = [
-      # use the minimal profile as the starting point
-      "${nixpkgs}/nixos/modules/profiles/minimal.nix"
-      # it will not really be interactive
-      "${nixpkgs}/nixos/modules/profiles/headless.nix"
-      # trim perl and anything which needs perl
-      "${nixpkgs}/nixos/modules/profiles/perlless.nix"
-      # build as a one-shot appliance since it will never get updated
-      "${nixpkgs}/nixos/modules/profiles/image-based-appliance.nix"
-      # build as a qemu guest so virtualization modules are included
-      "${nixpkgs}/nixos/modules/profiles/qemu-guest.nix"
+      # base config
+      (./. + "/../configs/base.nix")
 
       # image.repart support
-      "${nixpkgs}/nixos/modules/image/repart.nix"
+      "${modulesPath}/image/repart.nix"
     ];
-
-    # NOTE: perlless.nix also sets initrd to be systemd based
-    # ensure the setup is according to that
 
     # image id
-    system.image.id = "marlin";
+    system.image.id = "marlin-green";
     # image version
     system.image.version = "v0.1.0";
-
-    # state version
-    system.stateVersion = "25.11";
-
-    # forbid dependencies to ensure they truly do not get included
-    # mainly to reduce image bloat
-    # see perlless.nix for an example
-    system.forbiddenDependenciesRegexes = [
-      # technically perlless.nix should forbid perl, add it here just to be sure
-      "perl"
-      "python"
-    ];
-
-    # set a higher log level for better visibility into the boot process
-    # TODO: confirm a safe level
-    boot.consoleLogLevel = 7;
-
-    # the appliance profile causes us to be locked out and nix does not like it
-    # set this to tell nix we know what we are doing
-    users.allowNoPasswordLogin = true;
 
     # NOTE: ideally I would like a direct overlay mount on /
     # does not work for whatever reason, go with /usr mount for now
@@ -91,7 +58,7 @@
 
     # use image.repart to create the nixos data partition and the dm-verity hash partition
     # ref: https://github.com/NixOS/nixpkgs/blob/master/nixos/modules/image/repart-verity-store.nix#L92
-    image.repart.name = "marlin";
+    image.repart.name = "marlin-green";
     image.repart.version = "v0.1.0";
     # image.repart.sectorSize = 4096;
     image.repart.partitions = {
@@ -133,27 +100,11 @@
       ukiPath = "/EFI/BOOT/BOOT${systemConfig.efi_arch}.EFI";
     };
 
-    # disable bash completions
-    programs.bash.completion.enable = false;
-    # disable nano
-    programs.nano.enable = false;
-    # disable sudo
-    security.sudo.enable = false;
-    # disable pam_p11 module
-    security.pam.p11.enable = false;
-
     # extra kernel params
     # ref: https://github.com/aws/nitrotpm-attestation-samples/blob/main/nix/image/verity.nix#L82
     boot.kernelParams = [
-      "panic=30"
-      "boot.panic_on_fail" # reboot the machine upon fatal boot issues
-      "lockdown=1"
-      "console=ttyS0,115200n8"
-      "console=tty0"
-      "random.trust_cpu=on"
       "systemd.verity=1"
       "systemd.verity_root_options=panic-on-corruption"
-      "tpm_crb.force=1"
       "systemd.gpt_auto=0" # Disable systemd-gpt-auto-generator to prevent e.g. ESP mounting
     ];
 
@@ -180,6 +131,10 @@
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
     modules = [nixosConfig];
+    specialArgs = {
+      lib = pkgs.lib;
+      modulesPath = "${nixpkgs}/nixos/modules";
+    };
   };
 in {
   default = nixosSystem.config.system.build.finalImage;
