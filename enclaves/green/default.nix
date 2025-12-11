@@ -40,25 +40,25 @@
     system.image.version = "v0.1.0";
 
     # systemd service for testing
-    systemd.services.hello = {
-      description = "Hello";
-      wantedBy = ["multi-user.target"];
-      serviceConfig = {
-        Type = "simple";
-        ExecStart = pkgs.writeScript "loop.sh" ''
-          #!${pkgs.bash}/bin/bash
-
-          while true; do
-            echo "Hello from stdout!"
-            echo "Hello from console!" > /dev/console
-            echo "Hello from kmsg!" > /dev/kmsg
-            sleep 1
-          done
-        '';
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-      };
-    };
+    # systemd.services.hello = {
+    #   description = "Hello";
+    #   wantedBy = ["multi-user.target"];
+    #   serviceConfig = {
+    #     Type = "simple";
+    #     ExecStart = pkgs.writeScript "loop.sh" ''
+    #       #!${pkgs.bash}/bin/bash
+    #
+    #       while true; do
+    #         echo "Hello from stdout!"
+    #         echo "Hello from console!" > /dev/console
+    #         echo "Hello from kmsg!" > /dev/kmsg
+    #         sleep 1
+    #       done
+    #     '';
+    #     StandardOutput = "journal+console";
+    #     StandardError = "journal+console";
+    #   };
+    # };
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
