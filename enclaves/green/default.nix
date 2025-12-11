@@ -38,12 +38,13 @@
       description = "Hello";
       wantedBy = ["multi-user.target"];
       serviceConfig = {
-        Type = "oneshot";
+        Type = "simple";
         ExecStart = pkgs.writeScript "loop.sh" ''
           #!${pkgs.bash}/bin/bash
 
           while true; do
             echo "Hello from stdout!"
+            echo "Hello from console!" > /dev/console
             echo "Hello from kmsg!" > /dev/kmsg
             sleep 1
           done
@@ -65,4 +66,5 @@
 in {
   default = nixosSystem.config.system.build.finalImage;
   uki = nixosSystem.config.system.build.uki;
+  cmdline = nixosSystem.config.boot.kernelParams;
 }

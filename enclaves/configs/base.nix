@@ -36,6 +36,7 @@
 
   # set a higher log level for better visibility into the boot process
   # TODO: confirm a safe level
+  boot.initrd.verbose = true;
   boot.consoleLogLevel = 7;
 
   # the appliance profile causes us to be locked out and nix does not like it
@@ -58,8 +59,10 @@
     # boot.panic_on_fail option already set by headless.nix
     "lockdown=1"
     "console=ttyS0,115200n8"
-    "console=tty0"
+    # "console=tty0"
     "random.trust_cpu=on"
     "tpm_crb.force=1"
+    "systemd.show_status=true"
+    "systemd.status_unit_format=name"
   ];
 }
