@@ -3,7 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sui_sdk_types::{ObjectReference, Transaction};
 
-use crate::chain::{evm::EvmProvider, sui::SuiProvider};
+use crate::deployment::{evm::EvmProvider, sui::SuiProvider};
 
 #[derive(Clone)]
 pub enum ChainProvider {

@@ -29,7 +29,7 @@ use sui_sdk_types::{
 };
 use tracing::{error, info};
 
-use crate::chain::adapter::{
+use crate::deployment::adapter::{
     DeploymentAdapter, ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
 };
 
