@@ -10,6 +10,7 @@ use commands::{
 mod args;
 mod commands;
 mod configs;
+mod deployment;
 mod types;
 mod utils;
 

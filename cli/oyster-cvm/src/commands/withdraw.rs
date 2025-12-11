@@ -1,23 +1,25 @@
 use crate::args::wallet::WalletArgs;
-use crate::configs;
 use crate::configs::global::MIN_WITHDRAW_AMOUNT;
-use crate::utils::{provider::create_provider, usdc::format_usdc};
-use alloy::{
-    primitives::{Address, U256},
-    providers::{Provider, WalletProvider},
-    sol,
-};
+use crate::deployment::adapter::JobTransactionKind;
+use crate::deployment::{Deployment, get_deployment_adapter};
+use crate::utils::format_usdc;
+use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use sui_sdk_types::Address;
 use tracing::{debug, info};
+
+// Withdrawal Settings
+const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
 
 /// Withdraw funds from an existing job
 #[derive(Args)]
 pub struct WithdrawArgs {
-    /// Deployment target
-    #[arg(long, default_value = "arb1")]
-    deployment: String,
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long, default_value = "arb")]
+    deployment: Deployment,
 
     /// Job ID
     #[arg(short, long, required = true)]
@@ -33,28 +35,161 @@ pub struct WithdrawArgs {
 
     #[command(flatten)]
     wallet: WalletArgs,
+
+    /// RPC URL (optional)
+    #[arg(long)]
+    rpc: Option<String>,
+
+    /// Auth token (optional for sui rpc)
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// Gas coin ID for Sui chain transactions (optional, will be chosen automatically from user's account via simulation results)
+    #[arg(long)]
+    gas_coin: Option<String>,
 }
 
-// Withdrawal Settings
-const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
-const SCALING_FACTOR: u128 = 1_000_000_000_000; // 1e12 scaling factor for contract values
+pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
+    let job_id = args.job_id;
+    let wallet_private_key = &args.wallet.load_required()?;
+    let max = args.max;
+    let amount = args.amount;
 
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
+    info!("Starting withdrawal process...");
+
+    let mut deployment_adapter = get_deployment_adapter(
+        args.deployment,
+        args.rpc,
+        args.auth_token,
+        None,
+        args.gas_coin
+            .map(|coin| Address::from_str(&coin))
+            .transpose()?,
+    );
+
+    // Setup provider
+    let provider = deployment_adapter
+        .create_provider_with_wallet(wallet_private_key)
+        .await
+        .context("Failed to create provider")?;
+
+    info!(
+        "Signer address: {:?}",
+        deployment_adapter.get_sender_address()
+    );
+
+    let Some(job_data) = deployment_adapter
+        .get_job_data_if_exists(job_id.clone(), &provider)
+        .await?
+    else {
+        return Err(anyhow!("Job {} does not exist", job_id));
+    };
+
+    // Check if balance is zero
+    if job_data.balance == U256::ZERO {
+        return Err(anyhow!("Cannot withdraw: job balance is 0 USDC"));
+    }
+
+    let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
+
+    // Scale down rate by extra_decimals
+    let scaled_rate = job_data
+        .rate
+        .checked_div(U256::from(10).pow(U256::from(extra_decimals)))
+        .ok_or_else(|| anyhow!("Failed to scale rate"))?;
+
+    // Calculate required buffer balance (5 minutes worth of rate)
+    let buffer_seconds = U256::from(BUFFER_MINUTES * 60);
+    let buffer_balance = scaled_rate
+        .checked_mul(buffer_seconds)
+        .ok_or_else(|| anyhow!("Failed to calculate buffer balance"))?;
+
+    // Calculate current balance after accounting for elapsed time
+    let current_balance =
+        calculate_current_balance(job_data.balance, scaled_rate, job_data.last_settled)?;
+
+    if current_balance == U256::ZERO {
+        info!("Cannot withdraw. Job is already expired.");
+        return Ok(());
+    }
+
+    info!(
+        "Current balance: {:.6} USDC, Required buffer: {:.6} USDC",
+        format_usdc(current_balance, extra_decimals),
+        format_usdc(buffer_balance, extra_decimals)
+    );
+
+    // Calculate maximum withdrawable amount (in USDC with 6 decimals)
+    let max_withdrawable = if current_balance > buffer_balance {
+        current_balance
+            .checked_sub(buffer_balance)
+            .ok_or_else(|| anyhow!("Failed to calculate withdrawable amount"))?
+    } else {
+        return Err(anyhow!(
+            "Cannot withdraw: current balance ({:.6} USDC) is less than required buffer ({:.6} USDC)",
+            format_usdc(current_balance, extra_decimals),
+            format_usdc(buffer_balance, extra_decimals)
+        ));
+    };
+
+    // Determine withdrawal amount (in USDC with 6 decimals)
+    let amount_u256 = if max {
+        info!("Maximum withdrawal requested");
+        max_withdrawable
+    } else {
+        let amount =
+            amount.ok_or_else(|| anyhow!("Amount must be specified when not using --max"))?;
+        if amount < MIN_WITHDRAW_AMOUNT {
+            return Err(anyhow!(
+                "Amount must be at least {} (0.000001 USDC)",
+                MIN_WITHDRAW_AMOUNT
+            ));
+        }
+        let amount_u256 = U256::from(amount);
+        if amount_u256 > max_withdrawable {
+            return Err(anyhow!(
+                "Cannot withdraw {:.6} USDC: maximum withdrawable amount is {:.6} USDC (need to maintain {:.6} USDC buffer)",
+                format_usdc(amount_u256, extra_decimals),
+                format_usdc(max_withdrawable, extra_decimals),
+                format_usdc(buffer_balance, extra_decimals)
+            ));
+        }
+        amount_u256
+    };
+
+    info!(
+        "Initiating withdrawal of {:.6} USDC",
+        format_usdc(amount_u256, extra_decimals)
+    );
+
+    // Call jobWithdraw function with amount in USDC
+    let job_withdraw_transaction = deployment_adapter
+        .create_job_transaction(
+            JobTransactionKind::Withdraw {
+                job_id,
+                amount: amount_u256,
+            },
+            None,
+            &provider,
+        )
+        .await?;
+    let _ = deployment_adapter
+        .send_transaction(false, job_withdraw_transaction, &provider)
+        .await?;
+
+    info!("Withdrawal successful!");
+    Ok(())
+}
 
 /// Calculate the current balance after accounting for time elapsed since last settlement
-fn calculate_current_balance(balance: U256, rate: U256, last_settled: U256) -> Result<U256> {
+fn calculate_current_balance(balance: U256, rate: U256, last_settled: i64) -> Result<U256> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("Failed to get current time")?
         .as_secs();
 
     let last_settled_secs =
-        u64::try_from(last_settled).map_err(|_| anyhow!("Last settled time too large for u64"))?;
+        u64::try_from(last_settled).map_err(|_| anyhow!("Last settled time is negative"))?;
 
     if last_settled_secs > now {
         return Err(anyhow!("Last settled time is in the future"));
@@ -93,154 +228,4 @@ fn calculate_current_balance(balance: U256, rate: U256, last_settled: U256) -> R
             balance
         )
     })
-}
-
-pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
-    let job_id = args.job_id;
-    let wallet_private_key = &args.wallet.load_required()?;
-    let max = args.max;
-    let amount = args.amount;
-
-    info!("Starting withdrawal process...");
-
-    // Setup provider
-    let provider = create_provider(&args.deployment, wallet_private_key)
-        .await
-        .context("Failed to create provider")?;
-
-    info!(
-        "Signer address: {:?}",
-        provider
-            .signer_addresses()
-            .next()
-            .ok_or_else(|| anyhow!("No signer address found"))?
-    );
-
-    // Create contract instance
-    let market_address = match args.deployment.as_ref() {
-        "arb1" => configs::arb::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        "bsc" => configs::bsc::OYSTER_MARKET_ADDRESS.parse::<Address>()?,
-        _ => Err(anyhow!("unknown deployment"))?,
-    };
-    let market = OysterMarket::new(market_address, provider.clone());
-
-    let job_id_bytes = job_id.parse().context("Failed to parse job ID")?;
-
-    // Check if job exists and get current balance
-    let job = market
-        .jobs(job_id_bytes)
-        .call()
-        .await
-        .context("Failed to fetch job details")?;
-    if job.owner == Address::ZERO {
-        return Err(anyhow!("Job {} does not exist", job_id));
-    }
-
-    // Check if balance is zero
-    if job.balance == U256::ZERO {
-        return Err(anyhow!("Cannot withdraw: job balance is 0 USDC"));
-    }
-
-    // Scale down rate by 1e12
-    let scaled_rate = job
-        .rate
-        .checked_div(U256::from(SCALING_FACTOR))
-        .ok_or_else(|| anyhow!("Failed to scale rate"))?;
-
-    // Calculate required buffer balance (5 minutes worth of rate)
-    let buffer_seconds = U256::from(BUFFER_MINUTES * 60);
-    let buffer_balance = scaled_rate
-        .checked_mul(buffer_seconds)
-        .ok_or_else(|| anyhow!("Failed to calculate buffer balance"))?;
-
-    // Calculate current balance after accounting for elapsed time
-    let current_balance = calculate_current_balance(job.balance, scaled_rate, job.lastSettled)?;
-
-    if current_balance == U256::ZERO {
-        info!("Cannot withdraw. Job is already expired.");
-        return Ok(());
-    }
-
-    info!(
-        "Current balance: {:.6} USDC, Required buffer: {:.6} USDC",
-        format_usdc(current_balance),
-        format_usdc(buffer_balance)
-    );
-
-    // Calculate maximum withdrawable amount (in USDC with 6 decimals)
-    let max_withdrawable = if current_balance > buffer_balance {
-        current_balance
-            .checked_sub(buffer_balance)
-            .ok_or_else(|| anyhow!("Failed to calculate withdrawable amount"))?
-    } else {
-        return Err(anyhow!(
-            "Cannot withdraw: current balance ({:.6} USDC) is less than required buffer ({:.6} USDC)",
-            format_usdc(current_balance),
-            format_usdc(buffer_balance)
-        ));
-    };
-
-    // Determine withdrawal amount (in USDC with 6 decimals)
-    let amount_u256 = if max {
-        info!("Maximum withdrawal requested");
-        max_withdrawable
-    } else {
-        let amount =
-            amount.ok_or_else(|| anyhow!("Amount must be specified when not using --max"))?;
-        if amount < MIN_WITHDRAW_AMOUNT {
-            return Err(anyhow!(
-                "Amount must be at least {} (0.000001 USDC)",
-                MIN_WITHDRAW_AMOUNT
-            ));
-        }
-        let amount_u256 = U256::from(amount);
-        if amount_u256 > max_withdrawable {
-            return Err(anyhow!(
-                "Cannot withdraw {:.6} USDC: maximum withdrawable amount is {:.6} USDC (need to maintain {:.6} USDC buffer)",
-                format_usdc(amount_u256),
-                format_usdc(max_withdrawable),
-                format_usdc(buffer_balance)
-            ));
-        }
-        amount_u256
-    };
-
-    info!(
-        "Initiating withdrawal of {:.6} USDC",
-        format_usdc(amount_u256)
-    );
-
-    // Call jobWithdraw function with amount in USDC 6 decimals
-    let tx_hash = market
-        .jobWithdraw(job_id_bytes, amount_u256)
-        .send()
-        .await
-        .map_err(|e| {
-            info!("Transaction failed with error: {:?}", e);
-            anyhow!("Failed to send withdraw transaction: {}", e)
-        })?
-        .watch()
-        .await
-        .context("Failed to get transaction hash")?;
-
-    info!(
-        "Withdrawal transaction sent. Transaction hash: {:?}",
-        tx_hash
-    );
-
-    // Verify transaction success
-    let receipt = provider
-        .get_transaction_receipt(tx_hash)
-        .await
-        .context("Failed to get transaction receipt")?
-        .ok_or_else(|| anyhow!("Transaction receipt not found"))?;
-
-    if !receipt.status() {
-        return Err(anyhow!(
-            "Withdraw transaction failed - check contract interaction"
-        ));
-    }
-
-    info!("Withdrawal successful!");
-    Ok(())
 }
