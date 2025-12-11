@@ -26,6 +26,8 @@
       (./. + "/../configs/base.nix")
       # disk config
       (./. + "/../configs/disk-ro.nix")
+      # dns config
+      (./. + "/../configs/dns.nix")
     ];
 
     # image id
