@@ -1,14 +1,12 @@
 # dns config
 # set up systemd-resolved with DoT
-{
-  ...
-}: {
+{...}: {
   # set up systemd-resolved
   services.resolved = {
     # enable systemd-resolved
     enable = true;
     # enable for all domains
-    domains = [ "~." ];
+    domains = ["~."];
     # disable fallbacks to prevent bypass
     fallbackDns = [];
     # enable DoT to prevent MITM

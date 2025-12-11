@@ -18,7 +18,7 @@
     # build as a qemu guest so virtualization modules are included
     "${modulesPath}/profiles/qemu-guest.nix"
   ];
-  
+
   # NOTE: perlless.nix also sets initrd to be systemd based
   # ensure the setup is according to that
 

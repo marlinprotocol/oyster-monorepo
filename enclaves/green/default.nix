@@ -19,7 +19,11 @@
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
-  nixosConfig = {config, modulesPath, ...}: {
+  nixosConfig = {
+    config,
+    modulesPath,
+    ...
+  }: {
     # nixos has good presets to get started
     imports = [
       # base config
