@@ -1,8 +1,8 @@
 use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
-    chain::{Deployment, adapter::JobTransactionKind, get_deployment_adapter},
     commands::log::{LogArgs, stream_logs},
     configs,
+    deployment::{Deployment, adapter::JobTransactionKind, get_deployment_adapter},
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},

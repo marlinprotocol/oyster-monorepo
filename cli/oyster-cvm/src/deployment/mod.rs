@@ -2,7 +2,7 @@ use clap::{ValueEnum, builder::PossibleValue};
 use sui_sdk_types::Address;
 
 use crate::{
-    chain::{adapter::DeploymentAdapter, evm::EvmAdapter, sui::SuiAdapter},
+    deployment::{adapter::DeploymentAdapter, evm::EvmAdapter, sui::SuiAdapter},
     configs::{
         arb::{ARBITRUM_ONE_RPC_URL, OYSTER_MARKET_ADDRESS, USDC_ADDRESS},
         bsc::{self, BSC_RPC_URL},

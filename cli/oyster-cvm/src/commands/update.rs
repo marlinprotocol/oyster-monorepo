@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use crate::args::init_params::InitParamsArgs;
 use crate::args::wallet::WalletArgs;
-use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{Deployment, get_deployment_adapter};
+use crate::deployment::adapter::JobTransactionKind;
+use crate::deployment::{Deployment, get_deployment_adapter};
 use crate::types::Platform;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;

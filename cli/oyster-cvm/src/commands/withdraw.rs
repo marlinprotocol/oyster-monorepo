@@ -1,7 +1,7 @@
 use crate::args::wallet::WalletArgs;
-use crate::chain::adapter::JobTransactionKind;
-use crate::chain::{Deployment, get_deployment_adapter};
 use crate::configs::global::MIN_WITHDRAW_AMOUNT;
+use crate::deployment::adapter::JobTransactionKind;
+use crate::deployment::{Deployment, get_deployment_adapter};
 use crate::utils::format_usdc;
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};

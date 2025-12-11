@@ -18,7 +18,7 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use tracing::info;
 
-use crate::chain::adapter::{
+use crate::deployment::adapter::{
     ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
 };
 
