@@ -15,7 +15,7 @@ use tracing::info;
 #[derive(Args)]
 pub struct DepositArgs {
     /// Deployment (e.g. arb, sui, bsc)
-    #[arg(long)]
+    #[arg(long, default_value = "arb")]
     deployment: Deployment,
 
     /// Job ID
@@ -64,7 +64,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     // Convert amount to U256 with 6 decimals (USDC has 6 decimals)
     let amount_u256 = U256::from(amount);
 
-    let mut chain_adapter = get_deployment_adapter(
+    let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
         args.auth_token,
@@ -77,29 +77,31 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     );
 
     // Setup provider
-    let provider = chain_adapter
+    let provider = deployment_adapter
         .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
     // Check if job exists
-    let job_data = chain_adapter
+    let job_data = deployment_adapter
         .get_job_data_if_exists(job_id.clone(), &provider)
         .await?;
     if job_data.is_none() {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
 
-    let extra_decimals = chain_adapter.fetch_extra_decimals(&provider).await?;
+    let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
     info!(
         "Depositing: {:.6} USDC",
         format_usdc(amount_u256, extra_decimals)
     );
 
     // First approve USDC transfer
-    let funds = chain_adapter.prepare_funds(amount_u256, &provider).await?;
+    let funds = deployment_adapter
+        .prepare_funds(amount_u256, &provider)
+        .await?;
 
-    let job_deposit_transaction = chain_adapter
+    let job_deposit_transaction = deployment_adapter
         .create_job_transaction(
             JobTransactionKind::Deposit {
                 job_id,
@@ -111,7 +113,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
         .await?;
 
     // Call jobDeposit function
-    let _ = chain_adapter
+    let _ = deployment_adapter
         .send_transaction(false, job_deposit_transaction, &provider)
         .await?;
 

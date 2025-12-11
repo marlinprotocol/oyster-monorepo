@@ -14,7 +14,7 @@ use tracing::info;
 #[derive(Args)]
 pub struct StopArgs {
     /// Deployment (e.g. arb, sui, bsc)
-    #[arg(long)]
+    #[arg(long, default_value = "arb")]
     deployment: Deployment,
 
     /// Job ID
@@ -44,7 +44,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     info!("Stopping oyster instance with:");
     info!("  Job ID: {}", job_id);
 
-    let mut chain_adapter = get_deployment_adapter(
+    let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
         args.auth_token,
@@ -55,15 +55,18 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     );
 
     // Setup provider
-    let provider = chain_adapter
+    let provider = deployment_adapter
         .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
-    info!("Signer address: {:?}", chain_adapter.get_sender_address());
+    info!(
+        "Signer address: {:?}",
+        deployment_adapter.get_sender_address()
+    );
 
     // Check if job exists
-    let job_data = chain_adapter
+    let job_data = deployment_adapter
         .get_job_data_if_exists(job_id.clone(), &provider)
         .await?;
     if job_data.is_none() {
@@ -72,7 +75,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
 
     // First, set the job's rate to 0 using the jobReviseRateInitiate call.
     info!("Found job, initiating rate update to 0...");
-    let job_revise_rate_transaction = chain_adapter
+    let job_revise_rate_transaction = deployment_adapter
         .create_job_transaction(
             JobTransactionKind::ReviseRateInitiate {
                 job_id: job_id.clone(),
@@ -82,7 +85,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
             &provider,
         )
         .await?;
-    let _ = chain_adapter
+    let _ = deployment_adapter
         .send_transaction(false, job_revise_rate_transaction, &provider)
         .await
         .context("Failed to send rate revise transaction")?;
@@ -94,7 +97,7 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     sleep(Duration::from_secs(300)).await;
 
     // Check if job is already closed before attempting to close
-    let job_exists = chain_adapter
+    let job_exists = deployment_adapter
         .get_job_data_if_exists(job_id.clone(), &provider)
         .await?;
     if job_exists.is_none() {
@@ -104,10 +107,10 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
 
     // Only proceed with closing if job still exists
     info!("Initiating job close...");
-    let job_close_transaction = chain_adapter
+    let job_close_transaction = deployment_adapter
         .create_job_transaction(JobTransactionKind::Close { job_id }, None, &provider)
         .await?;
-    let _ = chain_adapter
+    let _ = deployment_adapter
         .send_transaction(false, job_close_transaction, &provider)
         .await
         .context("Failed to send stop transaction")?;

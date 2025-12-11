@@ -126,7 +126,7 @@ OR
 Deploys an Oyster CVM instance.
 
 Required args:
-- `--chain`: Chain through which to deploy the instance
+- `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
 - `--duration-in-minutes`: Duration in minutes
 
@@ -171,7 +171,7 @@ Updates an existing Oyster CVM job's metadata.
 
 Required args:
 - `--job-id`: ID of the job to update
-- `--chain`: Chain through which to deploy the instance
+- `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
 Optional args:
@@ -213,7 +213,7 @@ Deposits additional USDC funds to an existing job.
 Required args:
 - `--job-id` (-j): The ID of the job to deposit funds to
 - `--amount` (-a): Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
-- `--chain`: Chain through which to deploy the instance
+- `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
 #### `stop`
@@ -221,7 +221,7 @@ Stops an Oyster CVM instance.
 
 Required args:
 - `--job-id` (-j): The ID of the job to stop
-- `--chain`: Chain through which to deploy the instance
+- `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
 #### `withdraw`
@@ -229,7 +229,7 @@ Withdraws USDC funds from an existing job. The command will first attempt to set
 
 Required args:
 - `--job-id` (-j): The ID of the job to withdraw funds from
-- `--chain`: Chain through which to deploy the instance
+- `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 - Either:
   - `--amount` (-a): Amount to withdraw in USDC (minimum 0.000001 USDC)
@@ -338,7 +338,7 @@ Required args:
 
 # Deploy using base image (quickstart)
 ./oyster-cvm deploy \
-  --chain arb \
+  --deployment arb \
   --wallet-private-key-file ./key.txt \
   --operator "0x..." \
   --duration-in-minutes 60 \
@@ -346,7 +346,7 @@ Required args:
 
 # Deploy with additional options
 ./oyster-cvm deploy \
-  --chain arb \
+  --deployment arb \
   --image-url "ipfs://Qm..." \
   --wallet-private-key-file ./key.txt \
   --operator "0x..." \
@@ -379,7 +379,7 @@ Required args:
 
 # Dry run the oyster blue deployment locally
 ./oyster-cvm deploy \
-  --chain arb \
+  --deployment arb \
   --preset "blue" \
   --operator "0x..." \
   --instance-type "m5a.2xlarge" \
@@ -392,7 +392,7 @@ Required args:
 
 # Update an existing job
 ./oyster-cvm update \
-  --chain arb \
+  --deployment arb \
   --job-id "0x000...37a" \
   --wallet-private-key-file ./key.txt \
   --image-url "ipfs://Qm..." \
@@ -442,7 +442,7 @@ Required args:
 
 # Deposit additional funds to a job
 ./oyster-cvm deposit \
-  --chain arb \
+  --deployment arb \
   --job-id "0x123..." \
   --amount 1000000 \
   --wallet-private-key "your-private-key"
@@ -456,7 +456,7 @@ Required args:
 
 # Stop an oyster instance
 ./oyster-cvm stop \
-  --chain arb \
+  --deployment arb \
   --job-id "0x000..." \
   --wallet-private-key "your-private-key"
 
@@ -470,7 +470,7 @@ Required args:
 
 # Withdraw funds from a job (specific amount)
 ./oyster-cvm withdraw \
-  --chain arb \
+  --deployment arb \
   --job-id "0x123..." \
   --amount 1000000 \
   --wallet-private-key "your-private-key"
@@ -484,7 +484,7 @@ Required args:
 
 # Withdraw maximum available funds from a job
 ./oyster-cvm withdraw \
-  --chain arb \
+  --deployment arb \
   --job-id "0x123..." \
   --max \
   --wallet-private-key "your-private-key"

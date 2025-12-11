@@ -18,7 +18,7 @@ const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
 #[derive(Args)]
 pub struct WithdrawArgs {
     /// Deployment (e.g. arb, sui, bsc)
-    #[arg(long)]
+    #[arg(long, default_value = "arb")]
     deployment: Deployment,
 
     /// Job ID
@@ -57,7 +57,7 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
 
     info!("Starting withdrawal process...");
 
-    let mut chain_adapter = get_deployment_adapter(
+    let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
         args.auth_token,
@@ -68,14 +68,17 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     );
 
     // Setup provider
-    let provider = chain_adapter
+    let provider = deployment_adapter
         .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
-    info!("Signer address: {:?}", chain_adapter.get_sender_address());
+    info!(
+        "Signer address: {:?}",
+        deployment_adapter.get_sender_address()
+    );
 
-    let Some(job_data) = chain_adapter
+    let Some(job_data) = deployment_adapter
         .get_job_data_if_exists(job_id.clone(), &provider)
         .await?
     else {
@@ -87,7 +90,7 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
         return Err(anyhow!("Cannot withdraw: job balance is 0 USDC"));
     }
 
-    let extra_decimals = chain_adapter.fetch_extra_decimals(&provider).await?;
+    let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
 
     // Scale down rate by extra_decimals
     let scaled_rate = job_data
@@ -160,7 +163,7 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     );
 
     // Call jobWithdraw function with amount in USDC
-    let job_withdraw_transaction = chain_adapter
+    let job_withdraw_transaction = deployment_adapter
         .create_job_transaction(
             JobTransactionKind::Withdraw {
                 job_id,
@@ -170,7 +173,7 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
             &provider,
         )
         .await?;
-    let _ = chain_adapter
+    let _ = deployment_adapter
         .send_transaction(false, job_withdraw_transaction, &provider)
         .await?;
 

@@ -14,7 +14,7 @@ use tracing::info;
 #[derive(Args)]
 pub struct UpdateArgs {
     /// Deployment (e.g. arb, sui, bsc)
-    #[arg(long)]
+    #[arg(long, default_value = "arb")]
     deployment: Deployment,
 
     /// Job ID
@@ -63,7 +63,7 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
     let debug = args.debug;
     let image_url = args.image_url;
 
-    let mut chain_adapter = get_deployment_adapter(
+    let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
         args.auth_token,
@@ -73,12 +73,12 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
             .transpose()?,
     );
 
-    let provider = chain_adapter
+    let provider = deployment_adapter
         .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
-    let Some(job_data) = chain_adapter
+    let Some(job_data) = deployment_adapter
         .get_job_data_if_exists(job_id.clone(), &provider)
         .await?
     else {
@@ -116,7 +116,7 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
         serde_json::to_string_pretty(&metadata)?
     );
 
-    let job_update_transaction = chain_adapter
+    let job_update_transaction = deployment_adapter
         .create_job_transaction(
             JobTransactionKind::Update {
                 job_id,
@@ -126,7 +126,7 @@ pub async fn update_job(args: UpdateArgs) -> Result<()> {
             &provider,
         )
         .await?;
-    let _ = chain_adapter
+    let _ = deployment_adapter
         .send_transaction(false, job_update_transaction, &provider)
         .await?;
 
