@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "oyster-cvm"
-version = "4.2.0"
+version = "4.2.1-alpha1"
 dependencies = [
  "alloy",
  "anyhow",
