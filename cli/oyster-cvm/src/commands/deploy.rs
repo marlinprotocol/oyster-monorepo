@@ -34,7 +34,7 @@ const TCP_CHECK_INTERVAL: u64 = 15;
 #[derive(Args, Debug)]
 pub struct DeployArgs {
     /// Deployment (e.g. arb, sui, bsc)
-    #[arg(long)]
+    #[arg(long, default_value = "arb")]
     deployment: Deployment,
 
     /// Preset for parameters (e.g. blue)
@@ -150,7 +150,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     let operator = parse_operator(&args.deployment, args.operator);
 
-    let mut chain_adapter = get_deployment_adapter(
+    let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
         args.auth_token,
@@ -162,12 +162,12 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .transpose()?,
     );
 
-    let provider = chain_adapter
+    let provider = deployment_adapter
         .create_provider_with_wallet(&args.wallet.load_required()?)
         .await?;
 
     // Get CP URL using the configured provider
-    let cp_url = chain_adapter
+    let cp_url = deployment_adapter
         .get_operator_cp(&operator, &provider)
         .await
         .context("Failed to get CP URL")?
@@ -209,7 +209,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         find_minimum_rate_instance(&operator_spec, &args.region, &instance_type)
             .context("Configuration not supported by operator")?;
 
-    let extra_decimals = chain_adapter.fetch_extra_decimals(&provider).await?;
+    let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
 
     // Calculate costs
     // SAFETY: will be some value if simulation is not opted
@@ -267,9 +267,11 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     );
 
     // Approve USDC
-    let funds = chain_adapter.prepare_funds(total_cost, &provider).await?;
+    let funds = deployment_adapter
+        .prepare_funds(total_cost, &provider)
+        .await?;
 
-    let job_create_transaction = chain_adapter
+    let job_create_transaction = deployment_adapter
         .create_job_transaction(
             JobTransactionKind::Create {
                 metadata,
@@ -283,7 +285,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .await?;
 
     // Create job
-    let job_id = chain_adapter
+    let job_id = deployment_adapter
         .send_transaction(true, job_create_transaction, &provider)
         .await?
         .ok_or(anyhow!("Failed to get the Job ID"))?;
@@ -335,8 +337,8 @@ async fn start_simulation(args: DeployArgs) -> Result<()> {
     simulate(simulate_args).await
 }
 
-fn parse_operator(chain: &Deployment, operator: Option<String>) -> String {
-    match chain {
+fn parse_operator(deployment: &Deployment, operator: Option<String>) -> String {
+    match deployment {
         Deployment::Arbitrum => {
             operator.unwrap_or(configs::arb::DEFAULT_OPERATOR_ADDRESS.to_string())
         }
