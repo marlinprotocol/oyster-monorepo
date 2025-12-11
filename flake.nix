@@ -255,7 +255,7 @@
         inherit nixpkgs systemConfig fenix naersk;
       };
       serverless.workerd = ./. + "/serverless/executor/runtime/workerd";
-      enclaves.green = import ./enclaves/green/default.nix {
+      enclaves.testing.green = import ./enclaves/testing/green.nix {
         inherit nixpkgs systemConfig;
       };
     };
