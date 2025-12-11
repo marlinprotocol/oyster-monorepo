@@ -42,7 +42,7 @@ $ ./target/release/oyster-operator-arb-indexer --help
 Usage: oyster-operator-arb-indexer [OPTIONS] --rpc <RPC> --contract <CONTRACT> --provider <PROVIDER>
 
 Options:
-  -r, --rpc <RPC>                  RPC URL
+  -r, --rpc <RPC>                  Websocket RPC URL
   -c, --contract <CONTRACT>        Market contract address
   -p, --provider <PROVIDER>        Provider address
   -s, --start-block <START_BLOCK>  Start block for log parsing

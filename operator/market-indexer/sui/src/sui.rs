@@ -14,7 +14,8 @@ use sui_rpc::client::HeadersInterceptor;
 use sui_rpc::field::FieldMask;
 use sui_rpc::proto::sui::rpc::v2::{
     Checkpoint, Command, GetCheckpointRequest, GetServiceInfoRequest, MoveCall,
-    ProgrammableTransaction, SimulateTransactionRequest, Transaction, TransactionKind,
+    ProgrammableTransaction, SimulateTransactionRequest, SubscribeCheckpointsRequest, Transaction,
+    TransactionKind,
 };
 use sui_sdk_types::{Address, CheckpointData};
 use tokio::sync::Semaphore;
@@ -22,6 +23,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
+use tokio_stream::StreamExt;
 
 const GRPC_AUTH_TOKEN: &str = "x-token";
 
@@ -246,7 +248,8 @@ impl ChainHandler for SuiProvider {
         let service_info = Retry::spawn(
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
-                .map(jitter),
+                .map(jitter)
+                .take(5),
             move || {
                 let mut provider = provider.clone();
                 async move {
@@ -286,7 +289,8 @@ impl ChainHandler for SuiProvider {
         let response = Retry::spawn(
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
-                .map(jitter),
+                .map(jitter)
+                .take(5),
             move || {
                 let mut provider = provider.clone();
                 let request = SimulateTransactionRequest::default().with_transaction(
@@ -333,7 +337,8 @@ impl ChainHandler for SuiProvider {
         let current_checkpoint = Retry::spawn(
             ExponentialBackoff::from_millis(500)
                 .max_delay(Duration::from_secs(10))
-                .map(jitter),
+                .map(jitter)
+                .take(5),
             move || {
                 let mut provider = provider.clone();
                 async move {
@@ -357,7 +362,7 @@ impl ChainHandler for SuiProvider {
             .sequence_number())
     }
 
-    async fn fetch_logs_and_group_by_block(
+    async fn fetch_logs_grouped_by_block(
         &self,
         start_block: u64,
         end_block: u64,
@@ -406,7 +411,8 @@ impl ChainHandler for SuiProvider {
                         let checkpoint = Retry::spawn(
                             ExponentialBackoff::from_millis(500)
                                 .max_delay(Duration::from_secs(10))
-                                .map(jitter),
+                                .map(jitter)
+                                .take(5),
                             || async {
                                 let remote_client = reqwest::Client::builder()
                                     .timeout(DEFAULT_REQUEST_TIMEOUT)
@@ -443,6 +449,50 @@ impl ChainHandler for SuiProvider {
         }
 
         Ok(block_logs)
+    }
+
+    async fn subscribe_logs_grouped_by_block<'a>(
+        &'a self,
+    ) -> Result<impl StreamExt<Item = (u64, Vec<Self::RawLog>)> + Send + 'a> {
+        let provider = self
+            .get_client()
+            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let checkpoint_stream = Retry::spawn(
+            ExponentialBackoff::from_millis(500)
+                .max_delay(Duration::from_secs(10))
+                .map(jitter)
+                .take(5),
+            move || {
+                let mut provider = provider.clone();
+                async move {
+                    timeout(
+                        DEFAULT_REQUEST_TIMEOUT,
+                        provider.subscription_client().subscribe_checkpoints(
+                            SubscribeCheckpointsRequest::const_default().with_read_mask(
+                                FieldMask {
+                                    paths: vec!["sequence_number".into(), "transactions".into()],
+                                },
+                            ),
+                        ),
+                    )
+                    .await
+                }
+            },
+        )
+        .await
+        .context("Request timed out for subscribing to the checkpoints")?
+        .context("Request failed for subscribing checkpoints data")?
+        .into_inner();
+
+        Ok(checkpoint_stream
+            .take_while(|checkpoint| checkpoint.is_ok())
+            .map(move |checkpoint| {
+                let data = checkpoint.unwrap();
+                (
+                    data.cursor(),
+                    checkpoint_to_sui_logs(&self.package_id, data.checkpoint().clone()),
+                )
+            }))
     }
 }
 

@@ -2385,6 +2385,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-retry",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -2820,11 +2821,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-stream",
  "clap",
  "dotenvy",
  "indexer-framework",
  "tokio",
  "tokio-retry",
+ "tokio-stream",
  "tracing-subscriber",
 ]
 

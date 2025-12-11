@@ -1510,6 +1510,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-retry",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -1882,6 +1883,7 @@ dependencies = [
  "sui-sdk-types",
  "tokio",
  "tokio-retry",
+ "tokio-stream",
  "tracing-subscriber",
 ]
 
