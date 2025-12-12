@@ -1882,6 +1882,7 @@ dependencies = [
  "sui-sdk-types",
  "tokio",
  "tokio-retry",
+ "tracing",
  "tracing-subscriber",
 ]
 

@@ -2825,6 +2825,7 @@ dependencies = [
  "indexer-framework",
  "tokio",
  "tokio-retry",
+ "tracing",
  "tracing-subscriber",
 ]
 
