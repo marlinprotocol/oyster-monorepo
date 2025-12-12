@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, command};
 use dotenvy::dotenv;
+use indexer_framework::health::{HealthTracker, start_health_server};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -50,6 +51,10 @@ struct Args {
     /// Size of block range for fetching logs
     #[arg(long, default_value = "500")]
     range_size: u64,
+
+    /// Health check port
+    #[arg(long, default_value = "8080")]
+    health_port: u16,
 }
 
 #[tokio::main]
@@ -70,6 +75,20 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+
+    let health = HealthTracker::new();
+    let health_clone = health.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = start_health_server(health_clone.clone(), args.health_port).await {
+                error!(error = ?e, "Health server crashed, restarting in 5s");
+                sleep(Duration::from_secs(5)).await;
+            } else {
+                warn!("Health server exited, restarting in 5s");
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    });
 
     if args.grpc_username.is_some() && args.grpc_token.is_some() {
         anyhow::bail!("Provide either gRPC username/password OR token, not both");
@@ -101,11 +120,14 @@ async fn main() -> Result<()> {
             args.provider.clone(),
             args.start_block,
             args.range_size,
+            health.clone(),
         )
         .await;
 
         if let Err(e) = res {
+            let error_message = format!("Indexer run error: {:?}", e);
             error!(error = ?e, "Indexer error, retrying after delay");
+            health.record_error(error_message);
             sleep(Duration::from_secs(30)).await;
         } else {
             warn!("Indexer returned unexpectedly, restarting");
