@@ -1,5 +1,6 @@
 pub mod chain;
 pub mod events;
+pub mod health;
 pub(crate) mod repository;
 pub(crate) mod schema;
 
@@ -10,9 +11,10 @@ use anyhow::{Context, Result, anyhow};
 use tokio::time::sleep;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use chain::{ChainHandler, transform_block_logs_into_records};
+use health::HealthTracker;
 use repository::Repository;
 
 // Define generic trait for safe integer conversions
@@ -59,6 +61,7 @@ pub async fn run(
     provider: String,
     mut start_block: Option<i64>,
     range_size: u64,
+    health: HealthTracker,
 ) -> Result<()> {
     let repo = Repository::new(db_url)
         .await
@@ -87,10 +90,12 @@ pub async fn run(
                 block, last_processed_block_id
             );
             start_block = None;
-        }else {
+        } else {
             last_processed_block_id = block - 1;
         }
     }
+
+    health.record_success(last_processed_block_id);
 
     info!(
         last_processed_block_id,
@@ -127,25 +132,38 @@ pub async fn run(
     .context("Failed to fetch active job IDs from the DB")?;
 
     loop {
-        let latest_block = rpc_client
-            .fetch_latest_block()
-            .await
-            .context("RPC latest block fetch failed")?;
+        let latest_block = match rpc_client.fetch_latest_block().await {
+            Ok(block) => block,
+            Err(err) => {
+                let error_message = format!("RPC latest block fetch failed: {}", err);
+                error!(error = %err, "RPC latest block fetch failed, retrying after 10s delay");
+                health.record_error(error_message);
+                sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+        };
         let latest_block_i64: i64 = latest_block.saturating_to();
 
         debug!(latest_block, "Fetched latest block from RPC");
 
         if latest_block_i64 < last_processed_block_id {
-            // warn!(db_block = last_processed_block_id, rpc_block = latest_block_i64, "RPC is behind DB (possible rollback)");
-            return Err(anyhow!(
+            let error_message = format!(
                 "RPC {} is behind DB {} (possible rollback)",
-                latest_block_i64,
-                last_processed_block_id
-            ));
+                latest_block_i64, last_processed_block_id
+            );
+            warn!(
+                db_block = last_processed_block_id,
+                rpc_block = latest_block_i64,
+                "RPC is behind DB, waiting 10s before retrying"
+            );
+            health.record_error(error_message);
+            sleep(Duration::from_secs(10)).await;
+            continue;
         }
 
         if latest_block_i64 == last_processed_block_id {
             trace!("Up-to-date with RPC, sleeping 5s");
+            health.record_success(last_processed_block_id);
             sleep(Duration::from_secs(5)).await;
             continue;
         }
@@ -154,10 +172,19 @@ pub async fn run(
         let end_block = min(start_block + range_size - 1, latest_block);
         info!(start_block, end_block, "Fetching new block range");
 
-        let block_logs = rpc_client
+        let block_logs = match rpc_client
             .fetch_logs_and_group_by_block(start_block, end_block)
             .await
-            .context("Failed to fetch logs from the chain")?;
+        {
+            Ok(logs) => logs,
+            Err(err) => {
+                let error_message = format!("Failed to fetch logs from the chain: {}", err);
+                error!(error = %err, "Failed to fetch block logs, retrying after 10s delay");
+                health.record_error(error_message);
+                sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+        };
         info!(start_block, end_block, "Processing block range");
 
         let mut end_block_num = last_processed_block_id;
@@ -198,6 +225,8 @@ pub async fn run(
 
                 batch_records.clear();
                 last_processed_block_id = end_block_num;
+
+                health.record_success(last_processed_block_id);
             }
         }
 
@@ -217,5 +246,7 @@ pub async fn run(
         }
 
         last_processed_block_id = end_block_num;
+
+        health.record_success(last_processed_block_id);
     }
 }
