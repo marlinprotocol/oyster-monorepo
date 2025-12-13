@@ -1,0 +1,9 @@
+target/
+.env
+config/
+config/*
+temp
+temp/
+config.json
+.marlin
+.marlin/*

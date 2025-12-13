@@ -1,0 +1,12 @@
+target/
+.env
+config/
+config/*
+.git
+.gitignore
+config.json
+temp
+temp/
+config.json
+.marlin
+.marlin/*
