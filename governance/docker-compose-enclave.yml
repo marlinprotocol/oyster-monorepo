@@ -1,8 +1,0 @@
-services:
-  app:
-    container_name: governance
-    network_mode: host
-    image: jerryandspike/governance_enclave:v2.0
-    ports:
-      - "3001:3001"
-    restart: unless-stopped

@@ -1,9 +1,0 @@
-services:
-  app:
-    container_name: governance
-    image: jerryandspike/governance_enclave:v2.0
-    ports:
-      - "3001:3001"
-    env_file:
-      - .env
-    restart: unless-stopped
