@@ -1,4 +1,4 @@
-use crate::LogsProvider;
+use indexer_framework::LogsProvider;
 use anyhow::Result;
 
 pub struct MockProvider {

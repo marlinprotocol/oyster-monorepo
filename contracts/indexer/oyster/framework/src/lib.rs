@@ -1,18 +1,12 @@
-mod constants;
-mod handlers;
-mod schema;
+pub mod schema;
 
 use std::time::Duration;
 
-use alloy::primitives::Address;
-use alloy::providers::Provider;
 use alloy::rpc::types::eth::Log;
-use alloy::rpc::types::Filter;
-use alloy::transports::http::reqwest::Url;
 use anyhow::{anyhow, Context, Result};
 use diesel::prelude::*;
-
-use handlers::handle_log;
+use diesel_migrations::embed_migrations;
+use diesel_migrations::EmbeddedMigrations;
 use tracing::{info, instrument};
 
 pub trait LogsProvider {
@@ -21,62 +15,19 @@ pub trait LogsProvider {
     fn block_timestamp(&self, block_number: u64) -> Result<u64>;
 }
 
-#[derive(Clone)]
-pub struct AlloyProvider {
-    pub url: Url,
-    pub contract: Address,
-}
-
-impl LogsProvider for AlloyProvider {
-    fn latest_block(&mut self) -> Result<u64> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(rt.block_on(
-            alloy::providers::ProviderBuilder::new()
-                .on_http(self.url.clone())
-                .get_block_number(),
-        )?)
-    }
-
-    fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(rt.block_on(
-            alloy::providers::ProviderBuilder::new()
-                .on_http(self.url.clone())
-                .get_logs(
-                    &Filter::new()
-                        .from_block(start_block)
-                        .to_block(end_block)
-                        .address(self.contract),
-                ),
-        )?)
-    }
-
-    fn block_timestamp(&self, block_number: u64) -> Result<u64> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(rt
-            .block_on(
-                alloy::providers::ProviderBuilder::new()
-                    .on_http(self.url.clone())
-                    .get_block_by_number(block_number.into(), false),
-            )?
-            .map(|b| b.header.timestamp)
-            .unwrap_or(0)
-            .into())
-    }
-}
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 
 #[instrument(level = "info", skip_all, parent = None)]
-pub fn event_loop(
+pub fn event_loop<F, P>(
     conn: &mut PgConnection,
-    provider: &mut impl LogsProvider,
+    provider: &mut P,
     range_size: u64,
-) -> Result<()> {
+    handler: F,
+) -> Result<()>
+where
+    F: Fn(&mut PgConnection, Log, &P) -> Result<()>,
+    P: LogsProvider,
+{
     // fetch last updated block from the db
     let mut last_updated = schema::sync::table
         .select(schema::sync::block)
@@ -129,7 +80,7 @@ pub fn event_loop(
         // using a temporary tokio runtime is a possibility
         conn.transaction(|conn| {
             for log in logs {
-                handle_log(conn, log, provider).context("failed to handle log")?;
+                handler(conn, log, provider).context("failed to handle log")?;
             }
             diesel::update(schema::sync::table)
                 .set(schema::sync::block.eq(end_block as i64))

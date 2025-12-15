@@ -1,9 +1,9 @@
-use std::ops::Add;
+use std::ops::Sub;
 use std::str::FromStr;
 
 use crate::constants::RATE_SCALING_FACTOR;
-use crate::schema::jobs;
-use crate::schema::transactions;
+use indexer_framework::schema::jobs;
+use indexer_framework::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
@@ -20,7 +20,7 @@ use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
-pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
+pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
@@ -38,11 +38,10 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
-    info!(id, ?amount, "depositing into job");
 
-    // get the current rate of the job to calculate how much more time the job will run for
-    // we can also error out here if the job does not exist or is closed but for now we just move on.
+    info!(id, ?amount, "withdrawing from job");
 
+    // get the current rate of the job to calculate how much time needs to be removed from the job
     // target sql:
     // SELECT rate FROM jobs
     // WHERE id = "<id>" AND is_closed = false;
@@ -60,19 +59,13 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
     }
 
     let rate = rate.unwrap();
+    let duration_removed = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
 
-    let additional_duration = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
-
-    info!(
-        id,
-        ?rate,
-        ?additional_duration,
-        "got job rate and additional duration"
-    );
+    info!(?rate, ?duration_removed, "duration removed");
 
     // target sql:
     // UPDATE jobs
-    // SET balance = balance + <amount>, end_epoch = end_epoch + <additional_duration>
+    // SET balance = balance - <amount>, end_epoch = end_epoch - <duration_removed>
     // WHERE id = "<id>"
     // AND is_closed = false;
     let count = diesel::update(jobs::table)
@@ -82,8 +75,8 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
         // and later checking if any rows were updated
         .filter(jobs::is_closed.eq(false))
         .set((
-            jobs::balance.eq(jobs::balance.add(&amount)),
-            jobs::end_epoch.eq(jobs::end_epoch.add(&additional_duration)),
+            jobs::balance.eq(jobs::balance.sub(&amount)),
+            jobs::end_epoch.eq(jobs::end_epoch.sub(&duration_removed)),
         ))
         .execute(conn)
         .context("failed to update job")?;
@@ -98,7 +91,7 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     // target sql:
     // INSERT INTO transactions (block, idx, job, value, is_deposit)
-    // VALUES (block, idx, "<job>", "<value>", true);
+    // VALUES (block, idx, "<job>", "<value>", false);
     diesel::insert_into(transactions::table)
         .values((
             transactions::block.eq(block as i64),
@@ -106,12 +99,12 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
             transactions::tx_hash.eq(tx_hash),
             transactions::job.eq(&id),
             transactions::amount.eq(&amount),
-            transactions::is_deposit.eq(true),
+            transactions::is_deposit.eq(false),
         ))
         .execute(conn)
-        .context("failed to create deposit")?;
+        .context("failed to create withdraw")?;
 
-    info!(id, ?amount, "deposited into job");
+    info!(id, ?amount, "withdrew from job");
 
     Ok(())
 }
@@ -128,12 +121,12 @@ mod tests {
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::MockProvider;
     use crate::handlers::test_utils::TestDb;
-    use crate::schema::providers;
+    use indexer_framework::schema::providers;
 
     use super::*;
 
     #[test]
-    fn test_deposit_into_existing_job() -> Result<()> {
+    fn test_withdraw_from_existing_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -208,7 +201,7 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::is_deposit.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -270,7 +263,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                true,
             ))
         );
 
@@ -286,7 +279,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobDeposited(bytes32,address,uint256)").into(),
+                        event!("JobWithdrew(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -329,11 +322,11 @@ mod tests {
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     BigDecimal::from(1),
-                    BigDecimal::from(25),
+                    BigDecimal::from(15),
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (25 * RATE_SCALING_FACTOR)),
+                    BigDecimal::from(creation_timestamp + (15 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -363,7 +356,7 @@ mod tests {
                     keccak256!("some tx").encode_hex_with_prefix(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(5),
-                    true,
+                    false,
                 ),
                 (
                     123i64,
@@ -371,7 +364,7 @@ mod tests {
                     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                     BigDecimal::from(10),
-                    false,
+                    true,
                 )
             ])
         );
@@ -380,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deposit_into_non_existent_job() -> Result<()> {
+    fn test_withdraw_from_non_existent_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -432,7 +425,7 @@ mod tests {
                 transactions::job
                     .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::is_deposit.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -480,7 +473,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                false,
+                true,
             ))
         );
 
@@ -496,7 +489,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobDeposited(bytes32,address,uint256)").into(),
+                        event!("JobWithdrew(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -561,7 +554,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(10),
-                false,
+                true,
             ))
         );
 
@@ -569,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deposit_into_closed_job() -> Result<()> {
+    fn test_withdraw_from_closed_job() -> Result<()> {
         // setup
         let mut db = TestDb::new();
         let conn = &mut db.conn;
@@ -644,7 +637,7 @@ mod tests {
                 transactions::job
                     .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
                 transactions::amount.eq(BigDecimal::from(10)),
-                transactions::is_deposit.eq(false),
+                transactions::is_deposit.eq(true),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -706,7 +699,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                true,
             ))
         );
 
@@ -722,7 +715,7 @@ mod tests {
                 address: contract,
                 data: LogData::new(
                     vec![
-                        event!("JobDeposited(bytes32,address,uint256)").into(),
+                        event!("JobWithdrew(bytes32,address,uint256)").into(),
                         "0x3333333333333333333333333333333333333333333333333333333333333333"
                             .parse()?,
                         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
@@ -801,7 +794,7 @@ mod tests {
                 "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(10),
-                false,
+                true,
             ))
         );
 

@@ -1,4 +1,4 @@
-use crate::schema::providers;
+use indexer_framework::schema::providers;
 use alloy::primitives::Address;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;

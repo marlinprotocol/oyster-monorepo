@@ -3,10 +3,9 @@ use anyhow::anyhow;
 use anyhow::Result;
 use diesel::PgConnection;
 use ethp::event;
+use indexer_framework::LogsProvider;
 use tracing::warn;
 use tracing::{info, instrument};
-
-use crate::LogsProvider;
 
 mod provider_added;
 use provider_added::handle_provider_added;

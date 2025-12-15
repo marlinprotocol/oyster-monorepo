@@ -1,6 +1,6 @@
 use diesel::{Connection, PgConnection, RunQueryDsl};
-use diesel_migrations::FileBasedMigrations;
 use diesel_migrations::MigrationHarness;
+use indexer_framework::MIGRATIONS;
 
 fn id() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -37,8 +37,7 @@ impl TestDb {
             conn: test_conn,
         };
 
-        let migrations = FileBasedMigrations::find_migrations_directory().unwrap();
-        db.conn.run_pending_migrations(migrations).unwrap();
+        db.conn.run_pending_migrations(MIGRATIONS).unwrap();
 
         db
     }

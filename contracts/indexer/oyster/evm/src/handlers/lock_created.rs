@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
-use crate::schema::jobs;
-use crate::schema::revise_rate_requests;
+use indexer_framework::schema::jobs;
+use indexer_framework::schema::revise_rate_requests;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
@@ -100,7 +100,7 @@ mod tests {
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::MockProvider;
     use crate::handlers::test_utils::TestDb;
-    use crate::schema::{jobs, providers, revise_rate_requests};
+    use indexer_framework::schema::{jobs, providers, revise_rate_requests};
 
     use super::*;
 

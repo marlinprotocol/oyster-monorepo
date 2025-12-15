@@ -1,16 +1,17 @@
+mod constants;
+mod handlers;
+mod provider;
+
 use anyhow::Result;
 use clap::command;
 use clap::Parser;
 use diesel::Connection;
 use diesel::PgConnection;
-use diesel_migrations::embed_migrations;
-use diesel_migrations::EmbeddedMigrations;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
-
-use oyster_indexer::event_loop;
-use oyster_indexer::start_from;
-use oyster_indexer::AlloyProvider;
+use indexer_framework::{event_loop, start_from, MIGRATIONS};
+use provider::AlloyProvider;
+use handlers::handle_log;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -36,8 +37,6 @@ struct Args {
     range_size: u64,
 }
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
-
 fn run() -> Result<()> {
     let args = Args::parse();
 
@@ -58,7 +57,7 @@ fn run() -> Result<()> {
     };
     let is_start_set = start_from(&mut conn, args.start_block)?;
     debug!("is_start_set: {}", is_start_set);
-    event_loop(&mut conn, &mut provider, args.range_size)
+    event_loop(&mut conn, &mut provider, args.range_size, handle_log)
 }
 
 fn main() -> Result<()> {
