@@ -40,6 +40,7 @@ pub struct VoteFactory {
     unique_valid_votes: HashMap<U256, HashMap<Address, VoteDecision>>,
     proposal_time_info: ProposalTimeInfo,
     unique_valid_weighted_votes: HashMap<U256, HashMap<Address, WeightVoteDecision>>,
+    total_votes_by_chain: HashMap<U256, U256>,
     complete: bool,
 }
 
@@ -55,6 +56,7 @@ impl VoteFactory {
             vote_by_index: HashMap::default(),
             unique_valid_votes: HashMap::default(),
             unique_valid_weighted_votes: HashMap::default(),
+            total_votes_by_chain: HashMap::default(),
             proposal_time_info,
             complete: false,
         }
@@ -129,6 +131,33 @@ impl VoteFactory {
         }
 
         Ok(())
+    }
+
+    pub fn set_total_votes_by_chain(&mut self, chain_id: U256, total_votes: U256) -> Result<()> {
+        self.total_votes_by_chain.insert(chain_id, total_votes);
+
+        Ok(())
+    }
+
+    pub fn get_total_votes_by_chain(&self, chain_id: U256) -> Result<U256> {
+        Ok(self
+            .total_votes_by_chain
+            .get(&chain_id)
+            .copied()
+            .unwrap_or_default())
+    }
+
+    pub fn total_votes_by_chain(&self) -> &HashMap<U256, U256> {
+        &self.total_votes_by_chain
+    }
+
+    pub fn total_votes_across_all_chains(&self) -> U256 {
+        let mut total_voting_power = U256::ZERO;
+        for (_, total_votes) in self.total_votes_by_chain() {
+            total_voting_power += total_votes
+        }
+
+        total_voting_power
     }
 
     /// Removes and returns the vote stored at the given on-chain index, if any.

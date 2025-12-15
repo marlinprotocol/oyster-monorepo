@@ -172,8 +172,36 @@ impl<N: Network> VoteParse<N> {
             .get_accurate_proposal_creation_block_number(proposal_id)
             .await?;
 
-        let mut updates: Vec<WeightVoteDecision> = Vec::new();
+        let mut total_votes_by_chain: Vec<(U256, U256)> = Vec::new();
+        let token_network_configs = self
+            .governance_enclave
+            .get_all_supported_token_network_configs(accurate_block_on_gov_chain)
+            .await?;
 
+        for (chain_id, token_network_config) in token_network_configs {
+            let base_url = token_network_config
+                .rpcUrls
+                .get(0)
+                .ok_or_else(|| anyhow!("no rpc URL found in token_network_configs"))?;
+
+            let rpc_url = config::create_rpc_url(base_url, chain_id)?;
+
+            let nearest_block_to_proposal_creation =
+                find_block_by_timestamp::<Ethereum>(&rpc_url, proposal_ts).await?;
+
+            let token_instance = TokenInstance::<Ethereum>::new(
+                &rpc_url,
+                token_network_config.tokenAddress.to_string().as_ref(),
+            )?;
+
+            let total_votes = token_instance
+                .get_total_votes(nearest_block_to_proposal_creation)
+                .await?;
+
+            total_votes_by_chain.push((chain_id, total_votes));
+        }
+
+        let mut updates: Vec<WeightVoteDecision> = Vec::new();
         for (chain_id, address_vote_map) in votes_by_chain {
             let token_network_configs = self
                 .governance_enclave
@@ -244,6 +272,10 @@ impl<N: Network> VoteParse<N> {
                 .map_err(|e| anyhow!("unable to get lock (mutex poisoned): {e}"))?;
             for w in updates {
                 vf.set_vote_weight(w)?;
+            }
+
+            for (chain_id, total_votes) in total_votes_by_chain {
+                vf.set_total_votes_by_chain(chain_id, total_votes)?;
             }
             vf.set_complete(true);
         }

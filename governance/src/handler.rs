@@ -255,6 +255,7 @@ async fn status<K: KMS + Send + Sync>(
         proposal_id,
         image_id,
         vote_factory.weighted_votes(),
+        vote_factory.total_votes_by_chain(),
         kms.clone().into_inner(),
         contract_data_preimage,
     );
@@ -270,7 +271,8 @@ async fn status<K: KMS + Send + Sync>(
             "submit_result_input_params": submit_result_input_params,
             "vote_snapshot": vote_factory.weighted_votes(),
             "vote_hash": vote_factory.vote_hash(),
-            "raw_votes": vote_factory.votes()
+            "raw_votes": vote_factory.votes(),
+            "total_votes_across_all_chains": vote_factory.total_votes_across_all_chains()
         }
     )))
 }

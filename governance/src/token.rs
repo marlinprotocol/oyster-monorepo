@@ -12,6 +12,7 @@ sol! {
     #[sol(rpc)]
     interface IERC20 {
         function balanceOf(address owner) external view override returns (uint256);
+        function totalSupply() public view virtual override returns (uint256);
     }
 }
 
@@ -40,6 +41,21 @@ impl<N: Network> TokenInstance<N> {
         })
     }
 
+    #[deprecated(note = "Till there is no way to know the total supply, this is the only way")]
+    pub async fn get_total_votes(&self, block_number: u64) -> Result<U256> {
+        log::debug!("Fetching total supply for votes");
+        let token_instance = IERC20::new(self.token_address, &self.provider);
+
+        let supply = token_instance
+            .totalSupply()
+            .block(block_number.into())
+            .call()
+            .await?;
+
+        Ok(supply)
+    }
+
+    #[deprecated(note = "Till there is no way to know the total supply, this is the only way")]
     pub async fn get_token_weight(&self, owner: Address, block_number: u64) -> Result<TokenWeight> {
         log::debug!(
             "Fetching token balance: {} for address: {} at block_number: {}",

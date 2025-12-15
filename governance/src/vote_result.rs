@@ -54,6 +54,7 @@ pub struct VoteAggregator<'a, K: KMS + Send + Sync> {
     proposal_id: B256,
     image_id: B256,
     weighted_votes: &'a HashMap<U256, HashMap<Address, WeightVoteDecision>>,
+    total_votes_by_chain: &'a HashMap<U256, U256>,
     kms: Arc<K>,
     transient_secret_key: SigningPrivateKey,
     contract_data_preimage: ContractDataPreimage,
@@ -80,6 +81,7 @@ where
         proposal_id: B256,
         image_id: B256,
         weighted_votes: &'a HashMap<U256, HashMap<Address, WeightVoteDecision>>,
+        total_votes_by_chain: &'a HashMap<U256, U256>,
         kms: Arc<K>,
         contract_data_preimage: ContractDataPreimage,
     ) -> Self {
@@ -87,6 +89,7 @@ where
             proposal_id,
             image_id,
             weighted_votes,
+            total_votes_by_chain,
             kms,
             transient_secret_key: SigningPrivateKey::random(),
             contract_data_preimage,
@@ -110,25 +113,25 @@ where
         let mut no_with_veto = U256::ZERO;
         let mut total_voting_power = U256::ZERO;
 
+        for (_, total_votes) in self.total_votes_by_chain {
+            total_voting_power += total_votes
+        }
+
         // iterate by reference; do not move out of &self
         for (_pid, address_vote_map) in self.weighted_votes.iter() {
             for (_addr, weighted_vote) in address_vote_map.iter() {
                 match &weighted_vote.decision {
                     crate::proposal::VoteDecision::Yes(_) => {
                         yes += weighted_vote.weight.weight;
-                        total_voting_power += weighted_vote.weight.weight;
                     }
                     crate::proposal::VoteDecision::No(_) => {
                         no += weighted_vote.weight.weight;
-                        total_voting_power += weighted_vote.weight.weight;
                     }
                     crate::proposal::VoteDecision::Abstain(_) => {
                         abstain += weighted_vote.weight.weight;
-                        total_voting_power += weighted_vote.weight.weight;
                     }
                     crate::proposal::VoteDecision::NoWithVeto(_) => {
                         no_with_veto += weighted_vote.weight.weight;
-                        total_voting_power += weighted_vote.weight.weight;
                     }
                     crate::proposal::VoteDecision::Invalid(_) => {
                         // ignored

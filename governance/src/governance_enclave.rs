@@ -203,6 +203,25 @@ impl<N: Network> GovernanceEnclave<N> {
 
         Ok(init_network_hash)
     }
+
+    pub async fn get_all_supported_token_network_configs(
+        &self,
+        block_number: u64,
+    ) -> Result<Vec<(U256, TokenNetworkConfig)>> {
+        let mut configs = vec![];
+        let i_governance = IGovernanceEnclave::new(self.governance_enclave, &self.provider);
+        let network_chain_ids = i_governance.getAllSupportedChainIds().call().await?;
+
+        for chain_id in network_chain_ids {
+            let token_network_config = self
+                .get_token_network_config(chain_id, block_number)
+                .await?;
+
+            configs.push((chain_id, token_network_config));
+        }
+
+        Ok(configs)
+    }
 }
 
 #[cfg(test)]
