@@ -33,6 +33,16 @@
         StandardError = "journal+console";
       };
     };
+
+    # root ssh for testing
+    services.openssh = {
+      enable = true;
+      settings = {
+        PermitRootLogin = "yes";
+        PasswordAuthentication = true;
+      };
+    };
+    users.users.root.initialPassword = "greenroot";
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
