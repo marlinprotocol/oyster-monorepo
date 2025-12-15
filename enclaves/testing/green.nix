@@ -43,6 +43,9 @@
       };
     };
     users.users.root.initialPassword = "greenroot";
+
+    # disable firewall while testing
+    networking.firewall.enable = false;
   };
   nixosSystem = nixpkgs.lib.nixosSystem {
     system = systemConfig.system;
