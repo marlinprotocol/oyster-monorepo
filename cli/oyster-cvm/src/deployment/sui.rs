@@ -30,7 +30,7 @@ use sui_sdk_types::{
 use tracing::{error, info};
 
 use crate::deployment::adapter::{
-    DeploymentAdapter, ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
+    ChainFunds, ChainProvider, ChainTransaction, DeploymentAdapter, JobData, JobTransactionKind,
 };
 
 const SUI_PRIV_KEY_PREFIX: &str = "suiprivkey";
@@ -334,8 +334,8 @@ impl DeploymentAdapter for SuiAdapter {
             .context("Failed to bcs decode metadata value")?;
         let rate: u64 = bcs::from_bytes(return_values[4].value().value())
             .context("Failed to bcs decode rate value")?;
-        let last_settled_ms: u64 = bcs::from_bytes(return_values[5].value().value())
-            .context("Failed to bcs decode last settled ms value")?;
+        let last_settled: u64 = bcs::from_bytes(return_values[5].value().value())
+            .context("Failed to bcs decode last settled value")?;
         let balance: u64 = bcs::from_bytes(return_values[6].value().value())
             .context("Failed to bcs decode balance value")?;
 
@@ -343,10 +343,10 @@ impl DeploymentAdapter for SuiAdapter {
             metadata,
             balance: U256::from(balance),
             rate: U256::from(rate),
-            last_settled: if last_settled_ms > i64::MAX as u64 {
+            last_settled: if last_settled > i64::MAX as u64 {
                 i64::MAX
             } else {
-                last_settled_ms as i64
+                last_settled as i64
             },
         }))
     }
