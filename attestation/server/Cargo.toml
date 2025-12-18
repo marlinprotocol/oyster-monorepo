@@ -11,7 +11,7 @@ clap = { version = "4.0.18", features = ["derive"] }
 hex = "0.4.3"
 serde_bytes = "0.11"
 tokio = { version = "1", features = ["full"] }
-nitro-tpm-attest = "=1.0.0"
+nitro-tpm-attest = { git = "https://github.com/aws/NitroTPM-Tools", rev = "a37ff59"}
 
 [profile.release]
 strip = true

@@ -256,7 +256,7 @@
       };
       serverless.workerd = ./. + "/serverless/executor/runtime/workerd";
       enclaves.green = import ./enclaves/green.nix {
-        inherit nixpkgs systemConfig;
+        inherit nixpkgs systemConfig fenix naersk;
         attestation-server = attestation.server.compressed;
         keygen = initialization.keygen.compressed;
       };

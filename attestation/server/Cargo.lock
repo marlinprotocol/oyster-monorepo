@@ -631,9 +631,8 @@ dependencies = [
 
 [[package]]
 name = "nitro-tpm-attest"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "681c853ead7549e4a3c07d8525a4d53e592a99f358dcf957a682a6a4ff898fbd"
+version = "1.0.1"
+source = "git+https://github.com/aws/NitroTPM-Tools?rev=a37ff59#a37ff598acf32e3c8c2c85d53bb8f4025b0a12d7"
 dependencies = [
  "anyhow",
  "aws-lc-rs",

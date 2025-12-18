@@ -20,9 +20,41 @@
   systemConfig,
   attestation-server,
   keygen,
+  fenix,
+  naersk,
 }: let
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
+  target = systemConfig.rust_target;
+  toolchain = with fenix.packages.${system};
+    combine [
+      stable.cargo
+      stable.rustc
+      targets.${target}.stable.rust-std
+    ];
+  naersk' = naersk.lib.${system}.override {
+    cargo = toolchain;
+    rustc = toolchain;
+  };
+  cc =
+    if systemConfig.static
+    then pkgs.pkgsStatic.stdenv.cc
+    else pkgs.stdenv.cc;
+  att-cli = naersk'.buildPackage {
+    src = builtins.fetchGit {
+        url = "https://github.com/aws/NitroTPM-Tools.git";
+        rev = "a37ff598acf32e3c8c2c85d53bb8f4025b0a12d7";
+    };
+    CARGO_BUILD_TARGET = target;
+    TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
+    nativeBuildInputs = [
+      cc
+      pkgs.pkg-config
+    ];
+    buildInputs = [
+      pkgs.tpm2-tss
+    ];
+  };
   nixosConfig = {config, ...}: {
     # nixos has good presets to get started
     imports = [
@@ -162,6 +194,7 @@
     environment.systemPackages = [ 
       attestation-server
       keygen
+      att-cli
     ];
 
     services.getty.autologinUser = pkgs.lib.mkOverride 10 "root";
