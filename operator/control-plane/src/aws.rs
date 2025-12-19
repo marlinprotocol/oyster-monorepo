@@ -586,7 +586,6 @@ impl Aws {
         ))
     }
 
-    // TODO: clean up return params (private IP, instance ID, interface ID)
     // if with_association is true means, caller expected this elastic associated and return association details
     async fn get_job_elastic_ip(
         &self,
@@ -634,7 +633,7 @@ impl Aws {
                 ),
                 Some(addrs) => {
                     if with_association == false {
-                        // store private ip, eni id from tags
+                        // load private ip, eni id from tags
                         let tags = addrs.tags();
                         let mut private_ip = String::new();
                         let mut eni_id = String::new();
@@ -1228,9 +1227,9 @@ impl Aws {
             .to_string())
     }
 
-    pub async fn get_instance_bandwidth_limit(&self, instance_type: InstanceType) -> Result<u64> {
+    pub async fn get_instance_bandwidth_limit(&self, instance_type: InstanceType, region: &str) -> Result<u64> {
         let res = self
-            .client("ap-southeast-2")
+            .client(region)
             .await
             .describe_instance_types()
             .instance_types(instance_type)
@@ -1270,7 +1269,7 @@ impl Aws {
 
         Ok(bandwidth_limit_bps)
     }
-    // TODO: update the route table of user subnet to send traffic via rate limiter instance
+
     async fn select_rate_limiter(
         &self,
         region: &str,
@@ -1314,7 +1313,8 @@ impl Aws {
                     continue;
                 }
                 let instance_bandwidth_limit = self.get_instance_bandwidth_limit(
-                    instance.instance_type().ok_or(anyhow!("could not parse instance type"))?.clone()
+                    instance.instance_type().ok_or(anyhow!("could not parse instance type"))?.clone(),
+                    region
                 ).await
                 .context("could not get instance bandwidth limit")?;
                 for eni in instance.network_interfaces() {
@@ -1534,14 +1534,22 @@ impl Aws {
         sec_ip: &str,
         region: &str,
     ) -> Result<()> {
-        self.client(region)
+        let res = self.client(region)
             .await
             .unassign_private_ip_addresses()
             .network_interface_id(eni_id)
             .private_ip_addresses(sec_ip)
             .send()
-            .await
-            .context("could not unassign secondary private ip address")?;
+            .await;
+        if let Err(err) = res {
+            let svc_err = err.as_service_error();
+            if !svc_err.is_none() && svc_err.unwrap().meta().code() == Some("InvalidParameterValue") {
+                info!("Secondary IP [{}] already unassigned from ENI [{}]", sec_ip, eni_id);
+                return Ok(());
+            }
+            error!(?err, "Error unassigning secondary private IP address ENI [{}], IP [{}]", eni_id, sec_ip);
+            return Err(err).context("could not unassign secondary ip");
+        }
         Ok(())
     }
 
@@ -1597,7 +1605,6 @@ impl Aws {
                 .await
                 .context("could not remove rate limiter config")?;
 
-            // while unassiging check if error is related to ip not assigned then ignore
             self.unassign_secondary_ip(eni_id.as_str(), sec_ip.as_str(), region)
                 .await
                 .context("could not unassign secondary ip")?;
@@ -1775,6 +1782,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_bandwidth_limit() {
+        let region = "ap-southeast-2";
         let aws = Aws::new(
             "cp".to_string(),
             &["ap-southeast-2".to_string()],
@@ -1785,7 +1793,7 @@ mod tests {
         .await;
         let instance_type = InstanceType::C6aXlarge;
         let bandwidth_limit_result = aws
-            .get_instance_bandwidth_limit(instance_type)
+            .get_instance_bandwidth_limit(instance_type, region)
             .await;
         assert!(
             bandwidth_limit_result.is_ok(),
@@ -1797,7 +1805,7 @@ mod tests {
 
         let instance_type = InstanceType::M6a12xlarge;
         let bandwidth_limit_result = aws
-            .get_instance_bandwidth_limit(instance_type)
+            .get_instance_bandwidth_limit(instance_type, region)
             .await;
         assert!(
             bandwidth_limit_result.is_ok(),
@@ -1809,7 +1817,7 @@ mod tests {
 
         let instance_type = InstanceType::M5Xlarge;
         let bandwidth_limit_result = aws
-            .get_instance_bandwidth_limit(instance_type)
+            .get_instance_bandwidth_limit(instance_type, region)
             .await;
         assert!(
             bandwidth_limit_result.is_ok(),
@@ -1818,5 +1826,34 @@ mod tests {
         );
         let bandwidth_limit = bandwidth_limit_result.unwrap();
         println!("Instance Bandwidth Limit: {} bps", bandwidth_limit);
+    }
+
+    // TODO: complete test by adding create instance and assign secondary ip before unassigning
+    #[tokio::test]
+    async fn test_unassign_secondary_ip() {
+        let mut filter = EnvFilter::new("info,aws_config=warn");
+        if let Ok(var) = std::env::var("RUST_LOG") {
+            filter = filter.add_directive(var.parse().unwrap());
+        }
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_env_filter(filter)
+            .init();
+        let aws = Aws::new(
+            "cp".to_string(),
+            &["ap-southeast-2".to_string()],
+            "rlgen".to_string(),
+            None,
+            None,
+        )
+        .await;
+        let eni_id = "eni-0e378f556e57a37df"; // replace with a valid ENI ID for testing
+        let sec_ip = "172.31.42.188"; // replace with a valid secondary IP for testing
+        let unassign_result = aws.unassign_secondary_ip(eni_id, sec_ip, "ap-southeast-2").await;
+        assert!(
+            unassign_result.is_ok(),
+            "Unassign secondary IP failed: {:?}",
+            unassign_result.err()
+        );
     }
 }
