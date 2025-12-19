@@ -1144,7 +1144,7 @@ impl Aws {
         info!(ip, "Elastic Ip allocated");
 
         let (sec_ip, eni_id) = self
-            .select_rate_limiter(region, bandwidth, instance_id)
+            .select_rate_limiter(job, region, bandwidth, instance_id)
             .await
             .context("could not select rate limiter")?;
 
@@ -1156,6 +1156,7 @@ impl Aws {
 
     async fn configure_rate_limiter(
         &self,
+        job: &JobId,
         instance_id: &str,
         rl_instance_id: &str,
         sec_ip: &str,
@@ -1185,8 +1186,8 @@ impl Aws {
         // OPTION: Use a script file in rate limit VM, which take sec ip and private ip, bandwidth as args and setup
         // everything
         let add_rl_cmd = format!(
-            "sudo ~/add_rl.sh {} {} {} {} {}",
-            sec_ip, private_ip, eni_mac, bandwidth * 1000, instance_bandwidth_limit
+            "sudo ~/add_rl.sh {} {} {} {} {} {}",
+            job.id, sec_ip, private_ip, eni_mac, bandwidth * 1000, instance_bandwidth_limit
         );
 
         let (_, stderr) = Self::ssh_exec(sess, &add_rl_cmd).context("Failed to run add_rl.sh command")?;
@@ -1272,6 +1273,7 @@ impl Aws {
 
     async fn select_rate_limiter(
         &self,
+        job: &JobId,
         region: &str,
         bandwidth: u64,
         instance_id: &str,
@@ -1354,6 +1356,7 @@ impl Aws {
 
                                 // RL IP, secondary IP,
                                 if self.configure_rate_limiter(
+                                    job,
                                     instance_id,
                                     &rl_instance_id,
                                     &sec_ip,
@@ -1460,6 +1463,7 @@ impl Aws {
 
     async fn remove_rate_limiter_config(
         &self,
+        job: &JobId,
         rl_instance_id: &str,
         sec_ip: &str,
         private_ip: &str,
@@ -1477,8 +1481,8 @@ impl Aws {
             .context("error establishing ssh connection")?;
 
         let remove_rl_cmd = format!(
-            "sudo ~/remove_rl.sh {} {} {} {}",
-            sec_ip, private_ip, eni_mac, bandwidth * 1000
+            "sudo ~/remove_rl.sh {} {} {} {} {}",
+            job.id, sec_ip, private_ip, eni_mac, bandwidth * 1000
         );
 
         let (_, stderr) = Self::ssh_exec(sess, &remove_rl_cmd)
@@ -1599,9 +1603,7 @@ impl Aws {
                 .await
                 .context("could not get private ip of instance")?;
 
-            // FIXME: make sure bandwidth isn't reduced twice
-            // check exist and remove
-            self.remove_rate_limiter_config(&rl_instance_id, &sec_ip, &private_ip, &eni_mac, bandwidth)
+            self.remove_rate_limiter_config(job, &rl_instance_id, &sec_ip, &private_ip, &eni_mac, bandwidth)
                 .await
                 .context("could not remove rate limiter config")?;
 
@@ -1711,8 +1713,9 @@ mod tests {
             None,
         )
         .await;
+        let job_id = uuid::Uuid::new_v4().to_string();
         let job = JobId {
-            id: "test-job".to_string(),
+            id: "test-job-".to_string() + &job_id,
             operator: "test-operator".to_string(),
             chain: "test-chain".to_string(),
             contract: "test-contract".to_string(),
@@ -1760,6 +1763,9 @@ mod tests {
         );
         let job_ip = job_ip_result.unwrap();
         println!("Job IP: {}", job_ip);
+
+        print!("Sleeping for 30 seconds...");
+        sleep(Duration::from_secs(30)).await;
 
         // Spin down
         let spin_down_result = aws.spin_down(&job, region, bandwidth).await;

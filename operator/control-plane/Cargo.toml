@@ -37,6 +37,7 @@ whoami = "1.5.2"
 
 [dev-dependencies]
 httpc-test = "0.1.10"
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [profile.release]
 lto = true
