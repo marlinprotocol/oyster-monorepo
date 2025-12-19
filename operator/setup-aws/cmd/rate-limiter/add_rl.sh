@@ -5,25 +5,27 @@
 # Adds nft rules, ip rule, tc filters/classes to limit bandwidth
 # Also updates bandwidth usage tracking
 # Arguments:
+#   job_id: The unique identifier for the rate limiting job
 #   sec_ip: The secondary IP address of Rate Limit VM
 #   private_ip: The private IP address of the CVM instance
 #   device_mac: The MAC address of the network device
 #   bandwidth: The bandwidth limit to set (in bits/sec)
 #   instance_bandwidth: The total bandwidth limit for the instance (in bits/sec)
 
-# Check if all 5 arguments are provided
-if [ $# -ne 5 ]; then
-    echo "Usage: $0 <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>"
+# Check if all 6 arguments are provided
+if [ $# -ne 6 ]; then
+    echo "Usage: $0 <job_id> <sec_ip> <private_ip> <device_mac> <bandwidth> <instance_bandwidth>"
     exit 1
 fi
 
 source "$(dirname "$0")/common_rl.sh"
 
-SEC_IP="$1"
-PRIVATE_IP="$2"
-DEVICE_MAC="$3"
-BANDWIDTH="$4"
-INSTANCE_BANDWIDTH="$5"
+JOB_ID="$1"
+SEC_IP="$2"
+PRIVATE_IP="$3"
+DEVICE_MAC="$4"
+BANDWIDTH="$5"
+INSTANCE_BANDWIDTH="$6"
 
 check_and_update_bandwidth() {
     local bandwidth="$1"
@@ -147,6 +149,21 @@ add_tc_rules() {
     fi
 }
 
+add_job() {
+    local job_id="$1"
+    local job_file="/var/run/oyster-jobs/$job_id"
+
+    sudo mkdir -p "/var/run/oyster-jobs"
+    sudo touch "$job_file"
+    sudo chmod 644 "$job_file"
+}
+
+
+job_exists "$JOB_ID"
+if [ $? -eq 0 ]; then
+    exit 0
+fi
+
 check_and_update_bandwidth "$BANDWIDTH" "$INSTANCE_BANDWIDTH"
 
 if [ $? -ne 0 ]; then
@@ -173,3 +190,5 @@ if [ $? -ne 0 ]; then
     free_bandwidth_usage "$BANDWIDTH"
     exit 1
 fi
+
+add_job "$JOB_ID"
