@@ -58,7 +58,7 @@ struct JobDeposited {
 struct JobSettled {
     job_id: u128,
     amount: u64,
-    settled_until_ms: u64,
+    settled_until: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,7 +144,7 @@ impl FromLog for SuiLog {
                 Ok(Some(JobEvent::Settled(events::JobSettled {
                     job_id: decoded_data.job_id.to_string(),
                     amount: U256::from(decoded_data.amount),
-                    timestamp: decoded_data.settled_until_ms.saturating_to(),
+                    timestamp: decoded_data.settled_until.saturating_to(),
                 })))
             }
             "JobMetadataUpdated" => {

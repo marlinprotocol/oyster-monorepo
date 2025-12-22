@@ -1,16 +1,15 @@
 use alloy::{
+    network::{Ethereum, EthereumWallet},
     primitives::{Address, FixedBytes},
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, WalletProvider},
+    signers::local::PrivateKeySigner,
     sol,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use tracing::info;
 
-use crate::{
-    args::wallet::WalletArgs, configs::global::ARBITRUM_ONE_RPC_URL,
-    utils::provider::create_provider,
-};
+use crate::{args::wallet::WalletArgs, configs::arb::ARBITRUM_ONE_RPC_URL};
 
 // Codegen from artifact.
 sol!(
@@ -81,7 +80,7 @@ pub async fn kms_contract(args: KmsContractArgs) -> Result<()> {
 
 async fn kms_contract_deploy(args: KmsContractDeployArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_arb_provider(&args.wallet.load_required()?).await?;
 
     // deploy the contract
     let contract = KmsVerifiable::deploy(provider, vec![])
@@ -97,7 +96,7 @@ async fn kms_contract_deploy(args: KmsContractDeployArgs) -> Result<()> {
 
 async fn kms_contract_approve(args: KmsActionArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_arb_provider(&args.wallet.load_required()?).await?;
 
     // create contract object
     let contract = KmsVerifiable::new(args.contract_address.parse::<Address>()?, provider.clone());
@@ -126,7 +125,7 @@ async fn kms_contract_approve(args: KmsActionArgs) -> Result<()> {
 
 async fn kms_contract_revoke(args: KmsActionArgs) -> Result<()> {
     // get the provider
-    let provider = create_provider(&args.wallet.load_required()?).await?;
+    let provider = create_arb_provider(&args.wallet.load_required()?).await?;
 
     // create contract object
     let contract = KmsVerifiable::new(args.contract_address.parse::<Address>()?, provider.clone());
@@ -155,7 +154,7 @@ async fn kms_contract_revoke(args: KmsActionArgs) -> Result<()> {
 
 async fn kms_contract_verify(args: KmsVerifyArgs) -> Result<()> {
     // get the provider
-    let provider = ProviderBuilder::new().with_recommended_fillers().on_http(
+    let provider = ProviderBuilder::new().connect_http(
         ARBITRUM_ONE_RPC_URL
             .parse()
             .context("Failed to parse RPC URL")?,
@@ -168,11 +167,31 @@ async fn kms_contract_verify(args: KmsVerifyArgs) -> Result<()> {
         .oysterKMSVerify(args.image_id.parse::<FixedBytes<32>>()?)
         .call()
         .await?;
-    if resp._0 {
+    if resp {
         info!("Image ID is verified");
     } else {
         info!("Image ID is not verified");
     }
 
     Ok(())
+}
+
+async fn create_arb_provider(
+    wallet_private_key: &str,
+) -> Result<impl Provider<Ethereum> + WalletProvider + Clone + use<>> {
+    let private_key = FixedBytes::<32>::from_slice(
+        &hex::decode(wallet_private_key).context("Failed to decode private key")?,
+    );
+
+    let signer = PrivateKeySigner::from_bytes(&private_key)
+        .context("Failed to create signer from private key")?;
+    let wallet = EthereumWallet::from(signer);
+
+    let provider = ProviderBuilder::new().wallet(wallet).connect_http(
+        ARBITRUM_ONE_RPC_URL
+            .parse()
+            .context("Failed to parse RPC URL")?,
+    );
+
+    Ok(provider)
 }
