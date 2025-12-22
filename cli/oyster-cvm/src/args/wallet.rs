@@ -1,12 +1,13 @@
 use std::fs;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 
 #[derive(Args, Debug)]
 #[group(multiple = true)]
 pub struct WalletArgs {
     /// Wallet private key for transaction signing
+    /// [Base64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
     #[arg(long, conflicts_with = "wallet_file")]
     wallet_private_key: Option<String>,
 

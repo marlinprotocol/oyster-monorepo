@@ -1,33 +1,41 @@
-use crate::utils::provider::create_provider;
-use crate::{args::wallet::WalletArgs, configs::global::OYSTER_MARKET_ADDRESS};
-use alloy::{
-    primitives::{Address, B256},
-    providers::{Provider, WalletProvider},
-    sol,
-};
-use anyhow::{anyhow, Context, Result};
+use crate::args::wallet::WalletArgs;
+use crate::deployment::adapter::JobTransactionKind;
+use crate::deployment::{Deployment, get_deployment_adapter};
+use alloy::primitives::U256;
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
+use std::str::FromStr;
 use std::time::Duration;
+use sui_sdk_types::Address;
 use tokio::time::sleep;
 use tracing::info;
 
 /// Stop an Oyster CVM instance
 #[derive(Args)]
 pub struct StopArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long, default_value = "arb")]
+    deployment: Deployment,
+
     /// Job ID
     #[arg(short = 'j', long, required = true)]
     job_id: String,
 
     #[command(flatten)]
     wallet: WalletArgs,
-}
 
-sol!(
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    OysterMarket,
-    "src/abis/oyster_market_abi.json"
-);
+    /// RPC URL (optional)
+    #[arg(long)]
+    rpc: Option<String>,
+
+    /// Auth token (optional for sui rpc)
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// Gas coin ID for Sui chain transactions (optional, will be chosen automatically from user's account via simulation results)
+    #[arg(long)]
+    gas_coin: Option<String>,
+}
 
 pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     let job_id = args.job_id;
@@ -36,68 +44,51 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     info!("Stopping oyster instance with:");
     info!("  Job ID: {}", job_id);
 
+    let mut deployment_adapter = get_deployment_adapter(
+        args.deployment,
+        args.rpc,
+        args.auth_token,
+        None,
+        args.gas_coin
+            .map(|coin| Address::from_str(&coin))
+            .transpose()?,
+    );
+
     // Setup provider
-    let provider = create_provider(wallet_private_key)
+    let provider = deployment_adapter
+        .create_provider_with_wallet(wallet_private_key)
         .await
         .context("Failed to create provider")?;
 
     info!(
         "Signer address: {:?}",
-        provider
-            .signer_addresses()
-            .next()
-            .ok_or_else(|| anyhow!("No signer address found"))?
+        deployment_adapter.get_sender_address()
     );
 
-    // Create contract instance
-    let market_address = OYSTER_MARKET_ADDRESS
-        .parse()
-        .context("Failed to parse market address")?;
-    let market = OysterMarket::new(market_address, provider);
-
-    // Parse job ID once
-    let job_id_bytes = job_id.parse::<B256>().context("Failed to parse job ID")?;
-
     // Check if job exists
-    let job = market
-        .jobs(job_id_bytes)
-        .call()
-        .await
-        .context("Failed to fetch job details")?;
-    if job.owner == Address::ZERO {
+    let job_data = deployment_adapter
+        .get_job_data_if_exists(job_id.clone(), &provider)
+        .await?;
+    if job_data.is_none() {
         return Err(anyhow!("Job {} does not exist", job_id));
     }
 
     // First, set the job's rate to 0 using the jobReviseRateInitiate call.
     info!("Found job, initiating rate update to 0...");
-    let revise_send_result = market
-        .jobReviseRateInitiate(job_id_bytes, alloy::primitives::U256::from(0))
-        .send()
-        .await;
-    let revise_tx_hash = match revise_send_result {
-        Ok(tx_call_result) => tx_call_result
-            .watch()
-            .await
-            .context("Failed to get transaction hash for rate revise")?,
-        Err(err) => {
-            return Err(anyhow!("Failed to send rate revise transaction: {:?}", err));
-        }
-    };
-
-    info!("Rate revise transaction sent: {:?}", revise_tx_hash);
-
-    // Verify the revise transaction execution.
-    let revise_receipt = market
-        .provider()
-        .get_transaction_receipt(revise_tx_hash)
+    let job_revise_rate_transaction = deployment_adapter
+        .create_job_transaction(
+            JobTransactionKind::ReviseRateInitiate {
+                job_id: job_id.clone(),
+                rate: U256::from(0),
+            },
+            None,
+            &provider,
+        )
+        .await?;
+    let _ = deployment_adapter
+        .send_transaction(false, job_revise_rate_transaction, &provider)
         .await
-        .context("Failed to get transaction receipt for rate revise")?
-        .ok_or_else(|| anyhow!("Rate revise transaction receipt not found"))?;
-    if !revise_receipt.status() {
-        return Err(anyhow!(
-            "Rate revise transaction failed - check contract interaction"
-        ));
-    }
+        .context("Failed to send rate revise transaction")?;
 
     info!("Job rate updated successfully to 0!");
 
@@ -106,45 +97,23 @@ pub async fn stop_oyster_instance(args: StopArgs) -> Result<()> {
     sleep(Duration::from_secs(300)).await;
 
     // Check if job is already closed before attempting to close
-    let job = market
-        .jobs(job_id_bytes)
-        .call()
-        .await
-        .context("Failed to fetch job details")?;
-
-    if job.owner == Address::ZERO {
+    let job_exists = deployment_adapter
+        .get_job_data_if_exists(job_id.clone(), &provider)
+        .await?;
+    if job_exists.is_none() {
         info!("Job is already closed!");
         return Ok(());
     }
 
     // Only proceed with closing if job still exists
     info!("Initiating job close...");
-    let send_result = market.jobClose(job_id_bytes).send().await;
-    let tx_hash = match send_result {
-        Ok(tx_call_result) => tx_call_result
-            .watch()
-            .await
-            .context("Failed to get transaction hash for job close")?,
-        Err(err) => {
-            return Err(anyhow!("Failed to send stop transaction: {:?}", err));
-        }
-    };
-
-    info!("Stop transaction sent: {:?}", tx_hash);
-
-    // Verify jobClose transaction success.
-    let receipt = market
-        .provider()
-        .get_transaction_receipt(tx_hash)
+    let job_close_transaction = deployment_adapter
+        .create_job_transaction(JobTransactionKind::Close { job_id }, None, &provider)
+        .await?;
+    let _ = deployment_adapter
+        .send_transaction(false, job_close_transaction, &provider)
         .await
-        .context("Failed to get transaction receipt for job close")?
-        .ok_or_else(|| anyhow!("Job close transaction receipt not found"))?;
-
-    if !receipt.status() {
-        return Err(anyhow!(
-            "Job close transaction failed - check contract interaction"
-        ));
-    }
+        .context("Failed to send stop transaction")?;
 
     info!("Instance stopped successfully!");
     Ok(())
