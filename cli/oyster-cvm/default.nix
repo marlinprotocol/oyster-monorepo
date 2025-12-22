@@ -27,6 +27,12 @@ in rec {
     CARGO_BUILD_TARGET = target;
     TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
     nativeBuildInputs = [cc pkgs.perl];
+    postInstall = nixpkgs.lib.optionalString (target == "aarch64-apple-darwin") ''
+      install_name_tool -change \
+        "${pkgs.libiconv}/lib/libiconv.2.dylib" \
+        "/usr/lib/libiconv.2.dylib" \
+        "$out/bin/oyster-cvm"
+    '';
   };
 
   compressed =
