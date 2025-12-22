@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tracing::info;
 
+const UNHEALTHY_ERROR_THRESHOLD: u64 = 3;
+
 #[derive(Clone, Default)]
 pub struct HealthTracker {
     inner: Arc<Mutex<HealthState>>,
@@ -48,10 +50,13 @@ impl HealthTracker {
 
     pub fn record_error(&self, msg: impl Into<String>) {
         let mut state = self.inner.lock().unwrap();
-        state.healthy = false;
         state.last_error = Some(msg.into());
         state.last_error_time = Some(SystemTime::now());
         state.consecutive_errors = state.consecutive_errors.saturating_add(1);
+
+        if state.consecutive_errors >= UNHEALTHY_ERROR_THRESHOLD {
+            state.healthy = false;
+        }
     }
 
     pub fn get_status(&self) -> HealthState {
