@@ -58,7 +58,7 @@ Options:
 
 ## Endpoints
 
-The attestation verifier exposes two verification endpoints which expect the attestation in one of two formats - raw and hex. The formats match the two endpoints of the [attestation server](https://github.com/marlinprotocol/oyster-attestation-server) and the response of the server can just be sent to the verifier as is.
+The attestation verifier exposes two verification endpoints that expect the attestation in one of two formats - raw and hex. The formats match the two endpoints of the [attestation server](https://github.com/marlinprotocol/oyster-attestation-server) and the response of the server can just be sent to the verifier as is.
 
 ### Raw
 
