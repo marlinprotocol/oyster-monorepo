@@ -3,7 +3,6 @@ use alloy::{
     rpc::types::Log,
     sol_types::SolEvent,
 };
-use log::{error, info};
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -12,6 +11,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
     time::{sleep_until, Instant},
 };
+use tracing::{error, info};
 
 use crate::{
     chain_util::{HttpProvider, HttpProviderLogs, LogsProvider},
