@@ -5,13 +5,23 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, command};
 use dotenvy::dotenv;
-use indexer_framework::health::{HealthTracker, start_health_server};
+use indexer_framework::health::{HealthConfig, HealthTracker, start_health_server};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::sui::SuiProvider;
+
+const STARTUP_GRACE_SECS: u64 = 300;
+const UNHEALTHY_CONSECUTIVE_ERRORS: u64 = 5;
+const DEGRADED_CONSECUTIVE_ERRORS: u64 = 3;
+const UNHEALTHY_ERROR_RATE: f64 = 0.30;
+const DEGRADED_ERROR_RATE: f64 = 0.15;
+const UNHEALTHY_STALE_SECS: u64 = 180;
+const DEGRADED_STALE_SECS: u64 = 60;
+const UNHEALTHY_LAG: i64 = 300;
+const DEGRADED_LAG: i64 = 100;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -76,11 +86,23 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
 
-    let health = HealthTracker::new();
+    let health = HealthTracker::new(HealthConfig {
+        startup_grace: Duration::from_secs(STARTUP_GRACE_SECS),
+        unhealthy_consecutive_errors: UNHEALTHY_CONSECUTIVE_ERRORS,
+        degraded_consecutive_errors: DEGRADED_CONSECUTIVE_ERRORS,
+        unhealthy_error_rate: UNHEALTHY_ERROR_RATE,
+        degraded_error_rate: DEGRADED_ERROR_RATE,
+        unhealthy_stale: Duration::from_secs(UNHEALTHY_STALE_SECS),
+        degraded_stale: Duration::from_secs(DEGRADED_STALE_SECS),
+        unhealthy_lag: UNHEALTHY_LAG,
+        degraded_lag: DEGRADED_LAG,
+    });
     let health_clone = health.clone();
+    let health_port = args.health_port;
+
     tokio::spawn(async move {
         loop {
-            if let Err(e) = start_health_server(health_clone.clone(), args.health_port).await {
+            if let Err(e) = start_health_server(health_clone.clone(), health_port).await {
                 error!(error = ?e, "Health server crashed, restarting in 5s");
                 sleep(Duration::from_secs(5)).await;
             } else {
@@ -114,6 +136,8 @@ async fn main() -> Result<()> {
     );
 
     loop {
+        info!("Starting indexer run");
+
         let res = indexer_framework::run(
             database_url.clone(),
             rpc_client.clone(),
@@ -125,12 +149,11 @@ async fn main() -> Result<()> {
         .await;
 
         if let Err(e) = res {
-            let error_message = format!("Indexer run error: {:?}", e);
             error!(error = ?e, "Indexer error, retrying after delay");
-            health.record_error(error_message);
             sleep(Duration::from_secs(30)).await;
         } else {
-            warn!("Indexer returned unexpectedly, restarting");
+            warn!("Indexer returned unexpectedly (no error), restarting in 5s");
+            health.record_error("indexer_run_failed_unexpectedly");
             sleep(Duration::from_secs(5)).await;
         }
     }
