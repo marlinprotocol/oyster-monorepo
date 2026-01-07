@@ -96,7 +96,7 @@ impl Repository {
         let result = query
             .execute(&self.pool)
             .await
-            .context("Failed to execute update query in 'indexer state' table")?;
+            .context("Failed to execute update record query in indexer_state table")?;
 
         Ok(result.rows_affected())
     }
@@ -105,17 +105,19 @@ impl Repository {
         let row = sqlx::query(FETCH_LAST_PROCESSED_BLOCK)
             .fetch_one(&self.pool)
             .await
-            .context("Failed to query last processed block from 'indexer_state' table")?;
-        Ok(row.get::<i64, _>("last_processed_block"))
+            .context("Failed to query last processed block from indexer_state table")?;
+
+        row.try_get::<i64, _>("last_processed_block")
+            .context("Failed to find last processed block in indexer_state table record")
     }
 
     pub async fn get_active_jobs(&self) -> Result<HashSet<String>> {
         let active_jobs: Vec<String> = sqlx::query_scalar(FETCH_ACTIVE_JOBS)
             .fetch_all(&self.pool)
             .await
-            .context("Failed to query the active job ids from 'job_events' table")?;
+            .context("Failed to query the active job ids from job_events table")?;
 
-        let mut active_jobs_set = HashSet::with_capacity(5000);
+        let mut active_jobs_set = HashSet::new();
         active_jobs_set.extend(active_jobs);
 
         Ok(active_jobs_set)
@@ -130,20 +132,20 @@ impl Repository {
             .pool
             .begin()
             .await
-            .context("Failed to begin transaction for batch inserting events")?;
+            .context("Failed to begin transaction for inserting events batch into DB")?;
         let inserted_batch = self
             .insert_events(&mut tx, records.clone())
             .await
-            .context("Transaction failed for batch inserting records into 'job_events' table")?;
+            .context("Transaction failed for batch inserting records into job_events table")?;
         let updated = self
             .update_last_processed_block(&mut tx, block)
             .await
             .context(
-                "Transaction failed for updating last processed block in 'indexer state' table",
+                "Transaction failed for updating last processed block in indexer state table",
             )?;
         tx.commit()
             .await
-            .context("Failed to commit the batch insert transaction")?;
+            .context("Failed to commit the batch insert transaction to DB")?;
         Ok((inserted_batch, updated))
     }
 
@@ -172,7 +174,9 @@ impl Repository {
             .bind(&event_datas)
             .execute(&mut **tx)
             .await
-            .context("Failed to execute batch insert query for job event records")?;
+            .context(
+                "Failed to execute batch insert query for event records in job_events table",
+            )?;
 
         Ok(result.rows_affected())
     }
@@ -186,7 +190,9 @@ impl Repository {
             .bind(block)
             .execute(&mut **tx)
             .await
-            .context("Failed to execute update query for last processed block")?;
+            .context(
+                "Failed to execute update query for last processed block in indexer_state table",
+            )?;
 
         Ok(result.rows_affected())
     }

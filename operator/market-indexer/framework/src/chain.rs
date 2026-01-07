@@ -43,7 +43,7 @@ pub(crate) fn transform_block_logs_into_records(
     for log in logs.iter() {
         let Some(job_event) = log
             .to_job_event()
-            .context("Failed to parse log into event structure")?
+            .context("Failed to parse raw log into DB record")?
         else {
             continue;
         };
@@ -60,7 +60,7 @@ pub(crate) fn transform_block_logs_into_records(
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::Opened,
                     event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobOpened event data")?,
+                        .context("Failed to JSON serialize JobOpened event data for DB record")?,
                 });
             }
             JobEvent::Closed(event) => {
@@ -73,7 +73,7 @@ pub(crate) fn transform_block_logs_into_records(
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::Closed,
                     event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobClosed event data")?,
+                        .context("Failed to JSON serialize JobClosed event data for DB record")?,
                 });
             }
             JobEvent::Settled(event) => {
@@ -85,7 +85,7 @@ pub(crate) fn transform_block_logs_into_records(
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::Settled,
                     event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobSettled event data")?,
+                        .context("Failed to JSON serialize JobSettled event data for DB record")?,
                 });
             }
             JobEvent::Deposited(event) => {
@@ -96,8 +96,9 @@ pub(crate) fn transform_block_logs_into_records(
                 job_event_records.push(JobEventRecord {
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::Deposited,
-                    event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobDeposited event data")?,
+                    event_data: serde_json::to_value(event).context(
+                        "Failed to JSON serialize JobDeposited event data for DB record",
+                    )?,
                 });
             }
             JobEvent::Withdrew(event) => {
@@ -109,7 +110,7 @@ pub(crate) fn transform_block_logs_into_records(
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::Withdrew,
                     event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobWithdrew event data")?,
+                        .context("Failed to JSON serialize JobWithdrew event data for DB record")?,
                 });
             }
             JobEvent::ReviseRateInitiated(event) => {
@@ -120,8 +121,9 @@ pub(crate) fn transform_block_logs_into_records(
                 job_event_records.push(JobEventRecord {
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::ReviseRateInitiated,
-                    event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobReviseRateInitiated event data")?,
+                    event_data: serde_json::to_value(event).context(
+                        "Failed to JSON serialize JobReviseRateInitiated event data for DB record",
+                    )?,
                 });
             }
             JobEvent::ReviseRateCancelled(event) => {
@@ -132,8 +134,9 @@ pub(crate) fn transform_block_logs_into_records(
                 job_event_records.push(JobEventRecord {
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::ReviseRateCancelled,
-                    event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobReviseRateCancelled event data")?,
+                    event_data: serde_json::to_value(event).context(
+                        "Failed to JSON serialize JobReviseRateCancelled event data for DB record",
+                    )?,
                 });
             }
             JobEvent::ReviseRateFinalized(event) => {
@@ -144,8 +147,9 @@ pub(crate) fn transform_block_logs_into_records(
                 job_event_records.push(JobEventRecord {
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::ReviseRateFinalized,
-                    event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobReviseRateFinalized event data")?,
+                    event_data: serde_json::to_value(event).context(
+                        "Failed to JSON serialize JobReviseRateFinalized event data for DB record",
+                    )?,
                 });
             }
             JobEvent::MetadataUpdated(event) => {
@@ -156,8 +160,9 @@ pub(crate) fn transform_block_logs_into_records(
                 job_event_records.push(JobEventRecord {
                     job_id: event.job_id.clone(),
                     event_name: JobEventName::MetadataUpdated,
-                    event_data: serde_json::to_value(event)
-                        .context("Failed to JSON serialize JobMetadataUpdated event data")?,
+                    event_data: serde_json::to_value(event).context(
+                        "Failed to JSON serialize JobMetadataUpdated event data for DB record",
+                    )?,
                 });
             }
         };
