@@ -10,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::health::{HealthStatus, HealthTracker, IndexerHealthTracker};
 use crate::market::{GBRateCard, InfraProvider, JobId, RegionalRates};
 
 enum Error {
@@ -46,6 +47,12 @@ struct BandwidthResponse {
     rates: Vec<GBRateCard>,
 }
 
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: HealthStatus,
+    reason: Option<String>,
+}
+
 async fn handle_ip_request(
     State(state): State<(
         impl InfraProvider + Send + Sync + Clone,
@@ -53,6 +60,8 @@ async fn handle_ip_request(
         &'static [RegionalRates],
         &'static [GBRateCard],
         JobId,
+        HealthTracker,
+        IndexerHealthTracker,
     )>,
     Query(query): Query<GetIPRequest>,
 ) -> HandlerResult<Json<GetIPResponse>> {
@@ -90,6 +99,8 @@ async fn handle_spec_request(
         &'static [RegionalRates],
         &'static [GBRateCard],
         JobId,
+        HealthTracker,
+        IndexerHealthTracker,
     )>,
 ) -> HandlerResult<Json<SpecResponse>> {
     let regions = state.1;
@@ -110,6 +121,8 @@ async fn handle_bandwidth_request(
         &'static [RegionalRates],
         &'static [GBRateCard],
         JobId,
+        HealthTracker,
+        IndexerHealthTracker,
     )>,
 ) -> HandlerResult<Json<BandwidthResponse>> {
     let bandwidth = state.3;
@@ -120,6 +133,59 @@ async fn handle_bandwidth_request(
     Ok(Json(res))
 }
 
+async fn handle_health_request(
+    State(state): State<(
+        impl InfraProvider + Send + Sync + Clone,
+        &'static [String],
+        &'static [RegionalRates],
+        &'static [GBRateCard],
+        JobId,
+        HealthTracker,
+        IndexerHealthTracker,
+    )>,
+) -> HandlerResult<Json<HealthResponse>> {
+    let cp_report = state.5.get_report();
+    let indexer_report = state.6.get_report();
+
+    let (status, reason) = match (&cp_report.status, &indexer_report.status) {
+        (_, HealthStatus::Unhealthy) => (
+            HealthStatus::Unhealthy,
+            Some(format!(
+                "indexer_{}",
+                indexer_report
+                    .reason
+                    .unwrap_or_else(|| "unhealthy".to_string())
+            )),
+        ),
+        (HealthStatus::Unhealthy, _) => (
+            HealthStatus::Unhealthy,
+            Some(format!(
+                "control_plane_{}",
+                cp_report.reason.unwrap_or_else(|| "unhealthy".to_string())
+            )),
+        ),
+        (_, HealthStatus::Degraded) => (
+            HealthStatus::Degraded,
+            Some(format!(
+                "indexer_{}",
+                indexer_report
+                    .reason
+                    .unwrap_or_else(|| "degraded".to_string())
+            )),
+        ),
+        (HealthStatus::Degraded, _) => (
+            HealthStatus::Degraded,
+            Some(format!(
+                "control_plane_{}",
+                cp_report.reason.unwrap_or_else(|| "degraded".to_string())
+            )),
+        ),
+        _ => (HealthStatus::Healthy, None),
+    };
+
+    Ok(Json(HealthResponse { status, reason }))
+}
+
 fn all_routes(
     state: (
         impl InfraProvider + Send + Sync + Clone + 'static,
@@ -127,12 +193,15 @@ fn all_routes(
         &'static [RegionalRates],
         &'static [GBRateCard],
         JobId,
+        HealthTracker,
+        IndexerHealthTracker,
     ),
 ) -> Router {
     Router::new()
         .route("/ip", get(handle_ip_request))
         .route("/spec", get(handle_spec_request))
         .route("/bandwidth", get(handle_bandwidth_request))
+        .route("/health", get(handle_health_request))
         .with_state(state)
 }
 
@@ -143,8 +212,18 @@ pub async fn serve(
     bandwidth: &'static [GBRateCard],
     addr: SocketAddr,
     job_id: JobId,
+    cp_health: HealthTracker,
+    indexer_health: IndexerHealthTracker,
 ) {
-    let state = (client, regions, rates, bandwidth, job_id);
+    let state = (
+        client,
+        regions,
+        rates,
+        bandwidth,
+        job_id,
+        cp_health,
+        indexer_health,
+    );
 
     let router = all_routes(state);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -163,6 +242,7 @@ mod tests {
     use anyhow;
     use serde_json::json;
 
+    use crate::health::{HealthTracker, IndexerHealthTracker};
     use crate::market::{GBRateCard, JobId, RateCard, RegionalRates};
     use crate::test::{InstanceMetadata, TestAws};
 
@@ -186,6 +266,9 @@ mod tests {
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
         tokio::spawn(serve(
             aws.clone(),
             regions,
@@ -198,6 +281,8 @@ mod tests {
                 contract: "xyz".into(),
                 chain: "123".into(),
             },
+            cp_health,
+            indexer_health,
         ));
 
         let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
@@ -242,6 +327,9 @@ mod tests {
 
         let job_id = U256::from(5).to_be_bytes::<32>().encode_hex_with_prefix();
 
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
         tokio::spawn(serve(
             aws.clone(),
             regions,
@@ -254,6 +342,8 @@ mod tests {
                 contract: "xyz".into(),
                 chain: "123".into(),
             },
+            cp_health,
+            indexer_health,
         ));
 
         let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
@@ -286,6 +376,9 @@ mod tests {
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
         tokio::spawn(serve(
             aws.clone(),
             regions,
@@ -298,6 +391,8 @@ mod tests {
                 contract: "xyz".into(),
                 chain: "123".into(),
             },
+            cp_health,
+            indexer_health,
         ));
 
         let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
@@ -365,6 +460,9 @@ mod tests {
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
         tokio::spawn(serve(
             aws.clone(),
             regions,
@@ -377,6 +475,8 @@ mod tests {
                 contract: "xyz".into(),
                 chain: "123".into(),
             },
+            cp_health,
+            indexer_health,
         ));
 
         let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
@@ -427,6 +527,9 @@ mod tests {
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
         tokio::spawn(serve(
             aws.clone(),
             regions,
@@ -439,6 +542,8 @@ mod tests {
                 contract: "xyz".into(),
                 chain: "123".into(),
             },
+            cp_health,
+            indexer_health,
         ));
 
         let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
@@ -454,6 +559,103 @@ mod tests {
             serde_json::from_value(body.get("rates").unwrap().clone()).unwrap_or_default();
 
         assert_eq!(body, bandwidth_rates);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_health_request_unhealthy() -> anyhow::Result<()> {
+        let aws: TestAws = Default::default();
+        let regions: &'static [String] =
+            Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
+        let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
+        let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
+        let port = 8086;
+
+        let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
+
+        let cp_health = HealthTracker::default();
+        let indexer_health = IndexerHealthTracker::default();
+
+        tokio::spawn(serve(
+            aws.clone(),
+            regions,
+            compute_rates,
+            bandwidth_rates,
+            SocketAddr::from(([0, 0, 0, 0], port)),
+            JobId {
+                id: job_id,
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            cp_health,
+            indexer_health,
+        ));
+
+        let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
+
+        let res = hc.do_get("/health").await?;
+        assert_eq!(res.status(), 200);
+
+        let body = res.json_body();
+        assert!(body.is_ok());
+
+        let body = body.unwrap();
+        let status = body.get("status").unwrap().as_str().unwrap();
+
+        assert_eq!(status, "Unhealthy");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_health_request_degraded() -> anyhow::Result<()> {
+        let aws: TestAws = Default::default();
+        let regions: &'static [String] =
+            Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
+        let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
+        let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
+        let port = 8087;
+
+        let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
+
+        let cp_health = HealthTracker::default();
+        for _ in 0..3 {
+            cp_health.record_error("test error");
+        }
+
+        let indexer_health = IndexerHealthTracker::default();
+        indexer_health.set_test_status(crate::health::HealthStatus::Healthy, None);
+
+        tokio::spawn(serve(
+            aws.clone(),
+            regions,
+            compute_rates,
+            bandwidth_rates,
+            SocketAddr::from(([0, 0, 0, 0], port)),
+            JobId {
+                id: job_id,
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            cp_health,
+            indexer_health,
+        ));
+
+        let hc = httpc_test::new_client(format!("http://localhost:{}", port))?;
+
+        let res = hc.do_get("/health").await?;
+        assert_eq!(res.status(), 200);
+
+        let body = res.json_body();
+        assert!(body.is_ok());
+
+        let body = body.unwrap();
+        let status = body.get("status").unwrap().as_str().unwrap();
+
+        assert_eq!(status, "Degraded");
 
         Ok(())
     }
