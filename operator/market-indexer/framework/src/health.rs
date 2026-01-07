@@ -13,17 +13,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tracing::info;
 
-// const INDEXER_UNHEALTHY_CONSECUTIVE: u64 = 5;
-// const INDEXER_UNHEALTHY_ERROR_RATE: f64 = 0.30;
-// const INDEXER_UNHEALTHY_STALE_SECS: u64 = 240;
-// const STARTUP_PERIOD_SECS: u64 = 300;
-// const STARTUP_UNHEALTHY_CONSECUTIVE: u64 = 3;
-// const INDEXER_DEGRADED_CONSECUTIVE_SUCCESS: u64 = 3;
-// const INDEXER_DEGRADED_CONSECUTIVE: u64 = 3;
-// const INDEXER_DEGRADED_ERROR_RATE: f64 = 0.15;
-// const INDEXER_DEGRADED_STALE_SECS: u64 = 120;
-
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, PartialEq, Debug)]
 pub enum HealthStatus {
     Healthy,
     Degraded,
@@ -216,4 +206,161 @@ async fn health_handler(State(health): State<HealthTracker>) -> (StatusCode, Jso
             "reason": report.reason,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> HealthConfig {
+        HealthConfig {
+            startup_grace: Duration::from_secs(300),
+            unhealthy_consecutive_errors: 5,
+            degraded_consecutive_errors: 3,
+            unhealthy_error_rate: 0.30,
+            degraded_error_rate: 0.15,
+            unhealthy_stale: Duration::from_secs(180),
+            degraded_stale: Duration::from_secs(60),
+            unhealthy_lag: 10,
+            degraded_lag: 5,
+        }
+    }
+
+    #[test]
+    fn test_health_tracker_starts_healthy() {
+        let tracker = HealthTracker::new(test_config());
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Healthy);
+        assert!(report.reason.is_none());
+    }
+
+    #[test]
+    fn test_health_tracker_record_progress() {
+        let tracker = HealthTracker::new(test_config());
+        tracker.record_progress(100);
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Healthy);
+
+        let state = tracker.state.lock().unwrap();
+        assert_eq!(state.last_successful_block, Some(100));
+    }
+
+    #[test]
+    fn test_health_tracker_uptime_consecutive_errors() {
+        let tracker = HealthTracker::new(test_config());
+
+        for _ in 0..5 {
+            tracker.record_error("test error");
+        }
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Degraded);
+        assert!(report.reason.is_some());
+        assert!(report.reason.unwrap().contains("startup_instability"));
+    }
+
+    #[test]
+    fn test_health_tracker_unhealthy_consecutive_errors() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        for _ in 0..5 {
+            tracker.record_error("test error");
+        }
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Unhealthy);
+        assert!(report.reason.is_some());
+        assert!(report.reason.unwrap().contains("sustained_errors"));
+    }
+
+    #[test]
+    fn test_health_tracker_error_rate() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        for _ in 0..6 {
+            tracker.record_progress(100);
+        }
+        for _ in 0..4 {
+            tracker.record_error("test error");
+        }
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Unhealthy);
+        assert!(report.reason.is_some());
+        assert!(report.reason.unwrap().contains("sustained_errors"));
+    }
+
+    #[test]
+    fn test_health_tracker_staleness() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        {
+            let mut state = tracker.state.lock().unwrap();
+            state.last_progress = SystemTime::now() - Duration::from_secs(200);
+        }
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Unhealthy);
+        assert!(report.reason.is_some());
+        assert!(report.reason.unwrap().contains("sustained_errors"));
+    }
+
+    #[test]
+    fn test_health_tracker_lag_unhealthy() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        tracker.record_progress(100);
+        tracker.update_chain_head(120);
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Unhealthy);
+        assert!(report.reason.is_some());
+        assert!(report.reason.unwrap().contains("chain_lag_too_high"));
+    }
+
+    #[test]
+    fn test_health_tracker_lag_degraded() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        tracker.record_progress(100);
+        tracker.update_chain_head(108);
+
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Degraded);
+        assert!(report.reason.is_some());
+        assert!(
+            report
+                .reason
+                .unwrap()
+                .contains("lag_or_intermittent_errors")
+        );
+    }
+
+    #[test]
+    fn test_health_tracker_recovery() {
+        let mut config = test_config();
+        config.startup_grace = Duration::from_secs(0);
+        let tracker = HealthTracker::new(config);
+
+        for _ in 0..5 {
+            tracker.record_error("test error");
+        }
+        assert_eq!(tracker.get_report().status, HealthStatus::Unhealthy);
+
+        for i in 0..30 {
+            tracker.record_progress(100 + i);
+        }
+        let report = tracker.get_report();
+        assert_eq!(report.status, HealthStatus::Healthy);
+    }
 }

@@ -12,6 +12,7 @@ use tracing::{error, info, info_span};
 use tracing_subscriber::EnvFilter;
 
 use cp::aws;
+use cp::health;
 use cp::market;
 use cp::server;
 
@@ -74,6 +75,10 @@ struct Cli {
     /// Metadata server port
     #[clap(long, value_parser, default_value = "8080")]
     port: u16,
+
+    /// Indexer URL
+    #[clap(long, value_parser)]
+    indexer_url: String,
 }
 
 async fn parse_file(filepath: String) -> Result<Vec<String>> {
@@ -149,7 +154,7 @@ async fn run() -> Result<()> {
     info!(?cli.address_whitelist);
     info!(?cli.port);
 
-    let regions: Vec<String> = cli.regions.split(',').map(|r| (r.into())).collect();
+    let regions: Vec<String> = cli.regions.split(',').map(|r| r.into()).collect();
 
     let eif_whitelist = if !cli.whitelist.is_empty() {
         let eif_whitelist_vec: Vec<String> = parse_file(cli.whitelist)
@@ -242,6 +247,11 @@ async fn run() -> Result<()> {
         chain,
     };
 
+    let cp_health = health::HealthTracker::default();
+    let indexer_health = health::IndexerHealthTracker::default();
+
+    indexer_health.spawn_polling_task(cli.indexer_url)?;
+
     tokio::spawn(
         server::serve(
             aws.clone(),
@@ -250,6 +260,8 @@ async fn run() -> Result<()> {
             bandwidth_rates,
             SocketAddr::from(([0, 0, 0, 0], cli.port)),
             job_id.clone(),
+            cp_health.clone(),
+            indexer_health,
         )
         .instrument(info_span!("server")),
     );
@@ -265,6 +277,7 @@ async fn run() -> Result<()> {
         extra_decimals,
         job_id,
         job_registry,
+        cp_health,
     )
     .instrument(info_span!("main"))
     .await;

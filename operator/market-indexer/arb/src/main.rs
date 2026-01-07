@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, command};
 use dotenvy::dotenv;
+use indexer_framework::SaturatingConvert;
 use indexer_framework::health::{HealthConfig, HealthTracker, start_health_server};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
@@ -16,12 +17,12 @@ use arb::ArbProvider;
 const STARTUP_GRACE_SECS: u64 = 300;
 const UNHEALTHY_CONSECUTIVE_ERRORS: u64 = 5;
 const DEGRADED_CONSECUTIVE_ERRORS: u64 = 3;
-const UNHEALTHY_ERROR_RATE: f64 = 0.30;
-const DEGRADED_ERROR_RATE: f64 = 0.15;
+const UNHEALTHY_ERROR_RATE: f64 = 0.40;
+const DEGRADED_ERROR_RATE: f64 = 0.20;
 const UNHEALTHY_STALE_SECS: u64 = 180;
 const DEGRADED_STALE_SECS: u64 = 60;
-const UNHEALTHY_LAG: i64 = 500;
-const DEGRADED_LAG: i64 = 200;
+const UNHEALTHY_LAG_WINDOW: i64 = 3;
+const DEGRADED_LAG_WINDOW: i64 = 2;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -78,8 +79,8 @@ async fn main() -> Result<()> {
         degraded_error_rate: DEGRADED_ERROR_RATE,
         unhealthy_stale: Duration::from_secs(UNHEALTHY_STALE_SECS),
         degraded_stale: Duration::from_secs(DEGRADED_STALE_SECS),
-        unhealthy_lag: UNHEALTHY_LAG,
-        degraded_lag: DEGRADED_LAG,
+        unhealthy_lag: args.range_size.saturating_to() * UNHEALTHY_LAG_WINDOW,
+        degraded_lag: args.range_size.saturating_to() * DEGRADED_LAG_WINDOW,
     });
     let health_clone = health.clone();
     let health_port = args.health_port;

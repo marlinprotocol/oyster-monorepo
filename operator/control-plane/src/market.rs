@@ -15,6 +15,8 @@ use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, info_span, Instrument};
 
+use crate::health::HealthTracker;
+
 // IMPORTANT: do not import SystemTime, use a SystemContext
 
 // Trait to encapsulate behavior that should be simulated in tests
@@ -260,6 +262,7 @@ pub async fn run(
     // without job_id.id set
     job_id: JobId,
     job_registry: JobRegistry,
+    health: HealthTracker,
 ) {
     let mut backoff = 1;
 
@@ -275,8 +278,13 @@ pub async fn run(
             .await
             .context("failed to connect to the provided db url")
         {
-            Ok(pool) => pool,
+            Ok(pool) => {
+                health.record_success();
+                backoff = 1;
+                pool
+            }
             Err(err) => {
+                health.record_error("db_connect_failed");
                 error!(?err, "DB connection error");
                 // exponential backoff on connection errors
                 sleep(Duration::from_secs(backoff)).await;
@@ -300,6 +308,7 @@ pub async fn run(
             loop {
                 match fetch_job_events(&db_pool, last_processed_id).await {
                     Ok(events) => {
+                        health.record_success();
                         job_events = events;
                         break;
                     }
@@ -307,6 +316,7 @@ pub async fn run(
                         error!(?err, "DB fetch error");
 
                         if attempts == 0 {
+                            health.record_error("db_fetch_failed");
                             break 'run;
                         }
 
@@ -383,6 +393,7 @@ pub async fn run(
                     if let Err(err) = sender.send(event).await {
                         // should not happen in reality
                         // TODO: add handling (likely random panic in the job manager)
+                        health.record_error("job_channel_send_failed");
                         error!(?err, "Channel sender error");
                         break 'run;
                     }
