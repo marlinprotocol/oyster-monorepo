@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, command};
 use dotenvy::dotenv;
 use tokio::time::sleep;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -69,17 +69,30 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
 
-    let rpc_client = SuiProvider {
-        remote_checkpoint_url: args.remote_checkpoint_url,
-        grpc_url: args.grpc_url,
-        rpc_username: args.grpc_username,
-        rpc_password: args.grpc_password,
-        rpc_token: args.grpc_token,
-        package_id: args.package_id,
-    };
+    if args.grpc_username.is_some() && args.grpc_token.is_some() {
+        anyhow::bail!("Provide either gRPC username/password OR token, not both");
+    }
+
+    let rpc_client = SuiProvider::new(
+        args.grpc_url.clone(),
+        args.grpc_username,
+        args.grpc_password,
+        args.grpc_token,
+        args.remote_checkpoint_url.clone(),
+        args.package_id.clone(),
+    )?;
+
+    info!(
+        rpc = %args.grpc_url,
+        contract = %args.package_id,
+        remote_rpc = %args.remote_checkpoint_url,
+        provider = %args.provider,
+        start_block = ?args.start_block,
+        range_size = args.range_size,
+        "Starting Sui indexer"
+    );
 
     loop {
         let res = indexer_framework::run(
@@ -92,7 +105,7 @@ async fn main() -> Result<()> {
         .await;
 
         if let Err(e) = res {
-            error!(error = %e, "Indexer error, retrying after delay");
+            error!(error = ?e, "Indexer error, retrying after delay");
             sleep(Duration::from_secs(30)).await;
         } else {
             warn!("Indexer returned unexpectedly, restarting");

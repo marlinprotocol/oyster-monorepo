@@ -4,6 +4,7 @@ pub(crate) mod repository;
 pub(crate) mod schema;
 
 use std::cmp::min;
+use std::mem::take;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -72,10 +73,13 @@ pub async fn run(
 
     let retry_strategy = ExponentialBackoff::from_millis(500)
         .max_delay(Duration::from_secs(10))
+        .take(3)
         .map(jitter);
 
     let mut last_processed_block_id = Retry::spawn(retry_strategy.clone(), || async {
-        repo.get_last_processed_block().await
+        repo.get_last_processed_block().await.inspect_err(|err| {
+            warn!(error = ?err, "Retrying get_last_processed_block");
+        })
     })
     .await
     .context("Missing last processed block (possible DB corruption)")?;
@@ -110,6 +114,9 @@ pub async fn run(
     let updated = Retry::spawn(retry_strategy.clone(), || async {
         repo.update_indexer_state(chain_id.clone(), extra_decimals, start_block)
             .await
+            .inspect_err(|err| {
+                warn!(error = ?err, "Retrying update_indexer_state");
+            })
     })
     .await
     .context("Failed to update indexer state in the DB")?;
@@ -121,7 +128,9 @@ pub async fn run(
     }
 
     let mut active_job_ids = Retry::spawn(retry_strategy.clone(), || async {
-        repo.get_active_jobs().await
+        repo.get_active_jobs().await.inspect_err(|err| {
+            warn!(error = ?err, "Retrying get_active_jobs");
+        })
     })
     .await
     .context("Failed to fetch active job IDs from the DB")?;
@@ -152,14 +161,18 @@ pub async fn run(
         }
 
         if latest_block_i64 == last_processed_block_id {
-            info!("Up-to-date with RPC, sleeping 5s");
+            debug!("Up-to-date with RPC, sleeping 5s");
             sleep(Duration::from_secs(5)).await;
             continue;
         }
 
         let start_block: u64 = (last_processed_block_id + 1).saturating_to();
         let end_block = min(start_block + range_size - 1, latest_block);
-        info!(start_block, end_block, "Fetching new block range");
+        info!(
+            from = start_block,
+            to = end_block,
+            "Fetching new block range"
+        );
 
         let block_logs = match rpc_client
             .fetch_logs_and_group_by_block(start_block, end_block)
@@ -167,12 +180,16 @@ pub async fn run(
         {
             Ok(logs) => logs,
             Err(err) => {
-                error!(start_block, end_block, error = ?err, "Failed to fetch block logs from RPC, retrying after 10s");
+                error!(from = start_block, to = end_block, error = ?err, "Failed to fetch block logs from RPC, retrying after 10s");
                 sleep(Duration::from_secs(10)).await;
                 continue;
             }
         };
-        info!(start_block, end_block, "Processing logs in block range");
+        info!(
+            from = start_block,
+            to = end_block,
+            "Processing logs in block range"
+        );
 
         let mut end_block_num = last_processed_block_id;
         let mut batch_records = Vec::new();
@@ -200,15 +217,29 @@ pub async fn run(
             batch_records.extend(records);
 
             if batch_records.len() >= BATCH_THRESHOLD {
-                Retry::spawn(retry_strategy.clone(), || async {
-                    let (inserted_batch, updated) = repo
-                        .insert_batch(batch_records.clone(), end_block_num)
-                        .await?;
+                let batch = take(&mut batch_records);
 
-                    info!(end_block_num, inserted_batch, "Inserted block logs to DB");
-                    debug!("Last processed block updated: {}", updated == 1);
+                Retry::spawn(retry_strategy.clone(), || {
+                    let batch = batch.clone();
+                    let repo = repo.clone();
 
-                    Ok::<(), anyhow::Error>(())
+                    async move {
+                        let (inserted_batch, updated) = repo
+                            .insert_batch(batch, end_block_num)
+                            .await
+                            .inspect_err(|err| {
+                                warn!(error = ?err, "Retrying insert_batch");
+                            })?;
+
+                        info!(
+                            current_block = end_block_num,
+                            batch_count = inserted_batch,
+                            "Inserted block logs to DB"
+                        );
+                        debug!("Last processed block updated: {}", updated == 1);
+
+                        Ok::<(), anyhow::Error>(())
+                    }
                 })
                 .await
                 .context(format!(
@@ -222,15 +253,29 @@ pub async fn run(
         }
 
         if end_block_num > last_processed_block_id {
-            Retry::spawn(retry_strategy.clone(), || async {
-                let (inserted_batch, updated) = repo
-                    .insert_batch(batch_records.clone(), end_block_num)
-                    .await?;
+            let batch = take(&mut batch_records);
 
-                info!(end_block_num, inserted_batch, "Inserted block logs to DB");
-                debug!("Last processed block updated: {}", updated == 1);
+            Retry::spawn(retry_strategy.clone(), || {
+                let batch = batch.clone();
+                let repo = repo.clone();
 
-                Ok::<(), anyhow::Error>(())
+                async move {
+                    let (inserted_batch, updated) = repo
+                        .insert_batch(batch, end_block_num)
+                        .await
+                        .inspect_err(|err| {
+                        warn!(error = ?err, "Retrying insert_batch");
+                    })?;
+
+                    info!(
+                        current_block = end_block_num,
+                        batch_count = inserted_batch,
+                        "Inserted block logs to DB"
+                    );
+                    debug!("Last processed block updated: {}", updated == 1);
+
+                    Ok::<(), anyhow::Error>(())
+                }
             })
             .await
             .context(format!(

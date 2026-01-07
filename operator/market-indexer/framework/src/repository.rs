@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use tokio::time::timeout;
 
 use crate::schema::JobEventRecord;
 
@@ -61,11 +63,18 @@ pub struct Repository {
 impl Repository {
     pub async fn new(db_url: String) -> Result<Self> {
         // Create an async connection pool
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&db_url)
-            .await
-            .context("Failed to connect to the DATABASE_URL")?;
+        let pool = timeout(
+            Duration::from_secs(5),
+            PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(5))
+                .idle_timeout(Duration::from_secs(300))
+                .max_lifetime(Duration::from_secs(1800))
+                .connect(&db_url),
+        )
+        .await
+        .context("Timed out connecting to the DATABASE_URL")?
+        .context("Failed to connect to the DATABASE_URL")?;
 
         Ok(Self { pool })
     }

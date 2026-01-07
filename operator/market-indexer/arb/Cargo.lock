@@ -2823,6 +2823,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "indexer-framework",
+ "reqwest",
  "tokio",
  "tokio-retry",
  "tracing",
