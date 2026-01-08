@@ -10,6 +10,7 @@ anyhow = "1.0.95"
 clap = { version = "4.5.23", features = ["derive"] }
 dotenvy = "0.15.7"
 indexer-framework = { version = "0.1.0", path = "../framework" }
+reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1.46.1", features = ["full"] }
 tokio-retry = "0.3"
 tracing = "0.1.41"
