@@ -403,54 +403,86 @@ impl ChainHandler for SuiProvider {
                         .map(jitter),
                         move || {
                             let mut client = client.clone();
-                    async move {
-                        timeout(DEFAULT_GRPC_REQUEST_TIMEOUT, client
-                            .ledger_client()
-                            .get_checkpoint(GetCheckpointRequest::by_sequence_number(seq_num)
-                                .with_read_mask(FieldMask {
-                                    paths: vec!["transactions".into()]
-                                })
-                            )
-                        ).await
+                            async move {
+                                timeout(DEFAULT_GRPC_REQUEST_TIMEOUT, client
+                                    .ledger_client()
+                                    .get_checkpoint(GetCheckpointRequest::by_sequence_number(seq_num)
+                                        .with_read_mask(FieldMask {
+                                            paths: vec!["transactions".into()]
+                                        })
+                                    )
+                                ).await
+                            }
+                        },
+                    )
+                    .await {
+                        Ok(Ok(checkpoint)) => {
+                            return Ok((seq_num, checkpoint_to_sui_logs(&package_id, checkpoint
+                                .into_inner()
+                                .checkpoint()
+                                .clone())))
+                        }
+                        Ok(Err(err)) => {
+                            warn!(
+                                seq_num,
+                                error = ?err,
+                                "gRPC checkpoint fetch failed, falling back to remote checkpoint storage"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                seq_num,
+                                error = ?err,
+                                "gRPC checkpoint fetch timed out, falling back to remote checkpoint storage"
+                            );
+                        }
                     }
-                },
-                )
-                .await
-                {
-                    Ok(Ok(checkpoint)) => Ok((seq_num, checkpoint_to_sui_logs(&package_id, checkpoint
-                        .into_inner()
-                        .checkpoint()
-                        .clone()))),
-                    _ => {
-                        warn!(seq_num, "gRPC checkpoint fetch failed, falling back to remote checkpoint storage");
 
-                        let checkpoint_url =
-                                    format!("{}/{}.chk", remote_checkpoint_url.trim_end_matches('/'), seq_num);
+                let checkpoint_url = format!("{}/{}.chk", remote_checkpoint_url.trim_end_matches('/'), seq_num);
+                let checkpoint = Retry::spawn(
+                    ExponentialBackoff::from_millis(1000)
+                        .max_delay(Duration::from_secs(10))
+                        .take(3)
+                        .map(jitter),
+                    || async {
+                        let response = remote_client.get(&checkpoint_url)
+                            .send()
+                            .await
+                            .context(format!(
+                                "Failed to send checkpoint data request for sequence {} using remote url", 
+                                seq_num
+                            ))?;
 
-                        let checkpoint = Retry::spawn(
-                            ExponentialBackoff::from_millis(1000)
-                                .max_delay(Duration::from_secs(10))
-                                .take(3)
-                                .map(jitter),
-                            || async {
-                                let response = remote_client.get(&checkpoint_url).send().await.context(format!("Failed to send checkpoint data request for sequence {} using remote url", seq_num))?;
-                                if response.status().is_success() {
-                                    Ok(response.bytes().await.context(format!("Failed to get response bytes for checkpoint data at sequence {} from remote call", seq_num))?)
-                                } else {
-                                    Err(anyhow!(
-                                        "Remote checkpoint call for sequence {} failed with status: {}",
-                                        seq_num, response.status()
-                                    ))
-                                }
-                            },
-                        )
-                        .await
-                        .context(format!("Failed to get checkpoint data for sequence {} using remote url", seq_num))?;
+                        if response.status().is_success() {
+                            Ok(response.bytes()
+                                .await
+                                .context(format!(
+                                    "Failed to get response bytes for checkpoint data at sequence {} from remote call", 
+                                    seq_num
+                                ))?)
+                        } else {
+                            Err(anyhow!(
+                                "Remote checkpoint call for sequence {} failed with status: {}",
+                                seq_num, response.status()
+                            ))
+                        }
+                    },
+                    )
+                    .await
+                    .context(format!(
+                        "Failed to get checkpoint data for sequence {} using remote url", 
+                        seq_num
+                    ))?;
 
-                        debug!(seq_num, bytes = checkpoint.len(), "Fetched checkpoint from remote storage");
-                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint_data_from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
-                    }
-                }
+                debug!(seq_num, bytes = checkpoint.len(), "Fetched checkpoint from remote storage");
+                Ok((seq_num, checkpoint_data_to_sui_logs(
+                    &package_id,
+                    checkpoint_data_from_bytes(&checkpoint)
+                        .context(format!(
+                            "Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", 
+                            seq_num
+                        ))?)
+                ))
             });
         }
 
