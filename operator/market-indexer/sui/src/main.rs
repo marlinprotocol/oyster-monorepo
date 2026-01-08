@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
         .await;
 
         if let Err(e) = res {
-            error!(error = %e, "Indexer error, retrying after delay");
+            error!(error = ?e, "Indexer error, retrying after delay");
             sleep(Duration::from_secs(30)).await;
         } else {
             warn!("Indexer returned unexpectedly, restarting");
