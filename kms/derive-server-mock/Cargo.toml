@@ -7,9 +7,11 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = "1.0.95"
 axum = "0.8.1"
+blake2 = "0.10.6"
 clap = { version = "4.5.27", features = ["derive"] }
 kms-derive-utils = { version = "0.1.0", path = "../derive-utils" }
 serde = { version = "1.0.217", features = ["derive"] }
+serde_yaml = "0.9.34"
 tokio = { version = "1.43.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

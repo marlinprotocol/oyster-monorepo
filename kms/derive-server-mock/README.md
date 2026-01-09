@@ -33,9 +33,11 @@ Supported outputs:
 $ ./target/release/kms-derive-server-mock --help
 Usage: kms-derive-server-mock [OPTIONS]
 Options:
-      --listen-addr <LISTEN_ADDR>  Listening address [default: 127.0.0.1:1100]
-  -h, --help                       Print help
-  -V, --version                    Print version
+      --listen-addr <LISTEN_ADDR>         Listening address [default: 127.0.0.1:1100]
+      --contract                          Flag to enable contract based derive server behavior (constant seed)
+      --docker-compose <DOCKER_COMPOSE>   Path to docker-compose file for yaml based seed
+  -h, --help                              Print help
+  -V, --version                           Print version
 ```
 
 ## Endpoints
