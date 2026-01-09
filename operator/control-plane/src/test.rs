@@ -5,13 +5,15 @@ use alloy_primitives::hex::ToHexExt;
 #[cfg(test)]
 use alloy_primitives::B256;
 use alloy_primitives::{FixedBytes, U256};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 #[cfg(test)]
 use tokio::time::Instant;
 
 use crate::market::{GBRateCard, InfraProvider, JobId, RateCard, RegionalRates};
 #[cfg(test)]
 use crate::market::{JobEvent, JobEventName};
+#[cfg(test)]
+use crate::server::Error;
 
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
@@ -188,11 +190,11 @@ impl InfraProvider for TestAws {
         Ok(())
     }
 
-    async fn get_job_ip(&self, job: &JobId, _region: &str) -> Result<String> {
+    async fn get_job_ip(&self, job: &JobId, _region: &str) -> std::result::Result<String, Error> {
         let instance_metadata = self.instances.get(&job.id);
         instance_metadata
             .map(|x| x.ip_address.clone())
-            .ok_or(anyhow!("Instance not found for job - {}", job.id))
+            .ok_or(Error::NotFound(job.id.clone()))
     }
 
     async fn check_enclave_running(&mut self, _job: &JobId, _region: &str) -> Result<bool> {
