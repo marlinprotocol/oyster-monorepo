@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use axum::extract::State;
 use futures_core::stream::Stream;
 use futures_util::stream::StreamExt;
-use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
@@ -18,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{self, sleep};
+use tracing::{error, info};
 
 use crate::chain_util::{
     confirm_event, sign_job_response_request, sign_reassign_gateway_relay_request,

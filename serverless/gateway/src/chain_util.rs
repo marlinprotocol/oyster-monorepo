@@ -10,12 +10,12 @@ use alloy::transports::http::reqwest::Url;
 use alloy::transports::http::{Client, Http};
 use anyhow::Result;
 use futures_core::stream::Stream;
-use log::{error, info};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
+use tracing::{error, info};
 
 use crate::constant::{
     MAX_RETRY_ON_PROVIDER_ERROR, MAX_TX_RECEIPT_RETRIES, WAIT_BEFORE_HTTP_RPC_CALL,
