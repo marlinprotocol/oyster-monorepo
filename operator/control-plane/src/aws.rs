@@ -18,6 +18,7 @@ use tracing::{error, info};
 use whoami::username;
 
 use crate::market::{InfraProvider, JobId};
+use crate::server::Error;
 
 #[derive(Clone)]
 pub struct Aws {
@@ -1546,25 +1547,46 @@ impl InfraProvider for Aws {
             .context("could not spin down enclave")
     }
 
-    async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
-        let instance = self
-            .get_job_instance_id(job, region)
-            .await
-            .context("could not get instance id for job instance ip")?;
+    async fn get_job_ip(&self, job: &JobId, region: &str) -> std::result::Result<String, Error> {
+        let instance = self.get_job_instance_id(job, region).await;
 
-        if !instance.0 {
-            return Err(anyhow!("Instance not found for job - {}", job.id));
+        if instance.is_err() {
+            error!(
+                "Could not get instance id for job {}: {:?}",
+                job.id,
+                instance.unwrap_err()
+            );
+            return Err(Error::Internal);
         }
 
-        let instance_ip = self
-            .get_instance_ip(&instance.1, region)
-            .await
-            .context("could not get instance ip")?;
+        let instance = instance.unwrap();
+        if !instance.0 {
+            return Err(Error::NotFound(job.id.clone()));
+        }
 
-        let (found, _, elastic_ip) = self
-            .get_job_elastic_ip(job, region)
-            .await
-            .context("could not get job elastic ip")?;
+        let instance_ip = self.get_instance_ip(&instance.1, region).await;
+
+        if instance_ip.is_err() {
+            error!(
+                "Could not get instance ip for job {}: {:?}",
+                job.id,
+                instance_ip.unwrap_err()
+            );
+            return Err(Error::Internal);
+        }
+        let instance_ip = instance_ip.unwrap();
+
+        let elastic_ip = self.get_job_elastic_ip(job, region).await;
+
+        if elastic_ip.is_err() {
+            error!(
+                "Could not get elastic ip for job {}: {:?}",
+                job.id,
+                elastic_ip.unwrap_err()
+            );
+            return Err(Error::Internal);
+        }
+        let (found, _, elastic_ip) = elastic_ip.unwrap();
 
         // it is possible for the two above to differ while the instance is initializing (maybe
         // terminating?), better to error out instead of potentially showing a temporary IP
@@ -1572,7 +1594,7 @@ impl InfraProvider for Aws {
             return Ok(instance_ip);
         }
 
-        Err(anyhow!("Instance is still initializing"))
+        Err(Error::Pending(job.id.clone()))
     }
 
     async fn check_enclave_running(&mut self, job: &JobId, region: &str) -> Result<bool> {
