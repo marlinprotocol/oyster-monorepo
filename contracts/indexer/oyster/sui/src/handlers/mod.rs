@@ -9,6 +9,9 @@ use crate::provider::parse_sui_log;
 mod provider_added;
 use provider_added::handle_provider_added;
 
+mod provider_removed;
+use provider_removed::handle_provider_removed;
+
 #[instrument(
     level = "info",
     skip_all,
@@ -38,7 +41,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
     // Match on event name directly
     match parsed.event_name {
         "ProviderAdded" => handle_provider_added(conn, &parsed),
-
+        "ProviderRemoved" => handle_provider_removed(conn, &parsed),
         // Ignored events
         "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
             info!(event_name = parsed.event_name, "ignoring event type");
