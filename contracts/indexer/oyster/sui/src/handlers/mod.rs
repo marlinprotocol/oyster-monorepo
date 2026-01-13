@@ -21,6 +21,9 @@ use job_opened::handle_job_opened;
 mod job_withdrew;
 use job_withdrew::handle_job_withdrew;
 
+mod job_deposited;
+use job_deposited::handle_job_deposited;
+
 mod job_revise_rate_initiated;
 use job_revise_rate_initiated::handle_job_revise_rate_initiated;
 
@@ -61,6 +64,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "ProviderRemoved" => handle_provider_removed(conn, &parsed),
         "ProviderUpdatedWithCp" => handle_provider_updated_with_cp(conn, &parsed),
         "JobOpened" => handle_job_opened(conn, &parsed),
+        "JobDeposited" => handle_job_deposited(conn, &parsed),
         "JobWithdrew" => handle_job_withdrew(conn, &parsed),
         "JobReviseRateInitiated" => handle_job_revise_rate_initiated(conn, &parsed),
         "JobReviseRateCancelled" => handle_job_revise_rate_cancelled(conn, &parsed),
