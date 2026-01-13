@@ -24,6 +24,9 @@ use job_withdrew::handle_job_withdrew;
 mod job_revise_rate_initiated;
 use job_revise_rate_initiated::handle_job_revise_rate_initiated;
 
+mod job_revise_rate_cancelled;
+use job_revise_rate_cancelled::handle_job_revise_rate_cancelled;
+
 mod job_metadata_updated;
 use job_metadata_updated::handle_job_metadata_updated;
 #[instrument(
@@ -60,6 +63,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "JobOpened" => handle_job_opened(conn, &parsed),
         "JobWithdrew" => handle_job_withdrew(conn, &parsed),
         "JobReviseRateInitiated" => handle_job_revise_rate_initiated(conn, &parsed),
+        "JobReviseRateCancelled" => handle_job_revise_rate_cancelled(conn, &parsed),
         "JobMetadataUpdated" => handle_job_metadata_updated(conn, &parsed),
         // Ignored events
         "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
