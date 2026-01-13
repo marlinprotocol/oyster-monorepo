@@ -9,9 +9,21 @@ use diesel_migrations::embed_migrations;
 use diesel_migrations::EmbeddedMigrations;
 use tracing::{info, instrument};
 
+/// Trait for blockchain providers that can fetch logs/events and block information.
+///
+/// This trait abstracts over different blockchain implementations (EVM, Sui, etc.),
+/// allowing the framework to work with any chain that implements these methods.
+///
+/// For details on implementing this trait for a new chain, see PROVIDER_PATTERN.md
 pub trait LogsProvider {
+    /// Get the latest block/checkpoint number from the chain.
     fn latest_block(&mut self) -> Result<u64>;
+    
+    /// Fetch logs/events for a block range.
+    /// The implementation should convert chain-specific events to Ethereum-style Log format.
     fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>>;
+    
+    /// Get the timestamp (in seconds since Unix epoch) for a specific block/checkpoint.
     fn block_timestamp(&self, block_number: u64) -> Result<u64>;
 }
 

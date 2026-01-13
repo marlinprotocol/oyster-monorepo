@@ -5,9 +5,9 @@ diesel::table! {
         #[max_length = 66]
         id -> Bpchar,
         metadata -> Text,
-        #[max_length = 42]
+        #[max_length = 66]
         owner -> Bpchar,
-        #[max_length = 42]
+        #[max_length = 66]
         provider -> Bpchar,
         rate -> Numeric,
         balance -> Numeric,
@@ -20,7 +20,7 @@ diesel::table! {
 
 diesel::table! {
     providers (id) {
-        #[max_length = 42]
+        #[max_length = 66]
         id -> Bpchar,
         cp -> Text,
         block -> Int8,
