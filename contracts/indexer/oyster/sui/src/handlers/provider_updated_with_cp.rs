@@ -1,0 +1,499 @@
+use anyhow::Context;
+use anyhow::Result;
+use diesel::ExpressionMethods;
+use diesel::PgConnection;
+use diesel::RunQueryDsl;
+use indexer_framework::schema::providers;
+use serde::Deserialize;
+use sui_sdk_types::Address;
+use tracing::{info, instrument};
+
+use crate::provider::ParsedSuiLog;
+
+/// Sui ProviderUpdatedWithCp event structure (decoded from BCS)
+#[derive(Debug, Deserialize)]
+pub struct ProviderUpdatedWithCpEvent {
+    pub provider: Address,
+    pub cp: String,
+}
+
+#[instrument(level = "info", skip_all, parent = None)]
+pub fn handle_provider_updated_with_cp(
+    conn: &mut PgConnection,
+    parsed: &ParsedSuiLog,
+) -> Result<()> {
+    // Decode the BCS-encoded event data
+    let event: ProviderUpdatedWithCpEvent = bcs::from_bytes(parsed.bcs_contents)
+        .context("Failed to BCS decode ProviderUpdatedWithCp event data")?;
+
+    let provider = event.provider.to_string();
+    let cp = event.cp;
+
+    // we want to update if provider is active
+    // we want to error out if provider does not exist or is not active
+
+    info!(provider, cp, "updating provider");
+
+    // target sql:
+    // UPDATE providers
+    // SET cp = "<cp>"
+    // WHERE id = "<id>"
+    // AND is_active = true;
+    let count = diesel::update(providers::table)
+        .filter(providers::id.eq(&provider))
+        // we want to detect if provider is inactive
+        // we do it by only updating rows where is_active is true
+        // and later checking if any rows were updated
+        .filter(providers::is_active.eq(true))
+        .set(providers::cp.eq(&cp))
+        .execute(conn)
+        .context("failed to update provider")?;
+
+    if count != 1 {
+        // !!! should never happen
+        // we should have had exactly one row made inactive
+        // if count is 0, that means the provider did not exist or was not active
+        // if count is more than 1, there was somehow more than one provider entry
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!("count {count} should have been 1"));
+    }
+
+    info!(provider, "updated provider");
+
+    Ok(())
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use alloy::{primitives::LogData, rpc::types::Log};
+//     use anyhow::Result;
+//     use diesel::QueryDsl;
+//     use ethp::{event, keccak256};
+
+//     use crate::handlers::handle_log;
+//     use crate::handlers::test_utils::MockProvider;
+//     use crate::handlers::test_utils::TestDb;
+
+//     use super::*;
+
+//     #[test]
+//     fn test_change_cp_of_existing_provider() -> Result<()> {
+//         // setup
+//         let mut db = TestDb::new();
+//         let conn = &mut db.conn;
+
+//         let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0x7777777777777777777777777777777777777777"),
+//                 providers::cp.eq("some other cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
+//                 providers::cp.eq("some cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 )
+//             ])
+//         );
+
+//         // log under test
+//         let log = Log {
+//             block_hash: Some(keccak256!("some block").into()),
+//             block_number: Some(42),
+//             block_timestamp: None,
+//             log_index: Some(69),
+//             transaction_hash: Some(keccak256!("some tx").into()),
+//             transaction_index: Some(420),
+//             removed: false,
+//             inner: alloy::primitives::Log {
+//                 address: contract,
+//                 data: LogData::new(
+//                     vec![
+//                         event!("ProviderUpdatedWithCp(address,string)").into(),
+//                         "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+//                             .parse::<Address>()?
+//                             .into_word(),
+//                     ],
+//                     "some random cp".abi_encode().into(),
+//                 )
+//                 .unwrap(),
+//             },
+//         };
+
+//         // using timestamp 0 because we don't care about it
+//         let provider = MockProvider::new(0);
+//         // use handle_log instead of concrete handler to test dispatch
+//         handle_log(conn, log, &provider)?;
+
+//         // checks
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some random cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 )
+//             ])
+//         );
+
+//         Ok(())
+//     }
+
+//     #[test]
+//     fn test_change_cp_of_existing_provider_with_same_value() -> Result<()> {
+//         // setup
+//         let mut db = TestDb::new();
+//         let conn = &mut db.conn;
+
+//         let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0x7777777777777777777777777777777777777777"),
+//                 providers::cp.eq("some other cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
+//                 providers::cp.eq("some cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 )
+//             ])
+//         );
+
+//         // log under test
+//         let log = Log {
+//             block_hash: Some(keccak256!("some block").into()),
+//             block_number: Some(42),
+//             block_timestamp: None,
+//             log_index: Some(69),
+//             transaction_hash: Some(keccak256!("some tx").into()),
+//             transaction_index: Some(420),
+//             removed: false,
+//             inner: alloy::primitives::Log {
+//                 address: contract,
+//                 data: LogData::new(
+//                     vec![
+//                         event!("ProviderUpdatedWithCp(address,string)").into(),
+//                         "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+//                             .parse::<Address>()?
+//                             .into_word(),
+//                     ],
+//                     "some cp".abi_encode().into(),
+//                 )
+//                 .unwrap(),
+//             },
+//         };
+
+//         // using timestamp 0 because we don't care about it
+//         let provider = MockProvider::new(0);
+//         // use handle_log instead of concrete handler to test dispatch
+//         handle_log(conn, log, &provider)?;
+
+//         // checks
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 )
+//             ])
+//         );
+
+//         Ok(())
+//     }
+
+//     #[test]
+//     fn test_change_cp_of_nonexistent_provider() -> Result<()> {
+//         // setup
+//         let mut db = TestDb::new();
+//         let conn = &mut db.conn;
+
+//         let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0x7777777777777777777777777777777777777777"),
+//                 providers::cp.eq("some other cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+
+//         assert_eq!(providers::table.count().get_result(conn), Ok(1));
+//         assert_eq!(
+//             providers::table.select(providers::all_columns).first(conn),
+//             Ok((
+//                 "0x7777777777777777777777777777777777777777".to_owned(),
+//                 "some other cp".to_owned(),
+//                 42,
+//                 "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 true
+//             ))
+//         );
+
+//         // log under test
+//         let log = Log {
+//             block_hash: Some(keccak256!("some block").into()),
+//             block_number: Some(42),
+//             block_timestamp: None,
+//             log_index: Some(69),
+//             transaction_hash: Some(keccak256!("some tx").into()),
+//             transaction_index: Some(420),
+//             removed: false,
+//             inner: alloy::primitives::Log {
+//                 address: contract,
+//                 data: LogData::new(
+//                     vec![
+//                         event!("ProviderUpdatedWithCp(address,string)").into(),
+//                         "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+//                             .parse::<Address>()?
+//                             .into_word(),
+//                     ],
+//                     "some random cp".abi_encode().into(),
+//                 )
+//                 .unwrap(),
+//             },
+//         };
+
+//         // using timestamp 0 because we don't care about it
+//         let provider = MockProvider::new(0);
+//         // use handle_log instead of concrete handler to test dispatch
+//         let res = handle_log(conn, log, &provider);
+
+//         // checks
+//         assert_eq!(
+//             format!("{:?}", res.unwrap_err()),
+//             "count 0 should have been 1"
+//         );
+//         assert_eq!(providers::table.count().get_result(conn), Ok(1));
+//         assert_eq!(
+//             providers::table.select(providers::all_columns).first(conn),
+//             Ok((
+//                 "0x7777777777777777777777777777777777777777".to_owned(),
+//                 "some other cp".to_owned(),
+//                 42,
+//                 "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 true,
+//             ))
+//         );
+
+//         Ok(())
+//     }
+
+//     #[test]
+//     fn test_change_cp_of_inactive_provider() -> Result<()> {
+//         // setup
+//         let mut db = TestDb::new();
+//         let conn = &mut db.conn;
+
+//         let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0x7777777777777777777777777777777777777777"),
+//                 providers::cp.eq("some other cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(true),
+//             ))
+//             .execute(conn)?;
+//         diesel::insert_into(providers::table)
+//             .values((
+//                 providers::id.eq("0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"),
+//                 providers::cp.eq("some cp"),
+//                 providers::block.eq(42i64),
+//                 providers::tx_hash.eq(
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                 ),
+//                 providers::is_active.eq(false),
+//             ))
+//             .execute(conn)?;
+
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     false,
+//                 )
+//             ])
+//         );
+
+//         // log under test
+//         let log = Log {
+//             block_hash: Some(keccak256!("some block").into()),
+//             block_number: Some(42),
+//             block_timestamp: None,
+//             log_index: Some(69),
+//             transaction_hash: Some(keccak256!("some tx").into()),
+//             transaction_index: Some(420),
+//             removed: false,
+//             inner: alloy::primitives::Log {
+//                 address: contract,
+//                 data: LogData::new(
+//                     vec![
+//                         event!("ProviderUpdatedWithCp(address,string)").into(),
+//                         "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+//                             .parse::<Address>()?
+//                             .into_word(),
+//                     ],
+//                     "some random cp".abi_encode().into(),
+//                 )
+//                 .unwrap(),
+//             },
+//         };
+
+//         // using timestamp 0 because we don't care about it
+//         let provider = MockProvider::new(0);
+//         // use handle_log instead of concrete handler to test dispatch
+//         let res = handle_log(conn, log, &provider);
+
+//         // checks
+//         assert_eq!(
+//             format!("{:?}", res.unwrap_err()),
+//             "count 0 should have been 1"
+//         );
+//         assert_eq!(providers::table.count().get_result(conn), Ok(2));
+//         assert_eq!(
+//             providers::table
+//                 .select(providers::all_columns)
+//                 .order_by(providers::id)
+//                 .load(conn),
+//             Ok(vec![
+//                 (
+//                     "0x7777777777777777777777777777777777777777".to_owned(),
+//                     "some other cp".to_owned(),
+//                     42,
+//                     "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     true,
+//                 ),
+//                 (
+//                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
+//                     "some cp".to_owned(),
+//                     42,
+//                     "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+//                     false,
+//                 )
+//             ])
+//         );
+
+//         Ok(())
+//     }
+// }
