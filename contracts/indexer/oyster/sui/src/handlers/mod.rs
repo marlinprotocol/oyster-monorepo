@@ -1,0 +1,53 @@
+use alloy::rpc::types::Log;
+use anyhow::{anyhow, Result};
+use diesel::PgConnection;
+use indexer_framework::LogsProvider;
+use tracing::{debug, info, instrument, warn};
+
+use crate::provider::parse_sui_log;
+
+mod provider_added;
+use provider_added::handle_provider_added;
+
+#[instrument(
+    level = "info",
+    skip_all,
+    parent = None,
+    fields(block = log.block_number, idx = log.log_index)
+)]
+pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvider) -> Result<()> {
+    // Debug: log raw data length
+    let raw_data = log.data().data.as_ref();
+    debug!(
+        raw_data_len = raw_data.len(),
+        raw_data_hex = hex::encode(raw_data),
+        "Raw log data"
+    );
+
+    // Parse the Sui log to extract event name, tx_digest, checkpoint and BCS contents
+    let parsed = parse_sui_log(&log).ok_or_else(|| anyhow!("Failed to parse Sui log data"))?;
+
+    info!(
+        event_name = parsed.event_name,
+        tx_digest = parsed.tx_digest,
+        checkpoint = parsed.checkpoint,
+        bcs_len = parsed.bcs_contents.len(),
+        "processing Sui event"
+    );
+
+    // Match on event name directly
+    match parsed.event_name {
+        "ProviderAdded" => handle_provider_added(conn, &parsed),
+
+        // Ignored events
+        "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
+            info!(event_name = parsed.event_name, "ignoring event type");
+            Ok(())
+        }
+        _ => {
+            warn!(event_name = parsed.event_name, "unknown event type");
+            Ok(())
+        }
+    }
+}
+
