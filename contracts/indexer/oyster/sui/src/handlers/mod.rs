@@ -15,6 +15,9 @@ use provider_removed::handle_provider_removed;
 mod provider_updated_with_cp;
 use provider_updated_with_cp::handle_provider_updated_with_cp;
 
+mod job_opened;
+use job_opened::handle_job_opened;
+
 #[instrument(
     level = "info",
     skip_all,
@@ -46,6 +49,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "ProviderAdded" => handle_provider_added(conn, &parsed),
         "ProviderRemoved" => handle_provider_removed(conn, &parsed),
         "ProviderUpdatedWithCp" => handle_provider_updated_with_cp(conn, &parsed),
+        "JobOpened" => handle_job_opened(conn, &parsed),
         // Ignored events
         "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
             info!(event_name = parsed.event_name, "ignoring event type");
