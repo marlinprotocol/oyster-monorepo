@@ -39,6 +39,9 @@ use job_metadata_updated::handle_job_metadata_updated;
 mod job_settled;
 use job_settled::handle_job_settled;
 
+mod job_closed;
+use job_closed::handle_job_closed;
+
 #[instrument(
     level = "info",
     skip_all,
@@ -72,6 +75,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "ProviderUpdatedWithCp" => handle_provider_updated_with_cp(conn, &parsed),
         "JobOpened" => handle_job_opened(conn, &parsed),
         "JobSettled" => handle_job_settled(conn, &parsed),
+        "JobClosed" => handle_job_closed(conn, &parsed),
         "JobDeposited" => handle_job_deposited(conn, &parsed),
         "JobWithdrew" => handle_job_withdrew(conn, &parsed),
         "JobReviseRateInitiated" => handle_job_revise_rate_initiated(conn, &parsed),
