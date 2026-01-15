@@ -36,6 +36,9 @@ use job_revise_rate_finalized::handle_job_revise_rate_finalized;
 mod lock_created;
 use lock_created::handle_lock_created;
 
+mod lock_deleted;
+use lock_deleted::handle_lock_deleted;
+
 mod job_metadata_updated;
 use job_metadata_updated::handle_job_metadata_updated;
 
@@ -86,6 +89,7 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "JobReviseRateFinalized" => handle_job_revise_rate_finalized(conn, &parsed),
         "JobMetadataUpdated" => handle_job_metadata_updated(conn, &parsed),
         "LockCreated" => handle_lock_created(conn, &parsed),
+        "LockDeleted" => handle_lock_deleted(conn, &parsed),
         // Ignored events
         "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
             info!(event_name = parsed.event_name, "ignoring event type");
