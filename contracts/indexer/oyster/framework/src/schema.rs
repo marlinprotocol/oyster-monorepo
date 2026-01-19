@@ -3,12 +3,12 @@
 diesel::table! {
     jobs (id) {
         #[max_length = 66]
-        id -> Bpchar,
+        id -> Varchar,
         metadata -> Text,
         #[max_length = 66]
-        owner -> Bpchar,
+        owner -> Varchar,
         #[max_length = 66]
-        provider -> Bpchar,
+        provider -> Varchar,
         rate -> Numeric,
         balance -> Numeric,
         last_settled -> Timestamp,
@@ -21,11 +21,11 @@ diesel::table! {
 diesel::table! {
     providers (id) {
         #[max_length = 66]
-        id -> Bpchar,
+        id -> Varchar,
         cp -> Text,
         block -> Int8,
         #[max_length = 66]
-        tx_hash -> Bpchar,
+        tx_hash -> Varchar,
         is_active -> Bool,
     }
 }
@@ -33,7 +33,7 @@ diesel::table! {
 diesel::table! {
     rate_revisions (job_id, block) {
         #[max_length = 66]
-        job_id -> Bpchar,
+        job_id -> Varchar,
         value -> Numeric,
         block -> Int8,
         timestamp -> Numeric,
@@ -43,7 +43,7 @@ diesel::table! {
 diesel::table! {
     revise_rate_requests (id) {
         #[max_length = 66]
-        id -> Bpchar,
+        id -> Varchar,
         value -> Numeric,
         updates_at -> Timestamp,
     }
@@ -52,7 +52,7 @@ diesel::table! {
 diesel::table! {
     settlement_history (id, block) {
         #[max_length = 66]
-        id -> Bpchar,
+        id -> Varchar,
         amount -> Numeric,
         timestamp -> Numeric,
         block -> Int8,
@@ -70,9 +70,9 @@ diesel::table! {
         block -> Int8,
         idx -> Int8,
         #[max_length = 66]
-        tx_hash -> Bpchar,
+        tx_hash -> Varchar,
         #[max_length = 66]
-        job -> Bpchar,
+        job -> Varchar,
         amount -> Numeric,
         is_deposit -> Bool,
     }
