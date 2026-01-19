@@ -20,16 +20,6 @@ use tracing::{info, instrument, warn};
 ///
 /// NOTE: This struct must match the Sui Move event structure exactly.
 /// Field order matters for BCS deserialization.
-///
-/// Move struct:
-/// ```move
-/// struct LockCreated has copy, drop {
-///     selector: vector<u8>,
-///     key: vector<u8>,
-///     i_value: u256,
-///     unlock_time: u64
-/// }
-/// ```
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct LockCreatedEvent {
