@@ -23,7 +23,7 @@ cargo test
 The indexer relies on an environment file to provide parameters containing secrets. An example .env file is provided along with the repository. It has two parameters:
 
 - `DATABASE_URL`: production database URL where the indexer stores indexed data. It should look like `postgres://<username>:<password>@<host>/<database>`.
-- (Optional) `TEST_DATABASE_URL`: database URL for running tests. The format is the same as `DATABASE_URL`, the user must have permissions to create new databases on the server since the tests each create a new database for isolation.
+- (Optional) `TEST_DATABASE_URL`: database URL for running tests. The format is the same as `DATABASE_URL`; the user must have permissions to create new databases on the server since the tests each create a new database for isolation.
 
 ### Run
 
