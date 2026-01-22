@@ -21,11 +21,13 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
+use tracing::{debug, warn};
 
 const GRPC_AUTH_TOKEN: &str = "x-token";
 
-const DEFAULT_FETCH_CONCURRENCY: usize = 200;
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_FETCH_CONCURRENCY: usize = 64;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
+const DEFAULT_GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 const MODULE_NAME: &str = "market";
 const EXTRA_DECIMALS_FUNCTION_NAME: &str = "extra_decimals";
@@ -58,7 +60,7 @@ struct JobDeposited {
 struct JobSettled {
     job_id: u128,
     amount: u64,
-    settled_until_ms: u64,
+    settled_until: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,7 +146,7 @@ impl FromLog for SuiLog {
                 Ok(Some(JobEvent::Settled(events::JobSettled {
                     job_id: decoded_data.job_id.to_string(),
                     amount: U256::from(decoded_data.amount),
-                    timestamp: decoded_data.settled_until_ms.saturating_to(),
+                    timestamp: decoded_data.settled_until.saturating_to(),
                 })))
             }
             "JobMetadataUpdated" => {
@@ -207,31 +209,52 @@ impl FromLog for SuiLog {
 
 #[derive(Clone)]
 pub struct SuiProvider {
+    pub grpc_client: Client,
+    pub remote_client: Arc<reqwest::Client>,
     pub remote_checkpoint_url: String,
-    pub grpc_url: String,
-    pub rpc_username: Option<String>,
-    pub rpc_password: Option<String>,
-    pub rpc_token: Option<String>,
     pub package_id: String,
 }
 
 impl SuiProvider {
-    fn get_client(&self) -> Result<Client> {
-        if let Some(username) = &self.rpc_username {
-            let mut headers = HeadersInterceptor::default();
-            headers.basic_auth(username, self.rpc_password.clone());
+    pub fn new(
+        grpc_url: String,
+        rpc_username: Option<String>,
+        rpc_password: Option<String>,
+        rpc_token: Option<String>,
+        remote_checkpoint_url: String,
+        package_id: String,
+    ) -> Result<Self> {
+        let mut client = Client::new(&grpc_url)
+            .context("Failed to initialize gRPC client from the provided url")?;
 
-            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
-        } else if let Some(token) = &self.rpc_token {
+        if let Some(username) = rpc_username {
             let mut headers = HeadersInterceptor::default();
-            headers
-                .headers_mut()
-                .insert(GRPC_AUTH_TOKEN, token.parse()?);
-
-            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
-        } else {
-            Ok(Client::new(&self.grpc_url)?)
+            headers.basic_auth(username, rpc_password);
+            client = client.with_headers(headers);
+        } else if let Some(token) = rpc_token {
+            let mut headers = HeadersInterceptor::default();
+            headers.headers_mut().insert(
+                GRPC_AUTH_TOKEN,
+                token
+                    .parse()
+                    .context("Failed to parse the auth token provided")?,
+            );
+            client = client.with_headers(headers);
         }
+
+        let remote_client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(DEFAULT_REQUEST_TIMEOUT)
+                .build()
+                .context("Failed to initialize reqwest client for remote call")?,
+        );
+
+        Ok(Self {
+            grpc_client: client,
+            remote_client,
+            remote_checkpoint_url,
+            package_id,
+        })
     }
 }
 
@@ -239,18 +262,17 @@ impl ChainHandler for SuiProvider {
     type RawLog = SuiLog;
 
     async fn fetch_chain_id(&self) -> Result<String> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let provider = self.grpc_client.clone();
         let service_info = Retry::spawn(
             ExponentialBackoff::from_millis(500)
-                .max_delay(Duration::from_secs(10))
+                .max_delay(Duration::from_secs(5))
+                .take(3)
                 .map(jitter),
             move || {
                 let mut provider = provider.clone();
                 async move {
                     timeout(
-                        DEFAULT_REQUEST_TIMEOUT,
+                        DEFAULT_GRPC_REQUEST_TIMEOUT,
                         provider
                             .ledger_client()
                             .get_service_info(GetServiceInfoRequest::default()),
@@ -260,8 +282,8 @@ impl ChainHandler for SuiProvider {
             },
         )
         .await
-        .context("Request timed out for fetching chain ID")?
-        .context("Request failed for fetching chain ID")?
+        .context("Request timed out for fetching chain ID from the RPC")?
+        .context("Request failed for fetching chain ID from the RPC")?
         .into_inner();
 
         service_info
@@ -270,9 +292,7 @@ impl ChainHandler for SuiProvider {
     }
 
     async fn fetch_extra_decimals(&self) -> Result<i64> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let provider = self.grpc_client.clone();
         let move_call = MoveCall::const_default()
             .with_package(self.package_id.clone())
             .with_module(MODULE_NAME.to_string())
@@ -284,7 +304,8 @@ impl ChainHandler for SuiProvider {
 
         let response = Retry::spawn(
             ExponentialBackoff::from_millis(500)
-                .max_delay(Duration::from_secs(10))
+                .max_delay(Duration::from_secs(5))
+                .take(3)
                 .map(jitter),
             move || {
                 let mut provider = provider.clone();
@@ -295,7 +316,7 @@ impl ChainHandler for SuiProvider {
                 );
                 async move {
                     timeout(
-                        DEFAULT_REQUEST_TIMEOUT,
+                        DEFAULT_GRPC_REQUEST_TIMEOUT,
                         provider.execution_client().simulate_transaction(request),
                     )
                     .await
@@ -303,8 +324,8 @@ impl ChainHandler for SuiProvider {
             },
         )
         .await
-        .context("Request timed out for fetching EXTRA_DECIMALS")?
-        .context("Request failed for fetching EXTRA_DECIMALS")?
+        .context("Request timed out for fetching EXTRA_DECIMALS from the RPC")?
+        .context("Request failed for fetching EXTRA_DECIMALS from the RPC")?
         .into_inner();
 
         if response.command_outputs.is_empty() {
@@ -313,31 +334,31 @@ impl ChainHandler for SuiProvider {
             ));
         }
 
-        let return_value = &response.command_outputs[0].return_values;
+        let return_values = &response.command_outputs[0].return_values;
 
-        if return_value.is_empty() {
+        if return_values.is_empty() {
             return Err(anyhow!(
                 "EXTRA_DECIMALS value not found in the RPC response"
             ));
         }
 
-        Ok(bcs::from_bytes::<u8>(return_value[0].value().value())
-            .context("Failed to parse EXTRA_DECIMALS value")? as i64)
+        Ok(bcs::from_bytes::<u8>(return_values[0].value().value())
+            .context("Failed to parse EXTRA_DECIMALS value from the RPC response")?
+            as i64)
     }
 
     async fn fetch_latest_block(&self) -> Result<u64> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let provider = self.grpc_client.clone();
         let current_checkpoint = Retry::spawn(
             ExponentialBackoff::from_millis(500)
-                .max_delay(Duration::from_secs(10))
+                .max_delay(Duration::from_secs(5))
+                .take(3)
                 .map(jitter),
             move || {
                 let mut provider = provider.clone();
                 async move {
                     timeout(
-                        DEFAULT_REQUEST_TIMEOUT,
+                        DEFAULT_GRPC_REQUEST_TIMEOUT,
                         provider
                             .ledger_client()
                             .get_checkpoint(GetCheckpointRequest::latest()),
@@ -347,8 +368,8 @@ impl ChainHandler for SuiProvider {
             },
         )
         .await
-        .context("Request timed out for fetching latest checkpoint")?
-        .context("Request failed for fetching latest checkpoint")?;
+        .context("Request timed out for fetching latest checkpoint from the RPC")?
+        .context("Request failed for fetching latest checkpoint from the RPC")?;
 
         Ok(current_checkpoint
             .into_inner()
@@ -361,13 +382,12 @@ impl ChainHandler for SuiProvider {
         start_block: u64,
         end_block: u64,
     ) -> Result<BTreeMap<u64, Vec<Self::RawLog>>> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        let provider = self.grpc_client.clone();
         let semaphore = Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY));
         let mut set: JoinSet<Result<(u64, Vec<SuiLog>)>> = JoinSet::new();
 
         for seq_num in start_block..=end_block {
+            let remote_client = self.remote_client.clone();
             let remote_checkpoint_url = self.remote_checkpoint_url.clone();
             let client = provider.clone();
             let package_id = self.package_id.clone();
@@ -378,58 +398,91 @@ impl ChainHandler for SuiProvider {
 
                 match Retry::spawn(
                     ExponentialBackoff::from_millis(500)
-                        .max_delay(Duration::from_secs(10))
+                        .max_delay(Duration::from_secs(5))
                         .take(3)
                         .map(jitter),
                         move || {
                             let mut client = client.clone();
-                    async move {
-                        timeout(DEFAULT_REQUEST_TIMEOUT, client
-                            .ledger_client()
-                            .get_checkpoint(GetCheckpointRequest::by_sequence_number(seq_num)
-                                .with_read_mask(FieldMask {
-                                    paths: vec!["transactions".into()]
-                                })
-                            )
-                        ).await
+                            async move {
+                                timeout(DEFAULT_GRPC_REQUEST_TIMEOUT, client
+                                    .ledger_client()
+                                    .get_checkpoint(GetCheckpointRequest::by_sequence_number(seq_num)
+                                        .with_read_mask(FieldMask {
+                                            paths: vec!["transactions".into()]
+                                        })
+                                    )
+                                ).await
+                            }
+                        },
+                    )
+                    .await {
+                        Ok(Ok(checkpoint)) => {
+                            return Ok((seq_num, checkpoint_to_sui_logs(&package_id, checkpoint
+                                .into_inner()
+                                .checkpoint()
+                                .clone())))
+                        }
+                        Ok(Err(err)) => {
+                            warn!(
+                                seq_num,
+                                error = ?err,
+                                "gRPC checkpoint fetch failed, falling back to remote checkpoint storage"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                seq_num,
+                                error = ?err,
+                                "gRPC checkpoint fetch timed out, falling back to remote checkpoint storage"
+                            );
+                        }
                     }
-                },
-                )
-                .await
-                {
-                    Ok(Ok(checkpoint)) => Ok((seq_num, checkpoint_to_sui_logs(&package_id, checkpoint
-                        .into_inner()
-                        .checkpoint()
-                        .clone()))),
-                    _ => {
-                        let checkpoint = Retry::spawn(
-                            ExponentialBackoff::from_millis(500)
-                                .max_delay(Duration::from_secs(10))
-                                .map(jitter),
-                            || async {
-                                let remote_client = reqwest::Client::builder()
-                                    .timeout(DEFAULT_REQUEST_TIMEOUT)
-                                    .build().context("Failed to initialize reqwest client for remote call")?;
-                                let checkpoint_url =
-                                    format!("{}/{}.chk", remote_checkpoint_url.trim_end_matches('/'), seq_num);
 
-                                let response = remote_client.get(&checkpoint_url).send().await.context(format!("Failed to send checkpoint data request for sequence {} using remote url", seq_num))?;
-                                if response.status().is_success() {
-                                    Ok(response.bytes().await.context(format!("Failed to get response bytes for checkpoint data at sequence {} from remote call", seq_num))?)
-                                } else {
-                                    Err(anyhow!(
-                                        "Remote checkpoint call for sequence {} failed with status: {}",
-                                        seq_num, response.status()
-                                    ))
-                                }
-                            },
-                        )
-                        .await
-                        .context(format!("Failed to get checkpoint data for sequence {} using remote url", seq_num))?;
+                let checkpoint_url = format!("{}/{}.chk", remote_checkpoint_url.trim_end_matches('/'), seq_num);
+                let checkpoint = Retry::spawn(
+                    ExponentialBackoff::from_millis(1000)
+                        .max_delay(Duration::from_secs(10))
+                        .take(3)
+                        .map(jitter),
+                    || async {
+                        let response = remote_client.get(&checkpoint_url)
+                            .send()
+                            .await
+                            .context(format!(
+                                "Failed to send checkpoint data request for sequence {} using remote url", 
+                                seq_num
+                            ))?;
 
-                        Ok((seq_num, checkpoint_data_to_sui_logs(&package_id, checkpoint_data_from_bytes(&checkpoint).context(format!("Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", seq_num))?)))
-                    }
-                }
+                        if response.status().is_success() {
+                            Ok(response.bytes()
+                                .await
+                                .context(format!(
+                                    "Failed to get response bytes for checkpoint data at sequence {} from remote call", 
+                                    seq_num
+                                ))?)
+                        } else {
+                            Err(anyhow!(
+                                "Remote checkpoint call for sequence {} failed with status: {}",
+                                seq_num, response.status()
+                            ))
+                        }
+                    },
+                    )
+                    .await
+                    .context(format!(
+                        "Failed to get checkpoint data for sequence {} using remote url", 
+                        seq_num
+                    ))?;
+
+                debug!(seq_num, bytes = checkpoint.len(), "Fetched checkpoint from remote storage");
+                Ok((seq_num, checkpoint_data_to_sui_logs(
+                    &package_id,
+                    checkpoint_data_from_bytes(&checkpoint)
+                        .context(format!(
+                            "Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage", 
+                            seq_num
+                        ))?)
+                ))
             });
         }
 
