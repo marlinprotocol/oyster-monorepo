@@ -102,3 +102,13 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
     }
 }
 
+#[cfg(test)]
+mod test_utils {
+    mod test_db;
+    mod test_helpers;
+    mod test_provider;
+
+    pub use test_db::TestDb;
+    pub use test_helpers::*;
+    pub use test_provider::MockProvider;
+}
