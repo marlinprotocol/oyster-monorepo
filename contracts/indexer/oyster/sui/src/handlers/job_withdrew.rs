@@ -231,7 +231,7 @@ mod tests {
                     BigDecimal::from(100),
                     BigDecimal::from(10000),
                     creation_now,
-                    original_now,
+                    creation_now,
                     false,
                     BigDecimal::from(creation_timestamp + (10000 / 100)),
                 )
@@ -293,7 +293,7 @@ mod tests {
                     BigDecimal::from(100),
                     BigDecimal::from(10000),
                     creation_now,
-                    original_now,
+                    creation_now,
                     false,
                     BigDecimal::from(creation_timestamp + (10000 / 100)),
                 )

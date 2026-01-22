@@ -192,10 +192,10 @@ mod tests {
                     "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
                     BigDecimal::from(100),
                     BigDecimal::from(10000),
-                    original_now,
-                    original_now,
+                    creation_now,
+                    creation_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
                 )
             ])
         );
@@ -229,9 +229,9 @@ mod tests {
                     BigDecimal::from(100),
                     BigDecimal::from(9500),
                     now,
-                    creation_now,
+                    original_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
                 ),
                 (
                     "0x00000000000000000000000000000002".to_owned(),
@@ -240,10 +240,10 @@ mod tests {
                     "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
                     BigDecimal::from(100),
                     BigDecimal::from(10000),
-                    original_now,
-                    original_now,
+                    creation_now,
+                    creation_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
                 )
             ])
         );
