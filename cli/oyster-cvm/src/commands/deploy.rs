@@ -80,6 +80,14 @@ pub struct DeployArgs {
     #[arg(long)]
     instance_type: Option<String>,
 
+    /// Sample value (in MB): 1024. Please ensure that the provided values are within the available system resources, keeping in mind that some resources are reserved for the host machine’s operation.
+    #[arg(long)]
+    enclave_memory: Option<u32>,
+
+    /// Sample value : 4. Please ensure that the provided values are within the available system resources, keeping in mind that some resources are reserved for the host machine’s operation.
+    #[arg(long)]
+    enclave_cpu: Option<u32>,
+
     /// Optional bandwidth in KBps (default: 10)
     #[arg(long, default_value = "10")]
     bandwidth: u32,
@@ -249,6 +257,13 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             },
             _ => Err(anyhow!("Image URL is required")),
         })?;
+
+    // Override memory and cpu if provided
+    let selected_instance = InstanceRate {
+        memory: args.enclave_memory.unwrap_or(selected_instance.memory),
+        cpu: args.enclave_cpu.unwrap_or(selected_instance.cpu),
+        ..selected_instance
+    };
 
     // Create metadata
     let metadata = create_metadata(
