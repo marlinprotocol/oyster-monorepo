@@ -1,0 +1,14 @@
+[package]
+name = "indexer-framework"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+alloy = { version = "0.3.3", features = ["rpc-types"] }
+anyhow = "1.0.87"
+bigdecimal = "0.4.5"
+diesel = { version = "2.2.4", features = ["numeric", "postgres"] }
+diesel_migrations = { version = "2.2.0", features = ["postgres"] }
+dotenvy = "0.15.7"
+tracing = "0.1.40"
