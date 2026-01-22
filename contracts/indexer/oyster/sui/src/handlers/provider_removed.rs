@@ -60,3 +60,219 @@ pub fn handle_provider_removed(conn: &mut PgConnection, parsed: &ParsedSuiLog) -
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::handlers::handle_log;
+    use crate::handlers::test_utils::*;
+    use anyhow::Result;
+    use diesel::ExpressionMethods;
+    use diesel::QueryDsl;
+    use diesel::RunQueryDsl;
+    use indexer_framework::schema::providers;
+    use sui_sdk_types::Address;
+
+    // ------------------------------------------------------------------------
+    // Test: Removing an existing active provider
+    // Expected: Provider's is_active should be set to false
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_remove_existing_provider() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        diesel::insert_into(providers::table)
+            .values((
+                providers::id
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                providers::cp.eq("https://test.provider.com/api1"),
+                providers::block.eq(1000i64),
+                providers::tx_hash.eq("DigestABC123xyz789test1".to_owned()),
+                providers::is_active.eq(true),
+            ))
+            .execute(conn)?;
+        diesel::insert_into(providers::table)
+            .values((
+                providers::id
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                providers::cp.eq("https://test.provider.com/api2"),
+                providers::block.eq(1001i64),
+                providers::tx_hash.eq("DigestABC123xyz789test2".to_owned()),
+                providers::is_active.eq(true),
+            ))
+            .execute(conn)?;
+
+        assert_eq!(providers::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            providers::table
+                .select(providers::all_columns)
+                .order_by(providers::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "https://test.provider.com/api1".to_owned(),
+                    1000 as i64,
+                    "DigestABC123xyz789test1".to_owned(),
+                    true,
+                ),
+                (
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    "https://test.provider.com/api2".to_owned(),
+                    1001 as i64,
+                    "DigestABC123xyz789test2".to_owned(),
+                    true,
+                )
+            ])
+        );
+
+        // Now remove the provider
+        let bcs_data = encode_provider_removed_event(
+            &"0x0101010101010101010101010101010101010101010101010101010101010101"
+                .parse::<Address>()?,
+        );
+        let log = TestSuiLog::new(
+            "ProviderRemoved",
+            "DigestABC123xyz789test",
+            1000 + 1,
+            bcs_data,
+        )
+        .to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        handle_log(conn, log, &provider).unwrap();
+
+        assert_eq!(providers::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            providers::table
+                .select(providers::all_columns)
+                .order_by(providers::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "https://test.provider.com/api1".to_owned(),
+                    1000 as i64,
+                    "DigestABC123xyz789test1".to_owned(),
+                    false,
+                ),
+                (
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    "https://test.provider.com/api2".to_owned(),
+                    1001 as i64,
+                    "DigestABC123xyz789test2".to_owned(),
+                    true,
+                )
+            ])
+        );
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Test: Removing a provider that does not exist
+    // Expected: Should fail with an error
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_remove_nonexistent_provider() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        // Verify initial state
+        assert_eq!(providers::table.count().get_result(conn), Ok(0));
+
+        let bcs_data = encode_provider_removed_event(
+            &"0x0101010101010101010101010101010101010101010101010101010101010101"
+                .parse::<Address>()?,
+        );
+        let log = TestSuiLog::new("ProviderRemoved", "DigestABC123xyz789test", 1000, bcs_data)
+            .to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        let res = handle_log(conn, log, &provider);
+
+        // checks
+        assert_eq!(providers::table.count().get_result(conn), Ok(0));
+        assert_eq!(
+            format!("{:?}", res.unwrap_err()),
+            "count 0 should have been 1"
+        );
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Test: Removing a provider that is already inactive
+    // Expected: Should fail with an error (count will be 0)
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_remove_inactive_provider() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        // Insert an inactive provider
+        diesel::insert_into(providers::table)
+            .values((
+                providers::id
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                providers::cp.eq("https://test.provider.com/api1"),
+                providers::block.eq(1000i64),
+                providers::tx_hash.eq("DigestABC123xyz789test1".to_owned()),
+                providers::is_active.eq(false),
+            ))
+            .execute(conn)?;
+
+        // Verify initial state
+        assert_eq!(providers::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            providers::table
+                .select(providers::all_columns)
+                .order_by(providers::id)
+                .load(conn),
+            Ok(vec![(
+                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                "https://test.provider.com/api1".to_owned(),
+                1000 as i64,
+                "DigestABC123xyz789test1".to_owned(),
+                false,
+            )])
+        );
+
+        // Try to remove the already inactive provider
+        let bcs_data = encode_provider_removed_event(
+            &"0x0101010101010101010101010101010101010101010101010101010101010101"
+                .parse::<Address>()?,
+        );
+        let log = TestSuiLog::new("ProviderRemoved", "DigestABC123xyz789test", 1000, bcs_data)
+            .to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        let result = handle_log(conn, log, &provider);
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{:?}", result.unwrap_err()),
+            "count 0 should have been 1"
+        );
+
+        // Verify count unchanged
+        assert_eq!(providers::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            providers::table
+                .select(providers::all_columns)
+                .order_by(providers::id)
+                .load(conn),
+            Ok(vec![(
+                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                "https://test.provider.com/api1".to_owned(),
+                1000 as i64,
+                "DigestABC123xyz789test1".to_owned(),
+                false,
+            )])
+        );
+
+        Ok(())
+    }
+}
