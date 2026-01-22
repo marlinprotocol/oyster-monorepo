@@ -96,3 +96,503 @@ pub fn handle_job_settled(conn: &mut PgConnection, parsed: &ParsedSuiLog) -> Res
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::handlers::handle_log;
+    use crate::handlers::test_utils::*;
+    use anyhow::Context;
+    use anyhow::Result;
+    use bigdecimal::BigDecimal;
+    use diesel::ExpressionMethods;
+    use diesel::QueryDsl;
+    use diesel::RunQueryDsl;
+    use indexer_framework::schema::jobs;
+    use indexer_framework::schema::settlement_history;
+
+    // ------------------------------------------------------------------------
+    // Test: Settling an existing active job
+    // Expected: Balance should decrease and last_settled should update
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_settle_existing_job() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let original_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let original_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000001"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-1"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&original_now),
+                jobs::created.eq(&original_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+        let creation_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let creation_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(creation_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000002"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-2"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&creation_now),
+                jobs::created.eq(&creation_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    original_now,
+                    original_now,
+                    false,
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    original_now,
+                    original_now,
+                    false,
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        let timestamp = creation_timestamp + 5;
+        // we do this after the timestamp to truncate beyond seconds
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
+        let bcs_data = encode_job_settled_event(1, 500, timestamp);
+        let log =
+            TestSuiLog::new("JobSettled", "DigestABC123xyz789test", 1000, bcs_data).to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        handle_log(conn, log, &provider)?;
+
+        // Verify counts after
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(9500),
+                    now,
+                    creation_now,
+                    false,
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    original_now,
+                    original_now,
+                    false,
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(1));
+
+        assert_eq!(
+            settlement_history::table
+                .select(settlement_history::all_columns)
+                .order_by(settlement_history::id)
+                .load(conn),
+            Ok(vec![(
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(500),
+                BigDecimal::from(timestamp),
+                1000 as i64,
+            )])
+        );
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Test: Settling with zero amount
+    // Expected: Balance should remain same, but last_settled should update
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_settle_existing_job_with_zero_amount() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let original_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let original_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000001"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-1"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&original_now),
+                jobs::created.eq(&original_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+        let creation_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let creation_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(creation_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000002"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-2"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&creation_now),
+                jobs::created.eq(&creation_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    original_now,
+                    original_now,
+                    false,
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    creation_now,
+                    creation_now,
+                    false,
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        let timestamp = original_timestamp + 5;
+        // we do this after the timestamp to truncate beyond seconds
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
+        let bcs_data = encode_job_settled_event(1, 0, timestamp);
+        let log =
+            TestSuiLog::new("JobSettled", "DigestABC123xyz789test", 1000, bcs_data).to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        handle_log(conn, log, &provider)?;
+
+        // Verify counts after
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    now,
+                    original_now,
+                    false,
+                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    creation_now,
+                    creation_now,
+                    false,
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(1));
+
+        assert_eq!(
+            settlement_history::table
+                .select(settlement_history::all_columns)
+                .order_by(settlement_history::id)
+                .load(conn),
+            Ok(vec![(
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                BigDecimal::from(timestamp),
+                1000 as i64,
+            )])
+        );
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Test: Settling a nonexistent job
+    // Expected: Should fail with an error
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_settle_nonexistent_job() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let original_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        assert_eq!(jobs::table.count().get_result(conn), Ok(0));
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        let timestamp = original_timestamp + 5;
+        // we do this after the timestamp to truncate beyond seconds
+        let bcs_data = encode_job_settled_event(1, 500, timestamp);
+        let log =
+            TestSuiLog::new("JobSettled", "DigestABC123xyz789test", 1000, bcs_data).to_alloy_log();
+
+        // using timestamp 0 because we don't care about it
+        let provider = MockProvider::new(0);
+        let res = handle_log(conn, log, &provider);
+
+        assert_eq!(format!("{:?}", res.unwrap_err()), "could not find job");
+        assert_eq!(jobs::table.count().get_result(conn), Ok(0));
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Test: Settling a closed job
+    // Expected: Should fail with an error
+    // ------------------------------------------------------------------------
+    #[test]
+    fn test_settle_closed_job() -> Result<()> {
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let original_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let original_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000001"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-1"),
+                jobs::rate.eq(BigDecimal::from(0)),
+                jobs::balance.eq(BigDecimal::from(0)),
+                jobs::last_settled.eq(&original_now),
+                jobs::created.eq(&original_now),
+                jobs::is_closed.eq(true),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp)),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+        let creation_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let creation_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(creation_timestamp);
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000002"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata-2"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&creation_now),
+                jobs::created.eq(&creation_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(0),
+                    BigDecimal::from(0),
+                    original_now,
+                    original_now,
+                    true,
+                    BigDecimal::from(original_timestamp),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    creation_now,
+                    creation_now,
+                    false,
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        let timestamp = original_timestamp + 5;
+        // we do this after the timestamp to truncate beyond seconds
+        let bcs_data = encode_job_settled_event(1, 500, timestamp);
+        let log =
+            TestSuiLog::new("JobSettled", "DigestABC123xyz789test", 1000, bcs_data).to_alloy_log();
+
+        let provider = MockProvider::new(0);
+        let result = handle_log(conn, log, &provider);
+        assert_eq!(format!("{:?}", result.unwrap_err()), "could not find job");
+
+        assert_eq!(jobs::table.count().get_result(conn), Ok(2));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![
+                (
+                    "0x00000000000000000000000000000001".to_owned(),
+                    "test-job-metadata-1".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(0),
+                    BigDecimal::from(0),
+                    original_now,
+                    original_now,
+                    true,
+                    BigDecimal::from(original_timestamp),
+                ),
+                (
+                    "0x00000000000000000000000000000002".to_owned(),
+                    "test-job-metadata-2".to_owned(),
+                    "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                    "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                    BigDecimal::from(100),
+                    BigDecimal::from(10000),
+                    creation_now,
+                    creation_now,
+                    false,
+                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                )
+            ])
+        );
+
+        assert_eq!(settlement_history::table.count().get_result(conn), Ok(0));
+
+        Ok(())
+    }
+}
