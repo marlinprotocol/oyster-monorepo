@@ -67,14 +67,14 @@ fn run() -> Result<()> {
         .expect("failed to apply migrations");
     info!("Applied pending migrations");
 
-    let mut provider = SuiProvider {
-        remote_checkpoint_url: args.remote_checkpoint_url,
-        grpc_url: args.grpc_url,
-        rpc_username: args.grpc_username,
-        rpc_password: args.grpc_password,
-        rpc_token: args.grpc_token,
-        package_id: args.package_id,
-    };
+    let mut provider = SuiProvider::new(
+        args.remote_checkpoint_url,
+        args.grpc_url,
+        args.grpc_username,
+        args.grpc_password,
+        args.grpc_token,
+        args.package_id,
+    )?;
 
     let is_start_set = start_from(&mut conn, args.start_block)?;
     debug!("is_start_set: {}", is_start_set);

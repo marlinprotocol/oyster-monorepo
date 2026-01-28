@@ -4,27 +4,100 @@ use anyhow::{anyhow, Context, Result};
 use indexer_framework::LogsProvider;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sui_rpc::client::{Client, HeadersInterceptor, ResponseExt};
 use sui_rpc::field::FieldMask;
 use sui_rpc::proto::sui::rpc::v2::{Checkpoint, GetCheckpointRequest};
 use sui_sdk_types::CheckpointData;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tracing::info;
 
-use crate::constants::{DEFAULT_FETCH_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT, GRPC_AUTH_TOKEN};
+use crate::constants::{
+    CHECKPOINT_BCS_ENCODING, DEFAULT_FETCH_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT, GRPC_AUTH_TOKEN,
+};
+use futures::stream::{self, StreamExt};
 
-#[derive(Clone)]
 pub struct SuiProvider {
     pub remote_checkpoint_url: String,
-    pub grpc_url: String,
-    pub rpc_username: Option<String>,
-    pub rpc_password: Option<String>,
-    pub rpc_token: Option<String>,
     pub package_id: String,
+    /// Shared tokio runtime for async operations
+    /// Creating a runtime is expensive, so we reuse one instance
+    runtime: tokio::runtime::Runtime,
+    /// Shared gRPC client for connection reuse across all operations
+    /// Cloning this shares the underlying connection pool
+    grpc_client: Client,
+    /// Shared HTTP client for remote checkpoint fallback
+    /// Enables connection pooling and TLS session reuse
+    http_client: reqwest::Client,
+}
+
+impl SuiProvider {
+    pub fn new(
+        remote_checkpoint_url: String,
+        grpc_url: String,
+        rpc_username: Option<String>,
+        rpc_password: Option<String>,
+        rpc_token: Option<String>,
+        package_id: String,
+    ) -> Result<Self> {
+        // Create a multi-threaded runtime for better parallelism
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .context("Failed to create tokio runtime")?;
+
+        // Create clients inside the runtime context
+        // Client::new() requires a Tokio runtime to be available
+        let (grpc_client, http_client) = runtime.block_on(async {
+            // Create the shared gRPC client with appropriate authentication
+            // This connection will be reused across all operations
+            let grpc_client = if let Some(ref username) = rpc_username {
+                let mut headers = HeadersInterceptor::default();
+
+                headers.basic_auth(username, rpc_password.clone());
+
+                Client::new(&grpc_url)
+                    .context("Failed to create gRPC client")?
+                    .with_headers(headers)
+            } else if let Some(ref token) = rpc_token {
+                let mut headers = HeadersInterceptor::default();
+
+                headers.headers_mut().insert(
+                    GRPC_AUTH_TOKEN,
+                    token.parse().context("Invalid auth token")?,
+                );
+
+                Client::new(&grpc_url)
+                    .context("Failed to create gRPC client")?
+                    .with_headers(headers)
+            } else {
+                Client::new(&grpc_url).context("Failed to create gRPC client")?
+            };
+
+            // Create the shared HTTP client for remote checkpoint fallback
+            // This enables connection pooling and TLS session reuse
+            let http_client = reqwest::Client::builder()
+                .timeout(DEFAULT_REQUEST_TIMEOUT)
+                .pool_max_idle_per_host(DEFAULT_FETCH_CONCURRENCY)
+                .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive longer
+                .tcp_keepalive(Duration::from_secs(60))
+                .build()
+                .context("Failed to create HTTP client")?;
+
+            Ok::<_, anyhow::Error>((grpc_client, http_client))
+        })?;
+
+        Ok(Self {
+            remote_checkpoint_url,
+            package_id,
+            runtime,
+            grpc_client,
+            http_client,
+        })
+    }
 }
 
 /// Intermediate representation of a Sui log/event
@@ -36,30 +109,16 @@ pub struct SuiLog {
 }
 
 impl SuiProvider {
-    /// Creates a gRPC client with appropriate authentication headers
-    fn get_client(&self) -> Result<Client> {
-        if let Some(username) = &self.rpc_username {
-            let mut headers = HeadersInterceptor::default();
-            headers.basic_auth(username, self.rpc_password.clone());
-
-            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
-        } else if let Some(token) = &self.rpc_token {
-            let mut headers = HeadersInterceptor::default();
-            headers
-                .headers_mut()
-                .insert(GRPC_AUTH_TOKEN, token.parse()?);
-
-            Ok(Client::new(&self.grpc_url)?.with_headers(headers))
-        } else {
-            Ok(Client::new(&self.grpc_url)?)
-        }
+    /// Returns a clone of the shared gRPC client
+    /// Cloning shares the underlying connection pool
+    fn get_client(&self) -> Client {
+        self.grpc_client.clone()
     }
 
     /// Fetches the latest checkpoint sequence number
     async fn fetch_latest_checkpoint_async(&self) -> Result<u64> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        // Clone the shared client - this reuses the underlying connection
+        let provider = self.get_client();
 
         let current_checkpoint = Retry::spawn(
             ExponentialBackoff::from_millis(500)
@@ -90,9 +149,8 @@ impl SuiProvider {
 
     /// Fetches the timestamp for a specific checkpoint
     async fn fetch_checkpoint_timestamp_async(&self, checkpoint_number: u64) -> Result<u64> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
+        // Clone the shared client - this reuses the underlying connection
+        let provider = self.get_client();
 
         let checkpoint = Retry::spawn(
             ExponentialBackoff::from_millis(500)
@@ -103,11 +161,9 @@ impl SuiProvider {
                 async move {
                     timeout(
                         DEFAULT_REQUEST_TIMEOUT,
-                        provider
-                            .ledger_client()
-                            .get_checkpoint(GetCheckpointRequest::by_sequence_number(
-                                checkpoint_number,
-                            )),
+                        provider.ledger_client().get_checkpoint(
+                            GetCheckpointRequest::by_sequence_number(checkpoint_number),
+                        ),
                     )
                     .await
                 }
@@ -117,133 +173,231 @@ impl SuiProvider {
         .context("Request timed out for fetching checkpoint timestamp")?
         .context("Request failed for fetching checkpoint timestamp")?;
 
-        // Get timestamp from response headers - Sui timestamps are in milliseconds, convert to seconds
-        let timestamp_ms = checkpoint.timestamp_ms().unwrap_or(0);
+        // Get timestamp from response - Sui timestamps are in milliseconds, convert to seconds
+        let timestamp_ms = checkpoint
+            .timestamp_ms()
+            .ok_or_else(|| anyhow!("Checkpoint {} has no timestamp", checkpoint_number))?;
+
+        if timestamp_ms == 0 {
+            return Err(anyhow!(
+                "Checkpoint {} has invalid timestamp (0)",
+                checkpoint_number
+            ));
+        }
+
         Ok(timestamp_ms / 1000)
     }
+}
 
-    /// Fetches logs/events for a range of checkpoints
-    async fn fetch_logs_async(&self, start_block: u64, end_block: u64) -> Result<Vec<Log>> {
-        let provider = self
-            .get_client()
-            .context("Failed to initialize gRPC client from the provided url and credentials")?;
-        let semaphore = Arc::new(Semaphore::new(DEFAULT_FETCH_CONCURRENCY));
-        let mut set: JoinSet<Result<(u64, Vec<SuiLog>)>> = JoinSet::new();
-
-        for seq_num in start_block..=end_block {
-            let remote_checkpoint_url = self.remote_checkpoint_url.clone();
-            let client = provider.clone();
-            let package_id = self.package_id.clone();
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-
-            set.spawn(async move {
-                let _permit = permit;
-
-                match Retry::spawn(
-                    ExponentialBackoff::from_millis(500)
-                        .max_delay(Duration::from_secs(10))
-                        .take(3)
-                        .map(jitter),
-                    move || {
-                        let mut client = client.clone();
-                        async move {
-                            timeout(
-                                DEFAULT_REQUEST_TIMEOUT,
-                                client.ledger_client().get_checkpoint(
-                                    GetCheckpointRequest::by_sequence_number(seq_num)
-                                        .with_read_mask(FieldMask {
-                                            paths: vec!["transactions".into()],
-                                        }),
-                                ),
-                            )
-                            .await
-                        }
-                    },
+/// Fetches a single checkpoint, trying gRPC first then falling back to HTTP
+async fn fetch_single_checkpoint(
+    seq_num: u64,
+    grpc_client: Client,
+    http_client: Arc<reqwest::Client>,
+    remote_checkpoint_url: &str,
+    package_id: &str,
+) -> Result<(u64, Vec<SuiLog>)> {
+    // Try gRPC first
+    let grpc_result = Retry::spawn(
+        ExponentialBackoff::from_millis(100)
+            .max_delay(Duration::from_secs(2))
+            .take(2)
+            .map(jitter),
+        || {
+            let mut client = grpc_client.clone();
+            async move {
+                timeout(
+                    DEFAULT_REQUEST_TIMEOUT,
+                    client.ledger_client().get_checkpoint(
+                        GetCheckpointRequest::by_sequence_number(seq_num).with_read_mask(
+                            FieldMask {
+                                paths: vec!["transactions".into()],
+                            },
+                        ),
+                    ),
                 )
                 .await
-                {
-                    Ok(Ok(checkpoint)) => Ok((
-                        seq_num,
-                        checkpoint_to_sui_logs(
-                            &package_id,
-                            checkpoint.into_inner().checkpoint().clone(),
-                        ),
-                    )),
-                    _ => {
-                        // Fallback to remote checkpoint storage
-                        let checkpoint = Retry::spawn(
-                            ExponentialBackoff::from_millis(500)
-                                .max_delay(Duration::from_secs(10))
-                                .map(jitter),
-                            || async {
-                                let remote_client = reqwest::Client::builder()
-                                    .timeout(DEFAULT_REQUEST_TIMEOUT)
-                                    .build()
-                                    .context(
-                                        "Failed to initialize reqwest client for remote call",
-                                    )?;
-                                let checkpoint_url = format!(
-                                    "{}/{}.chk",
-                                    remote_checkpoint_url.trim_end_matches('/'),
-                                    seq_num
-                                );
+            }
+        },
+    )
+    .await;
 
-                                let response = remote_client.get(&checkpoint_url).send().await.context(format!(
-                                    "Failed to send checkpoint data request for sequence {} using remote url",
-                                    seq_num
-                                ))?;
-                                if response.status().is_success() {
-                                    Ok(response.bytes().await.context(format!(
-                                        "Failed to get response bytes for checkpoint data at sequence {} from remote call",
-                                        seq_num
-                                    ))?)
-                                } else {
-                                    Err(anyhow!(
-                                        "Remote checkpoint call for sequence {} failed with status: {}",
-                                        seq_num,
-                                        response.status()
-                                    ))
-                                }
-                            },
-                        )
-                        .await
-                        .context(format!(
-                            "Failed to get checkpoint data for sequence {} using remote url",
-                            seq_num
-                        ))?;
+    match grpc_result {
+        Ok(Ok(checkpoint)) => {
+            return Ok((
+                seq_num,
+                checkpoint_to_sui_logs(package_id, checkpoint.into_inner().checkpoint().clone()),
+            ));
+        }
+        _ => {
+            // Fallback to remote checkpoint storage via HTTP
+        }
+    }
 
-                        Ok((
-                            seq_num,
-                            checkpoint_data_to_sui_logs(
-                                &package_id,
-                                checkpoint_data_from_bytes(&checkpoint).context(format!(
-                                    "Failed to deserialize checkpoint data bytes for sequence {} obtained from remote storage",
-                                    seq_num
-                                ))?,
-                            ),
-                        ))
-                    }
+    // HTTP fallback
+    let checkpoint_bytes = Retry::spawn(
+        ExponentialBackoff::from_millis(100)
+            .max_delay(Duration::from_secs(2))
+            .take(3)
+            .map(jitter),
+        || {
+            let http = http_client.clone();
+            let url = format!(
+                "{}/{}.chk",
+                remote_checkpoint_url.trim_end_matches('/'),
+                seq_num
+            );
+            async move {
+                let response = http
+                    .get(&url)
+                    .send()
+                    .await
+                    .context(format!("HTTP request failed for checkpoint {}", seq_num))?;
+                if response.status().is_success() {
+                    Ok(response.bytes().await.context(format!(
+                        "Failed to read response body for checkpoint {}",
+                        seq_num
+                    ))?)
+                } else {
+                    Err(anyhow!(
+                        "HTTP {} for checkpoint {}",
+                        response.status(),
+                        seq_num
+                    ))
                 }
-            });
-        }
+            }
+        },
+    )
+    .await
+    .context(format!("All retries failed for checkpoint {}", seq_num))?;
 
+    Ok((
+        seq_num,
+        checkpoint_data_to_sui_logs(
+            package_id,
+            checkpoint_data_from_bytes(&checkpoint_bytes)
+                .context(format!("Failed to deserialize checkpoint {}", seq_num))?,
+        ),
+    ))
+}
+
+impl SuiProvider {
+    /// Fetches logs/events for a range of checkpoints
+    ///
+    /// This fetches checkpoints in parallel (limited by semaphore) for performance,
+    /// but returns them sorted by checkpoint number so the caller can process
+    /// them sequentially in chronological order.
+    async fn fetch_logs_async(&self, start_block: u64, end_block: u64) -> Result<Vec<Log>> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let fetch_start = Instant::now();
+        let checkpoint_count = end_block - start_block + 1;
+
+        // Use the shared clients - cloning shares the underlying connection pool
+        let grpc_client = self.get_client();
+        let http_client = Arc::new(self.http_client.clone());
+
+        // Progress tracking
+        let completed = Arc::new(AtomicU64::new(0));
+
+        info!(
+            checkpoint_count,
+            concurrency = DEFAULT_FETCH_CONCURRENCY,
+            "starting checkpoint fetch"
+        );
+
+        // Use buffer_unordered instead of JoinSet to avoid spawning all tasks upfront
+        // This processes checkpoints as a stream with bounded concurrency
+        let remote_checkpoint_url = self.remote_checkpoint_url.clone();
+        let package_id = self.package_id.clone();
+
+        let results: Vec<Result<(u64, Vec<SuiLog>)>> = stream::iter(start_block..=end_block)
+            .map(|seq_num| {
+                let client = grpc_client.clone();
+                let http = http_client.clone();
+                let url_base = remote_checkpoint_url.clone();
+                let pkg_id = package_id.clone();
+                let completed = completed.clone();
+                let checkpoint_count = checkpoint_count;
+                let fetch_start = fetch_start;
+
+                async move {
+                    let result =
+                        fetch_single_checkpoint(seq_num, client, http, &url_base, &pkg_id).await;
+
+                    // Track progress
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % 500 == 0 || done == checkpoint_count {
+                        let elapsed = fetch_start.elapsed();
+                        let rate = if elapsed.as_secs_f64() > 0.0 {
+                            done as f64 / elapsed.as_secs_f64()
+                        } else {
+                            0.0
+                        };
+                        info!(
+                            completed = done,
+                            total = checkpoint_count,
+                            elapsed_secs = elapsed.as_secs(),
+                            rate = format!("{:.1}/s", rate),
+                            "fetch progress"
+                        );
+                    }
+
+                    result
+                }
+            })
+            .buffer_unordered(DEFAULT_FETCH_CONCURRENCY)
+            .collect()
+            .await;
+
+        let fetch_elapsed = fetch_start.elapsed();
+        let rate = if fetch_elapsed.as_secs_f64() > 0.0 {
+            checkpoint_count as f64 / fetch_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        info!(
+            checkpoint_count,
+            completed = completed.load(Ordering::Relaxed),
+            fetch_time_secs = fetch_elapsed.as_secs(),
+            rate = format!("{:.1}/s", rate),
+            "checkpoint fetch complete"
+        );
+
+        // Collect results into sorted map
+        let collect_start = Instant::now();
         let mut block_logs: BTreeMap<u64, Vec<SuiLog>> = BTreeMap::new();
-        while let Some(res) = set.join_next().await {
-            let result = res
-                .context("Failed to join task for fetching checkpoint data")?
-                .context("Failed to fetch checkpoint data using gRPC and remote storage")?;
-            block_logs.insert(result.0, result.1);
+        for result in results {
+            let (seq_num, logs) = result.context("Failed to fetch checkpoint data")?;
+            block_logs.insert(seq_num, logs);
         }
+        let collect_elapsed = collect_start.elapsed();
 
-        // Convert SuiLogs to alloy Logs, maintaining order by checkpoint
+        // Convert SuiLogs to alloy Logs, maintaining order by checkpoint (BTreeMap is sorted)
+        let convert_start = Instant::now();
         let mut logs = Vec::new();
+        let mut total_events = 0usize;
         for (checkpoint_num, sui_logs) in block_logs {
+            total_events += sui_logs.len();
             for (log_index, sui_log) in sui_logs.into_iter().enumerate() {
                 if let Some(log) = sui_log_to_alloy_log(sui_log, checkpoint_num, log_index) {
                     logs.push(log);
                 }
             }
         }
+        let convert_elapsed = convert_start.elapsed();
+
+        let total_elapsed = fetch_start.elapsed();
+        info!(
+            checkpoint_count,
+            total_events,
+            logs_count = logs.len(),
+            collect_time_ms = collect_elapsed.as_millis(),
+            convert_time_ms = convert_elapsed.as_millis(),
+            total_time_ms = total_elapsed.as_millis(),
+            checkpoints_per_sec = (checkpoint_count as f64 / total_elapsed.as_secs_f64()) as u64,
+            "checkpoint processing complete"
+        );
 
         Ok(logs)
     }
@@ -251,24 +405,20 @@ impl SuiProvider {
 
 impl LogsProvider for SuiProvider {
     fn latest_block(&mut self) -> Result<u64> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(self.fetch_latest_checkpoint_async())
+        // Reuse the shared runtime instead of creating a new one each time
+        self.runtime.block_on(self.fetch_latest_checkpoint_async())
     }
 
     fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(self.fetch_logs_async(start_block, end_block))
+        // Reuse the shared runtime instead of creating a new one each time
+        self.runtime
+            .block_on(self.fetch_logs_async(start_block, end_block))
     }
 
     fn block_timestamp(&self, block_number: u64) -> Result<u64> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(self.fetch_checkpoint_timestamp_async(block_number))
+        // Reuse the shared runtime instead of creating a new one each time
+        self.runtime
+            .block_on(self.fetch_checkpoint_timestamp_async(block_number))
     }
 }
 
@@ -303,18 +453,19 @@ fn checkpoint_to_sui_logs(package_id: &str, checkpoint: Checkpoint) -> Vec<SuiLo
 /// Deserializes checkpoint data from bytes (used for remote checkpoint storage)
 fn checkpoint_data_from_bytes(bytes: &[u8]) -> Result<CheckpointData> {
     let (encoding, data) = bytes.split_first().ok_or(anyhow!("empty bytes"))?;
-    if *encoding != 1 {
-        return Err(anyhow!("Invalid encoding of checkpoint bytes"));
+    if *encoding != CHECKPOINT_BCS_ENCODING {
+        return Err(anyhow!(
+            "Invalid encoding of checkpoint bytes: expected {}, got {}",
+            CHECKPOINT_BCS_ENCODING,
+            encoding
+        ));
     }
 
     Ok(bcs::from_bytes(data)?)
 }
 
 /// Extracts logs from a CheckpointData (from remote storage)
-fn checkpoint_data_to_sui_logs(
-    package_id: &str,
-    checkpoint: CheckpointData,
-) -> Vec<SuiLog> {
+fn checkpoint_data_to_sui_logs(package_id: &str, checkpoint: CheckpointData) -> Vec<SuiLog> {
     let mut logs = Vec::new();
 
     for tx in checkpoint.transactions {
@@ -342,11 +493,11 @@ fn checkpoint_data_to_sui_logs(
 }
 
 /// Converts a SuiLog to an alloy Log format
-/// 
-/// This conversion encodes the Sui event in a way that's compatible with the 
-/// framework's handler dispatch mechanism. The event type string and tx_digest are stored 
+///
+/// This conversion encodes the Sui event in a way that's compatible with the
+/// framework's handler dispatch mechanism. The event type string and tx_digest are stored
 /// in the data field (length-prefixed) followed by the BCS-encoded contents.
-/// 
+///
 /// Data format: [event_type_len (4 bytes LE), event_type_bytes, tx_digest_len (4 bytes LE), tx_digest_bytes, bcs_contents]
 fn sui_log_to_alloy_log(sui_log: SuiLog, checkpoint_num: u64, log_index: usize) -> Option<Log> {
     // Encode the event type, tx_digest, and contents together
@@ -355,9 +506,9 @@ fn sui_log_to_alloy_log(sui_log: SuiLog, checkpoint_num: u64, log_index: usize) 
     let event_type_len = (event_type_bytes.len() as u32).to_le_bytes();
     let tx_digest_bytes = sui_log.tx_digest.as_bytes();
     let tx_digest_len = (tx_digest_bytes.len() as u32).to_le_bytes();
-    
+
     let mut data = Vec::with_capacity(
-        4 + event_type_bytes.len() + 4 + tx_digest_bytes.len() + sui_log.contents.len()
+        4 + event_type_bytes.len() + 4 + tx_digest_bytes.len() + sui_log.contents.len(),
     );
     data.extend_from_slice(&event_type_len);
     data.extend_from_slice(event_type_bytes);
@@ -376,7 +527,7 @@ fn sui_log_to_alloy_log(sui_log: SuiLog, checkpoint_num: u64, log_index: usize) 
         inner: alloy::primitives::Log {
             address: Address::ZERO,
             data: alloy::primitives::LogData::new_unchecked(
-                vec![],  // No topics needed for Sui - we match on event name
+                vec![], // No topics needed for Sui - we match on event name
                 Bytes::from(data),
             ),
         },
@@ -392,27 +543,64 @@ pub struct ParsedSuiLog<'a> {
 }
 
 /// Extracts the event type, tx_digest, and BCS contents from a Sui-encoded alloy Log
-/// 
+///
 /// Returns ParsedSuiLog containing:
 /// - event_name: the last segment of the event type (e.g., "ProviderAdded" from "0x...::market::ProviderAdded")
 /// - tx_digest: the transaction digest string
 /// - bcs_contents: the BCS-encoded event data
 /// - checkpoint: the checkpoint sequence number
 pub fn parse_sui_log(log: &Log) -> Option<ParsedSuiLog<'_>> {
+    use tracing::debug;
+
+    let checkpoint = log.block_number.unwrap_or(0);
     let data = log.data().data.as_ref();
+
     if data.len() < 4 {
+        debug!(
+            checkpoint,
+            data_len = data.len(),
+            "parse_sui_log: data too short for event_type length header"
+        );
         return None;
     }
-    
+
     // Parse event_type
     let event_type_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
     if data.len() < 4 + event_type_len + 4 {
+        debug!(
+            checkpoint,
+            data_len = data.len(),
+            event_type_len,
+            required = 4 + event_type_len + 4,
+            "parse_sui_log: data too short for event_type + tx_digest header"
+        );
         return None;
     }
-    
-    let event_type = std::str::from_utf8(&data[4..4 + event_type_len]).ok()?;
-    let event_name = event_type.split("::").last()?;
-    
+
+    let event_type = match std::str::from_utf8(&data[4..4 + event_type_len]) {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(
+                checkpoint,
+                event_type_len,
+                error = %e,
+                "parse_sui_log: event_type is not valid UTF-8"
+            );
+            return None;
+        }
+    };
+
+    let event_name = match event_type.split("::").last() {
+        Some(name) => name,
+        None => {
+            debug!(
+                checkpoint,
+                event_type, "parse_sui_log: event_type has no '::' separator"
+            );
+            return None;
+        }
+    };
+
     // Parse tx_digest
     let tx_digest_offset = 4 + event_type_len;
     let tx_digest_len = u32::from_le_bytes([
@@ -421,21 +609,37 @@ pub fn parse_sui_log(log: &Log) -> Option<ParsedSuiLog<'_>> {
         data[tx_digest_offset + 2],
         data[tx_digest_offset + 3],
     ]) as usize;
-    
+
     if data.len() < tx_digest_offset + 4 + tx_digest_len {
+        debug!(
+            checkpoint,
+            data_len = data.len(),
+            tx_digest_offset,
+            tx_digest_len,
+            required = tx_digest_offset + 4 + tx_digest_len,
+            "parse_sui_log: data too short for tx_digest"
+        );
         return None;
     }
-    
-    let tx_digest = std::str::from_utf8(
-        &data[tx_digest_offset + 4..tx_digest_offset + 4 + tx_digest_len]
-    ).ok()?;
-    
+
+    let tx_digest = match std::str::from_utf8(
+        &data[tx_digest_offset + 4..tx_digest_offset + 4 + tx_digest_len],
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(
+                checkpoint,
+                tx_digest_len,
+                error = %e,
+                "parse_sui_log: tx_digest is not valid UTF-8"
+            );
+            return None;
+        }
+    };
+
     // BCS contents start after tx_digest
     let bcs_contents = &data[tx_digest_offset + 4 + tx_digest_len..];
-    
-    // Get checkpoint from block_number
-    let checkpoint = log.block_number.unwrap_or(0);
-    
+
     Some(ParsedSuiLog {
         event_name,
         tx_digest,
@@ -443,4 +647,3 @@ pub fn parse_sui_log(log: &Log) -> Option<ParsedSuiLog<'_>> {
         checkpoint,
     })
 }
-

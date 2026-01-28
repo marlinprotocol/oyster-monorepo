@@ -2374,6 +2374,7 @@ dependencies = [
  "diesel_migrations",
  "dotenvy",
  "ethp",
+ "futures",
  "hex",
  "indexer-framework",
  "openssl",
