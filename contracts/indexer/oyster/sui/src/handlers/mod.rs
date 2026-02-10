@@ -33,12 +33,6 @@ use job_revise_rate_cancelled::handle_job_revise_rate_cancelled;
 mod job_revise_rate_finalized;
 use job_revise_rate_finalized::handle_job_revise_rate_finalized;
 
-mod lock_created;
-use lock_created::handle_lock_created;
-
-mod lock_deleted;
-use lock_deleted::handle_lock_deleted;
-
 mod job_metadata_updated;
 use job_metadata_updated::handle_job_metadata_updated;
 
@@ -57,7 +51,7 @@ use lock_wait_time_updated::handle_lock_wait_time_updated;
     parent = None,
     fields(block = log.block_number, idx = log.log_index)
 )]
-pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvider) -> Result<()> {
+pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvider) -> Result<()> {
     // Debug: log raw data length
     let raw_data = log.data().data.as_ref();
     debug!(
@@ -84,18 +78,15 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "ProviderUpdatedWithCp" => handle_provider_updated_with_cp(conn, &parsed),
         "JobOpened" => handle_job_opened(conn, &parsed),
         "JobSettled" => handle_job_settled(conn, &parsed),
-        "JobClosed" => handle_job_closed(conn, &parsed),
+        "JobClosed" => handle_job_closed(conn, &parsed, provider),
         "JobDeposited" => handle_job_deposited(conn, &parsed),
         "JobWithdrew" => handle_job_withdrew(conn, &parsed),
-        "JobReviseRateInitiated" => handle_job_revise_rate_initiated(conn, &parsed),
+        "JobReviseRateInitiated" => handle_job_revise_rate_initiated(conn, &parsed, provider),
         "JobReviseRateCancelled" => handle_job_revise_rate_cancelled(conn, &parsed),
-        "JobReviseRateFinalized" => handle_job_revise_rate_finalized(conn, &parsed),
+        "JobReviseRateFinalized" => handle_job_revise_rate_finalized(conn, &parsed, provider),
         "JobMetadataUpdated" => handle_job_metadata_updated(conn, &parsed),
-        "LockCreated" => handle_lock_created(conn, &parsed),
-        "LockDeleted" => handle_lock_deleted(conn, &parsed),
         "LockWaitTimeUpdated" => handle_lock_wait_time_updated(conn, &parsed),
         // Ignored events
-        "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
         "Upgraded" | "LockCreated" | "LockDeleted" | "RoleGranted" | "TokenUpdated"
         | "Initialized" => {
             info!(event_name = parsed.event_name, "ignoring event type");
@@ -117,4 +108,5 @@ mod test_utils {
     pub use test_db::TestDb;
     pub use test_helpers::*;
     pub use test_provider::MockProvider;
+    pub use test_provider::DEFAULT_BLOCK_TIMESTAMP_OFFSET;
 }

@@ -8,6 +8,8 @@ use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use indexer_framework::schema::jobs;
 use indexer_framework::schema::rate_revisions;
+use indexer_framework::schema::revise_rate_requests;
+use indexer_framework::LogsProvider;
 use serde::Deserialize;
 use tracing::{info, instrument};
 
@@ -25,6 +27,7 @@ pub struct JobReviseRateFinalizedEvent {
 pub fn handle_job_revise_rate_finalized(
     conn: &mut PgConnection,
     parsed: &ParsedSuiLog,
+    provider: &impl LogsProvider,
 ) -> Result<()> {
     let data = parsed.bcs_contents;
 
@@ -38,11 +41,9 @@ pub fn handle_job_revise_rate_finalized(
     let rate = BigDecimal::from(event.new_rate);
     let block = parsed.checkpoint;
 
-    // Use current time as timestamp since the event doesn't include one
-    let block_timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    // Fetch the block timestamp from the RPC,
+    // can remove once alloy supports block_timestamp
+    let block_timestamp = provider.block_timestamp(block)?;
 
     info!(
         id,
@@ -104,8 +105,25 @@ pub fn handle_job_revise_rate_finalized(
     }
 
     // target sql:
-    // INSERT INTO rate_revisions (job_id, value, block, timestamp)
-    // VALUES ("<id>", "<rate>", "<block>", "<timestamp>");
+    // DELETE FROM revise_rate_requests
+    // WHERE id = "<id>";
+    let count = diesel::delete(revise_rate_requests::table)
+        .filter(revise_rate_requests::id.eq(&id))
+        .execute(conn)
+        .context("failed to delete revise rate request")?;
+
+    if count != 1 {
+        // !!! should never happen
+        // the only real condition is when the request does not exist
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!(
+            "did not expect to find a non existent request when finalizing job rate revision"
+        ));
+    }
+
+    // target sql:
+    // INSERT INTO rate_revisions (job_id, value, block)
+    // VALUES ("<id>", "<rate>", "<block>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),
@@ -123,6 +141,9 @@ pub fn handle_job_revise_rate_finalized(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+    use std::time::Duration;
+
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::*;
     use bigdecimal::BigDecimal;
@@ -191,6 +212,15 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
+                revise_rate_requests::value.eq(BigDecimal::from(200)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
         // Verify initial state
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
@@ -228,6 +258,18 @@ mod tests {
 
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(200),
+                original_now.add(Duration::from_secs(600)),
+            ))
+        );
+
         // Finalize rate revision to new rate
         let new_rate: u64 = 200;
         let bcs_data = encode_job_revise_rate_finalized_event(1, new_rate);
@@ -260,7 +302,9 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 200)),
+                    BigDecimal::from(
+                        original_timestamp + (10000 / 200) + DEFAULT_BLOCK_TIMESTAMP_OFFSET
+                    ),
                 ),
                 (
                     "0x00000000000000000000000000000002".to_owned(),
@@ -286,9 +330,11 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(200),
                 1000 as i64,
-                BigDecimal::from(original_timestamp),
+                BigDecimal::from(original_timestamp + DEFAULT_BLOCK_TIMESTAMP_OFFSET),
             ))
         );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
@@ -301,6 +347,7 @@ mod tests {
     fn test_revise_rate_finalized_zero_rate() -> Result<()> {
         let mut db = TestDb::new();
         let conn = &mut db.conn;
+
         let original_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
@@ -326,6 +373,15 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
+                revise_rate_requests::value.eq(BigDecimal::from(0)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
         // Verify initial state
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
@@ -346,6 +402,18 @@ mod tests {
                 BigDecimal::from(original_timestamp + (10000 / 100)),
             ),])
         );
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
+            ))
+        );
+
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         // Finalize rate revision to zero
@@ -361,7 +429,6 @@ mod tests {
         let provider = MockProvider::new(original_timestamp);
         handle_log(conn, log, &provider)?;
 
-        // Verify counts after
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -378,7 +445,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp),
+                BigDecimal::from(original_timestamp + DEFAULT_BLOCK_TIMESTAMP_OFFSET),
             ),])
         );
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
@@ -390,9 +457,11 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 1000 as i64,
-                BigDecimal::from(original_timestamp),
+                BigDecimal::from(original_timestamp + DEFAULT_BLOCK_TIMESTAMP_OFFSET),
             ))
         );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(0));
 
         Ok(())
     }
@@ -405,12 +474,74 @@ mod tests {
     fn test_revise_rate_finalized_nonexistent_job() -> Result<()> {
         let mut db = TestDb::new();
         let conn = &mut db.conn;
+
         let original_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
+        // we do this after the timestamp to truncate beyond seconds
+        let original_now =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
+
+        diesel::insert_into(jobs::table)
+            .values((
+                jobs::id.eq("0x00000000000000000000000000000001"),
+                jobs::owner
+                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
+                jobs::provider
+                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
+                jobs::metadata.eq("test-job-metadata"),
+                jobs::rate.eq(BigDecimal::from(100)),
+                jobs::balance.eq(BigDecimal::from(10000)),
+                jobs::last_settled.eq(&original_now),
+                jobs::created.eq(&original_now),
+                jobs::is_closed.eq(false),
+                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+            ))
+            .execute(conn)
+            .context("failed to create job")?;
+
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
+                revise_rate_requests::value.eq(BigDecimal::from(0)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
 
         // Verify initial state
-        assert_eq!(jobs::table.count().get_result(conn), Ok(0));
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![(
+                "0x00000000000000000000000000000001".to_owned(),
+                "test-job-metadata".to_owned(),
+                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                BigDecimal::from(100),
+                BigDecimal::from(10000),
+                original_now,
+                original_now,
+                false,
+                BigDecimal::from(original_timestamp + (10000 / 100)),
+            ),])
+        );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
+            ))
+        );
+
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         let job_id: u128 = 999;
@@ -434,8 +565,37 @@ mod tests {
             .to_string()
             .contains("failed to find balance for job"));
 
-        // Verify counts unchanged
-        assert_eq!(jobs::table.count().get_result(conn), Ok(0));
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table
+                .select(jobs::all_columns)
+                .order_by(jobs::id)
+                .load(conn),
+            Ok(vec![(
+                "0x00000000000000000000000000000001".to_owned(),
+                "test-job-metadata".to_owned(),
+                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
+                BigDecimal::from(100),
+                BigDecimal::from(10000),
+                original_now,
+                original_now,
+                false,
+                BigDecimal::from(original_timestamp + (10000 / 100)),
+            ),])
+        );
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
+            ))
+        );
+
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         Ok(())
@@ -474,7 +634,15 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
-        // Verify initial state
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
+                revise_rate_requests::value.eq(BigDecimal::from(0)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
         assert_eq!(jobs::table.count().get_result(conn), Ok(1));
         assert_eq!(
             jobs::table
@@ -493,6 +661,18 @@ mod tests {
                 true,
                 BigDecimal::from(original_timestamp + (10000 / 100)),
             ),])
+        );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
+            ))
         );
 
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
@@ -534,159 +714,19 @@ mod tests {
             ),])
         );
 
-        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
-
-        Ok(())
-    }
-
-    // ------------------------------------------------------------------------
-    // Test: Multiple rate revisions for the same job
-    // Expected: Each revision should update the rate and create a new revision record
-    // ------------------------------------------------------------------------
-    #[test]
-    fn test_multiple_rate_revisions() -> Result<()> {
-        let mut db = TestDb::new();
-        let conn = &mut db.conn;
-        let original_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        // we do this after the timestamp to truncate beyond seconds
-        let original_now =
-            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(original_timestamp);
-
-        diesel::insert_into(jobs::table)
-            .values((
-                jobs::id.eq("0x00000000000000000000000000000001"),
-                jobs::owner
-                    .eq("0x0101010101010101010101010101010101010101010101010101010101010101"),
-                jobs::provider
-                    .eq("0x0202020202020202020202020202020202020202020202020202020202020202"),
-                jobs::metadata.eq("test-job-metadata"),
-                jobs::rate.eq(BigDecimal::from(100)),
-                jobs::balance.eq(BigDecimal::from(10000)),
-                jobs::last_settled.eq(&original_now),
-                jobs::created.eq(&original_now),
-                jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x00000000000000000000000000000001".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
             ))
-            .execute(conn)
-            .context("failed to create job")?;
-
-        // Verify initial state
-        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            jobs::table
-                .select(jobs::all_columns)
-                .order_by(jobs::id)
-                .load(conn),
-            Ok(vec![(
-                "0x00000000000000000000000000000001".to_owned(),
-                "test-job-metadata".to_owned(),
-                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
-                "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
-                BigDecimal::from(100),
-                BigDecimal::from(10000),
-                original_now,
-                original_now,
-                false,
-                BigDecimal::from(original_timestamp + (10000 / 100)),
-            ),])
         );
 
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
-
-        // First revision: 150
-        let bcs_data_1 = encode_job_revise_rate_finalized_event(1, 150);
-        let log_1 =
-            TestSuiLog::new("JobReviseRateFinalized", "Digest1", 1000, bcs_data_1).to_alloy_log();
-
-        let provider = MockProvider::new(original_timestamp);
-        handle_log(conn, log_1, &provider).unwrap();
-
-        // Verify first revision
-        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            jobs::table
-                .select(jobs::all_columns)
-                .order_by(jobs::id)
-                .load(conn),
-            Ok(vec![(
-                "0x00000000000000000000000000000001".to_owned(),
-                "test-job-metadata".to_owned(),
-                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
-                "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
-                BigDecimal::from(150),
-                BigDecimal::from(10000),
-                original_now,
-                original_now,
-                false,
-                BigDecimal::from(original_timestamp + (10000 / 150) + 1),
-            ),])
-        );
-
-        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            rate_revisions::table
-                .select(rate_revisions::all_columns)
-                .order_by(rate_revisions::block)
-                .load(conn),
-            Ok(vec![(
-                "0x00000000000000000000000000000001".to_owned(),
-                BigDecimal::from(150),
-                1000,
-                BigDecimal::from(original_timestamp),
-            ),])
-        );
-
-        // Second revision: 250
-        let bcs_data_2 = encode_job_revise_rate_finalized_event(1, 250);
-        let log_2 = TestSuiLog::new("JobReviseRateFinalized", "Digest2", 1000 + 1, bcs_data_2)
-            .to_alloy_log();
-
-        handle_log(conn, log_2, &provider)?;
-
-        // Verify second revision
-        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
-        assert_eq!(
-            jobs::table
-                .select(jobs::all_columns)
-                .order_by(jobs::id)
-                .load(conn),
-            Ok(vec![(
-                "0x00000000000000000000000000000001".to_owned(),
-                "test-job-metadata".to_owned(),
-                "0x0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
-                "0x0202020202020202020202020202020202020202020202020202020202020202".to_owned(),
-                BigDecimal::from(250),
-                BigDecimal::from(10000),
-                original_now,
-                original_now,
-                false,
-                BigDecimal::from(original_timestamp + (10000 / 250)),
-            ),])
-        );
-
-        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(2));
-        assert_eq!(
-            rate_revisions::table
-                .select(rate_revisions::all_columns)
-                .order_by(rate_revisions::block)
-                .load(conn),
-            Ok(vec![
-                (
-                    "0x00000000000000000000000000000001".to_owned(),
-                    BigDecimal::from(150),
-                    1000,
-                    BigDecimal::from(original_timestamp),
-                ),
-                (
-                    "0x00000000000000000000000000000001".to_owned(),
-                    BigDecimal::from(250),
-                    1001,
-                    BigDecimal::from(original_timestamp),
-                ),
-            ])
-        );
 
         Ok(())
     }
