@@ -48,6 +48,9 @@ use job_settled::handle_job_settled;
 mod job_closed;
 use job_closed::handle_job_closed;
 
+mod lock_wait_time_updated;
+use lock_wait_time_updated::handle_lock_wait_time_updated;
+
 #[instrument(
     level = "info",
     skip_all,
@@ -90,8 +93,11 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, _provider: &impl LogsProvid
         "JobMetadataUpdated" => handle_job_metadata_updated(conn, &parsed),
         "LockCreated" => handle_lock_created(conn, &parsed),
         "LockDeleted" => handle_lock_deleted(conn, &parsed),
+        "LockWaitTimeUpdated" => handle_lock_wait_time_updated(conn, &parsed),
         // Ignored events
         "Upgraded" | "LockWaitTimeUpdated" | "RoleGranted" | "TokenUpdated" | "Initialized" => {
+        "Upgraded" | "LockCreated" | "LockDeleted" | "RoleGranted" | "TokenUpdated"
+        | "Initialized" => {
             info!(event_name = parsed.event_name, "ignoring event type");
             Ok(())
         }

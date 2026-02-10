@@ -125,30 +125,12 @@ pub fn encode_job_revise_rate_finalized_event(job_id: u128, new_rate: u64) -> Ve
 // BCS Encoding Helpers for Lock Events
 // ============================================================================
 
-/// BCS-encode a LockCreated event
-/// Event structure: { selector: Vec<u8>, key: Vec<u8>, i_value: [u8; 32], unlock_time: u64 }
-pub fn encode_lock_created_event(
-    selector: &[u8],
-    key: &[u8],
-    i_value: [u8; 32],
-    unlock_time: u64,
-) -> Vec<u8> {
+/// BCS-encode a LockWaitTimeUpdated event
+/// Event structure: { prev_lock_time: u64, updated_lock_time: u64 }
+pub fn encode_lock_wait_time_updated_event(prev_lock_time: u64, updated_lock_time: u64) -> Vec<u8> {
     let mut data = Vec::new();
-    encode_bytes(&mut data, selector);
-    encode_bytes(&mut data, key);
-    // i_value is a fixed 32-byte array
-    data.extend_from_slice(&i_value);
-    data.extend_from_slice(&unlock_time.to_le_bytes());
-    data
-}
-
-/// BCS-encode a LockDeleted event
-/// Event structure: { selector: Vec<u8>, key: Vec<u8>, i_value: [u8; 32] }
-pub fn encode_lock_deleted_event(selector: &[u8], key: &[u8], i_value: [u8; 32]) -> Vec<u8> {
-    let mut data = Vec::new();
-    encode_bytes(&mut data, selector);
-    encode_bytes(&mut data, key);
-    data.extend_from_slice(&i_value);
+    data.extend_from_slice(&prev_lock_time.to_le_bytes());
+    data.extend_from_slice(&updated_lock_time.to_le_bytes());
     data
 }
 
@@ -159,12 +141,6 @@ pub fn encode_lock_deleted_event(selector: &[u8], key: &[u8], i_value: [u8; 32])
 /// Encode a string in BCS format (ULEB128 length + UTF-8 bytes)
 fn encode_string(data: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();
-    encode_uleb128(data, bytes.len() as u64);
-    data.extend_from_slice(bytes);
-}
-
-/// Encode a byte vector in BCS format (ULEB128 length + bytes)
-fn encode_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
     encode_uleb128(data, bytes.len() as u64);
     data.extend_from_slice(bytes);
 }
