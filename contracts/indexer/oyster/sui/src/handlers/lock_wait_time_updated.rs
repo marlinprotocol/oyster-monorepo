@@ -14,9 +14,10 @@ use crate::provider::ParsedSuiLog;
 ///
 /// NOTE: This struct must match the Sui Move event structure exactly.
 /// Field order matters for BCS deserialization.
-#[derive(Debug, Deserialize)]
 #[allow(dead_code)]
+#[derive(Debug, Deserialize)]
 pub struct LockWaitTimeUpdatedEvent {
+    pub selector: Vec<u8>,
     pub prev_lock_time: u64,
     pub updated_lock_time: u64,
 }
