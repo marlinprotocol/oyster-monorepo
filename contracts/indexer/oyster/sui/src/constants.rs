@@ -11,10 +11,30 @@ pub const CHECKPOINT_BCS_ENCODING: u8 = 1;
 pub const GRPC_AUTH_TOKEN: &str = "x-token";
 
 /// Maximum number of concurrent checkpoint fetches
-/// Note: Higher concurrency can improve throughput if the server can handle it
+/// Sui's own indexer framework uses 200 concurrency.
 /// Monitor for connection timeouts - reduce if you see errors
-pub const DEFAULT_FETCH_CONCURRENCY: usize = 100;
+pub const DEFAULT_FETCH_CONCURRENCY: usize = 200;
 
-/// Default timeout for RPC requests
-/// Longer timeouts can cause cascading delays when servers are overloaded
-pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for gRPC requests (small payloads with narrowed FieldMask)
+/// Shorter timeouts allow faster retries on slow/overloaded servers
+pub const DEFAULT_GRPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Timeout for HTTP checkpoint downloads (.chk files contain full checkpoint data)
+/// Needs to be longer than gRPC since these are large BCS-encoded blobs
+pub const DEFAULT_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// HTTP connection pool idle timeout
+pub const DEFAULT_HTTP_CONNECTION_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
+// HTTP connection pool keepalive timeout
+pub const DEFAULT_HTTP_CONNECTION_POOL_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Default cache TTL for latest_block() during catch-up
+/// During historical sync the tip is millions ahead; no need to query every iteration
+pub const DEFAULT_LATEST_BLOCK_CACHE_TTL: Duration = Duration::from_secs(30);
+
+// Default max gRPC message size (matches Sui's official indexer framework)
+pub const DEFAULT_MAX_GRPC_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
+
+// Default worker threads for tokio runtime
+pub const DEFAULT_TOKIO_WORKER_THREADS: usize = 4;

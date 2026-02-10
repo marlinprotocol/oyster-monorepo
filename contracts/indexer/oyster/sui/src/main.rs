@@ -48,9 +48,13 @@ struct Args {
     #[arg(short, long)]
     start_block: u64,
 
-    /// Size of block range for fetching logs
-    #[arg(long, default_value = "500")]
+    /// Size of block range for fetching logs (larger = more amortized overhead)
+    #[arg(long, default_value = "5000")]
     range_size: u64,
+
+    /// Prefer HTTP over gRPC for checkpoint fetching (useful for bulk historical sync)
+    #[arg(long, default_value = "false")]
+    prefer_http: bool,
 }
 
 fn run() -> Result<()> {
@@ -74,6 +78,7 @@ fn run() -> Result<()> {
         args.grpc_password,
         args.grpc_token,
         args.package_id,
+        args.prefer_http,
     )?;
 
     let is_start_set = start_from(&mut conn, args.start_block)?;

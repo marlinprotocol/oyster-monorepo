@@ -9,15 +9,26 @@ use sui_rpc::client::{Client, HeadersInterceptor, ResponseExt};
 use sui_rpc::field::FieldMask;
 use sui_rpc::proto::sui::rpc::v2::{Checkpoint, GetCheckpointRequest};
 use sui_sdk_types::CheckpointData;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use tracing::info;
 
 use crate::constants::{
-    CHECKPOINT_BCS_ENCODING, DEFAULT_FETCH_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT, GRPC_AUTH_TOKEN,
+    CHECKPOINT_BCS_ENCODING, DEFAULT_FETCH_CONCURRENCY, DEFAULT_GRPC_REQUEST_TIMEOUT,
+    DEFAULT_HTTP_CONNECTION_POOL_IDLE_TIMEOUT, DEFAULT_HTTP_CONNECTION_POOL_KEEPALIVE_TIMEOUT,
+    DEFAULT_HTTP_REQUEST_TIMEOUT, DEFAULT_LATEST_BLOCK_CACHE_TTL, DEFAULT_MAX_GRPC_MESSAGE_SIZE,
+    DEFAULT_TOKIO_WORKER_THREADS, GRPC_AUTH_TOKEN,
 };
 use futures::stream::{self, StreamExt};
+
+/// State for an in-flight prefetch operation
+struct PrefetchState {
+    start_block: u64,
+    end_block: u64,
+    handle: JoinHandle<Result<Vec<Log>>>,
+}
 
 pub struct SuiProvider {
     pub remote_checkpoint_url: String,
@@ -31,6 +42,13 @@ pub struct SuiProvider {
     /// Shared HTTP client for remote checkpoint fallback
     /// Enables connection pooling and TLS session reuse
     http_client: reqwest::Client,
+    /// Cached latest block number with timestamp, to avoid redundant RPC calls
+    /// during historical catch-up when the tip is millions of blocks ahead
+    cached_latest_block: Option<(u64, Instant)>,
+    /// Whether to prefer HTTP over gRPC for checkpoint fetching (useful during historical sync)
+    pub prefer_http: bool,
+    /// In-flight prefetch operation (if any)
+    prefetch_state: std::sync::Mutex<Option<PrefetchState>>,
 }
 
 impl SuiProvider {
@@ -41,10 +59,11 @@ impl SuiProvider {
         rpc_password: Option<String>,
         rpc_token: Option<String>,
         package_id: String,
+        prefer_http: bool,
     ) -> Result<Self> {
         // Create a multi-threaded runtime for better parallelism
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
+            .worker_threads(DEFAULT_TOKIO_WORKER_THREADS)
             .enable_all()
             .build()
             .context("Failed to create tokio runtime")?;
@@ -61,6 +80,7 @@ impl SuiProvider {
 
                 Client::new(&grpc_url)
                     .context("Failed to create gRPC client")?
+                    .with_max_decoding_message_size(DEFAULT_MAX_GRPC_MESSAGE_SIZE)
                     .with_headers(headers)
             } else if let Some(ref token) = rpc_token {
                 let mut headers = HeadersInterceptor::default();
@@ -72,18 +92,21 @@ impl SuiProvider {
 
                 Client::new(&grpc_url)
                     .context("Failed to create gRPC client")?
+                    .with_max_decoding_message_size(DEFAULT_MAX_GRPC_MESSAGE_SIZE)
                     .with_headers(headers)
             } else {
-                Client::new(&grpc_url).context("Failed to create gRPC client")?
+                Client::new(&grpc_url)
+                    .context("Failed to create gRPC client")?
+                    .with_max_decoding_message_size(DEFAULT_MAX_GRPC_MESSAGE_SIZE)
             };
 
             // Create the shared HTTP client for remote checkpoint fallback
             // This enables connection pooling and TLS session reuse
             let http_client = reqwest::Client::builder()
-                .timeout(DEFAULT_REQUEST_TIMEOUT)
+                .timeout(DEFAULT_HTTP_REQUEST_TIMEOUT)
                 .pool_max_idle_per_host(DEFAULT_FETCH_CONCURRENCY)
-                .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive longer
-                .tcp_keepalive(Duration::from_secs(60))
+                .pool_idle_timeout(DEFAULT_HTTP_CONNECTION_POOL_IDLE_TIMEOUT) // Keep connections alive longer
+                .tcp_keepalive(DEFAULT_HTTP_CONNECTION_POOL_KEEPALIVE_TIMEOUT)
                 .build()
                 .context("Failed to create HTTP client")?;
 
@@ -96,6 +119,9 @@ impl SuiProvider {
             runtime,
             grpc_client,
             http_client,
+            cached_latest_block: None,
+            prefer_http,
+            prefetch_state: std::sync::Mutex::new(None),
         })
     }
 }
@@ -128,7 +154,7 @@ impl SuiProvider {
                 let mut provider = provider.clone();
                 async move {
                     timeout(
-                        DEFAULT_REQUEST_TIMEOUT,
+                        DEFAULT_GRPC_REQUEST_TIMEOUT,
                         provider
                             .ledger_client()
                             .get_checkpoint(GetCheckpointRequest::latest()),
@@ -160,7 +186,7 @@ impl SuiProvider {
                 let mut provider = provider.clone();
                 async move {
                     timeout(
-                        DEFAULT_REQUEST_TIMEOUT,
+                        DEFAULT_GRPC_REQUEST_TIMEOUT,
                         provider.ledger_client().get_checkpoint(
                             GetCheckpointRequest::by_sequence_number(checkpoint_number),
                         ),
@@ -189,29 +215,29 @@ impl SuiProvider {
     }
 }
 
-/// Fetches a single checkpoint, trying gRPC first then falling back to HTTP
-async fn fetch_single_checkpoint(
+/// Fetches checkpoint data via gRPC with retries
+async fn fetch_checkpoint_grpc(
     seq_num: u64,
-    grpc_client: Client,
-    http_client: Arc<reqwest::Client>,
-    remote_checkpoint_url: &str,
+    grpc_client: &Client,
     package_id: &str,
 ) -> Result<(u64, Vec<SuiLog>)> {
-    // Try gRPC first
     let grpc_result = Retry::spawn(
         ExponentialBackoff::from_millis(100)
             .max_delay(Duration::from_secs(2))
-            .take(2)
+            .take(3)
             .map(jitter),
         || {
             let mut client = grpc_client.clone();
             async move {
                 timeout(
-                    DEFAULT_REQUEST_TIMEOUT,
+                    DEFAULT_GRPC_REQUEST_TIMEOUT,
                     client.ledger_client().get_checkpoint(
                         GetCheckpointRequest::by_sequence_number(seq_num).with_read_mask(
                             FieldMask {
-                                paths: vec!["transactions".into()],
+                                paths: vec![
+                                    "transactions.digest".into(),
+                                    "transactions.events".into(),
+                                ],
                             },
                         ),
                     ),
@@ -223,18 +249,27 @@ async fn fetch_single_checkpoint(
     .await;
 
     match grpc_result {
-        Ok(Ok(checkpoint)) => {
-            return Ok((
-                seq_num,
-                checkpoint_to_sui_logs(package_id, checkpoint.into_inner().checkpoint().clone()),
-            ));
-        }
-        _ => {
-            // Fallback to remote checkpoint storage via HTTP
-        }
+        Ok(Ok(checkpoint)) => Ok((
+            seq_num,
+            checkpoint_to_sui_logs(package_id, checkpoint.into_inner().checkpoint().clone()),
+        )),
+        Ok(Err(e)) => Err(anyhow!(
+            "gRPC request failed for checkpoint {}: {}",
+            seq_num,
+            e
+        )),
+        Err(e) => Err(anyhow!("gRPC timed out for checkpoint {}: {}", seq_num, e)),
     }
+}
 
-    // HTTP fallback
+/// Fetches checkpoint data via HTTP with retries
+async fn fetch_checkpoint_http(
+    seq_num: u64,
+    http_client: &reqwest::Client,
+    remote_checkpoint_url: &str,
+    package_id: &str,
+) -> Result<(u64, Vec<SuiLog>)> {
+    let http_client = http_client.clone();
     let checkpoint_bytes = Retry::spawn(
         ExponentialBackoff::from_millis(100)
             .max_delay(Duration::from_secs(2))
@@ -269,7 +304,10 @@ async fn fetch_single_checkpoint(
         },
     )
     .await
-    .context(format!("All retries failed for checkpoint {}", seq_num))?;
+    .context(format!(
+        "All HTTP retries failed for checkpoint {}",
+        seq_num
+    ))?;
 
     Ok((
         seq_num,
@@ -281,144 +319,255 @@ async fn fetch_single_checkpoint(
     ))
 }
 
-impl SuiProvider {
-    /// Fetches logs/events for a range of checkpoints
-    ///
-    /// This fetches checkpoints in parallel (limited by semaphore) for performance,
-    /// but returns them sorted by checkpoint number so the caller can process
-    /// them sequentially in chronological order.
-    async fn fetch_logs_async(&self, start_block: u64, end_block: u64) -> Result<Vec<Log>> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        let fetch_start = Instant::now();
-        let checkpoint_count = end_block - start_block + 1;
-
-        // Use the shared clients - cloning shares the underlying connection pool
-        let grpc_client = self.get_client();
-        let http_client = Arc::new(self.http_client.clone());
-
-        // Progress tracking
-        let completed = Arc::new(AtomicU64::new(0));
-
-        info!(
-            checkpoint_count,
-            concurrency = DEFAULT_FETCH_CONCURRENCY,
-            "starting checkpoint fetch"
-        );
-
-        // Use buffer_unordered instead of JoinSet to avoid spawning all tasks upfront
-        // This processes checkpoints as a stream with bounded concurrency
-        let remote_checkpoint_url = self.remote_checkpoint_url.clone();
-        let package_id = self.package_id.clone();
-
-        let results: Vec<Result<(u64, Vec<SuiLog>)>> = stream::iter(start_block..=end_block)
-            .map(|seq_num| {
-                let client = grpc_client.clone();
-                let http = http_client.clone();
-                let url_base = remote_checkpoint_url.clone();
-                let pkg_id = package_id.clone();
-                let completed = completed.clone();
-                let checkpoint_count = checkpoint_count;
-                let fetch_start = fetch_start;
-
-                async move {
-                    let result =
-                        fetch_single_checkpoint(seq_num, client, http, &url_base, &pkg_id).await;
-
-                    // Track progress
-                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if done % 500 == 0 || done == checkpoint_count {
-                        let elapsed = fetch_start.elapsed();
-                        let rate = if elapsed.as_secs_f64() > 0.0 {
-                            done as f64 / elapsed.as_secs_f64()
-                        } else {
-                            0.0
-                        };
-                        info!(
-                            completed = done,
-                            total = checkpoint_count,
-                            elapsed_secs = elapsed.as_secs(),
-                            rate = format!("{:.1}/s", rate),
-                            "fetch progress"
-                        );
-                    }
-
-                    result
-                }
-            })
-            .buffer_unordered(DEFAULT_FETCH_CONCURRENCY)
-            .collect()
-            .await;
-
-        let fetch_elapsed = fetch_start.elapsed();
-        let rate = if fetch_elapsed.as_secs_f64() > 0.0 {
-            checkpoint_count as f64 / fetch_elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
-        info!(
-            checkpoint_count,
-            completed = completed.load(Ordering::Relaxed),
-            fetch_time_secs = fetch_elapsed.as_secs(),
-            rate = format!("{:.1}/s", rate),
-            "checkpoint fetch complete"
-        );
-
-        // Collect results into sorted map
-        let collect_start = Instant::now();
-        let mut block_logs: BTreeMap<u64, Vec<SuiLog>> = BTreeMap::new();
-        for result in results {
-            let (seq_num, logs) = result.context("Failed to fetch checkpoint data")?;
-            block_logs.insert(seq_num, logs);
-        }
-        let collect_elapsed = collect_start.elapsed();
-
-        // Convert SuiLogs to alloy Logs, maintaining order by checkpoint (BTreeMap is sorted)
-        let convert_start = Instant::now();
-        let mut logs = Vec::new();
-        let mut total_events = 0usize;
-        for (checkpoint_num, sui_logs) in block_logs {
-            total_events += sui_logs.len();
-            for (log_index, sui_log) in sui_logs.into_iter().enumerate() {
-                if let Some(log) = sui_log_to_alloy_log(sui_log, checkpoint_num, log_index) {
-                    logs.push(log);
-                }
+/// Fetches a single checkpoint using the configured strategy.
+/// When `prefer_http` is true, tries HTTP first (better for bulk historical sync from CDN/object store).
+/// When false, tries gRPC first (lower latency, narrower field mask).
+/// Falls back to the other method on failure.
+async fn fetch_single_checkpoint(
+    seq_num: u64,
+    grpc_client: Client,
+    http_client: Arc<reqwest::Client>,
+    remote_checkpoint_url: &str,
+    package_id: &str,
+    prefer_http: bool,
+) -> Result<(u64, Vec<SuiLog>)> {
+    if prefer_http {
+        // HTTP-first: better for bulk historical ingestion from CDN/object store
+        match fetch_checkpoint_http(seq_num, &http_client, remote_checkpoint_url, package_id).await
+        {
+            Ok(result) => return Ok(result),
+            Err(_) => {
+                // Fallback to gRPC
             }
         }
-        let convert_elapsed = convert_start.elapsed();
+        fetch_checkpoint_grpc(seq_num, &grpc_client, package_id)
+            .await
+            .context(format!("All methods failed for checkpoint {}", seq_num))
+    } else {
+        // gRPC-first: lower latency, narrower field mask (only digest + events)
+        match fetch_checkpoint_grpc(seq_num, &grpc_client, package_id).await {
+            Ok(result) => return Ok(result),
+            Err(_) => {
+                // Fallback to HTTP
+            }
+        }
+        fetch_checkpoint_http(seq_num, &http_client, remote_checkpoint_url, package_id)
+            .await
+            .context(format!("All methods failed for checkpoint {}", seq_num))
+    }
+}
 
-        let total_elapsed = fetch_start.elapsed();
-        info!(
-            checkpoint_count,
-            total_events,
-            logs_count = logs.len(),
-            collect_time_ms = collect_elapsed.as_millis(),
-            convert_time_ms = convert_elapsed.as_millis(),
-            total_time_ms = total_elapsed.as_millis(),
-            checkpoints_per_sec = (checkpoint_count as f64 / total_elapsed.as_secs_f64()) as u64,
-            "checkpoint processing complete"
-        );
+/// Core async function for fetching logs from a range of checkpoints.
+/// Extracted as a standalone function so it can be called from both the normal
+/// synchronous path and from a background prefetch task.
+async fn fetch_logs_core(
+    grpc_client: Client,
+    http_client: reqwest::Client,
+    remote_checkpoint_url: String,
+    package_id: String,
+    prefer_http: bool,
+    start_block: u64,
+    end_block: u64,
+) -> Result<Vec<Log>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-        Ok(logs)
+    let fetch_start = Instant::now();
+    let checkpoint_count = end_block - start_block + 1;
+
+    let http_client = Arc::new(http_client);
+
+    // Progress tracking
+    let completed = Arc::new(AtomicU64::new(0));
+
+    info!(
+        checkpoint_count,
+        concurrency = DEFAULT_FETCH_CONCURRENCY,
+        "starting checkpoint fetch"
+    );
+
+    let results: Vec<Result<(u64, Vec<SuiLog>)>> = stream::iter(start_block..=end_block)
+        .map(|seq_num| {
+            let client = grpc_client.clone();
+            let http = http_client.clone();
+            let url_base = remote_checkpoint_url.clone();
+            let pkg_id = package_id.clone();
+            let completed = completed.clone();
+            let checkpoint_count = checkpoint_count;
+            let fetch_start = fetch_start;
+
+            async move {
+                let result =
+                    fetch_single_checkpoint(seq_num, client, http, &url_base, &pkg_id, prefer_http)
+                        .await;
+
+                // Track progress
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % 500 == 0 || done == checkpoint_count {
+                    let elapsed = fetch_start.elapsed();
+                    let rate = if elapsed.as_secs_f64() > 0.0 {
+                        done as f64 / elapsed.as_secs_f64()
+                    } else {
+                        0.0
+                    };
+                    info!(
+                        completed = done,
+                        total = checkpoint_count,
+                        elapsed_secs = elapsed.as_secs(),
+                        rate = format!("{:.1}/s", rate),
+                        "fetch progress"
+                    );
+                }
+
+                result
+            }
+        })
+        .buffer_unordered(DEFAULT_FETCH_CONCURRENCY)
+        .collect()
+        .await;
+
+    let fetch_elapsed = fetch_start.elapsed();
+    let rate = if fetch_elapsed.as_secs_f64() > 0.0 {
+        checkpoint_count as f64 / fetch_elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+    info!(
+        checkpoint_count,
+        completed = completed.load(Ordering::Relaxed),
+        fetch_time_secs = fetch_elapsed.as_secs(),
+        rate = format!("{:.1}/s", rate),
+        "checkpoint fetch complete"
+    );
+
+    // Collect results into sorted map
+    let collect_start = Instant::now();
+    let mut block_logs: BTreeMap<u64, Vec<SuiLog>> = BTreeMap::new();
+    for result in results {
+        let (seq_num, logs) = result.context("Failed to fetch checkpoint data")?;
+        block_logs.insert(seq_num, logs);
+    }
+    let collect_elapsed = collect_start.elapsed();
+
+    // Convert SuiLogs to alloy Logs, maintaining order by checkpoint (BTreeMap is sorted)
+    let convert_start = Instant::now();
+    let mut logs = Vec::new();
+    let mut total_events = 0usize;
+    for (checkpoint_num, sui_logs) in block_logs {
+        total_events += sui_logs.len();
+        for (log_index, sui_log) in sui_logs.into_iter().enumerate() {
+            if let Some(log) = sui_log_to_alloy_log(sui_log, checkpoint_num, log_index) {
+                logs.push(log);
+            }
+        }
+    }
+    let convert_elapsed = convert_start.elapsed();
+
+    let total_elapsed = fetch_start.elapsed();
+    info!(
+        checkpoint_count,
+        total_events,
+        logs_count = logs.len(),
+        collect_time_ms = collect_elapsed.as_millis(),
+        convert_time_ms = convert_elapsed.as_millis(),
+        total_time_ms = total_elapsed.as_millis(),
+        checkpoints_per_sec = (checkpoint_count as f64 / total_elapsed.as_secs_f64()) as u64,
+        "checkpoint processing complete"
+    );
+
+    Ok(logs)
+}
+
+impl SuiProvider {
+    /// Fetches logs/events for a range of checkpoints (delegates to standalone core function)
+    async fn fetch_logs_async(&self, start_block: u64, end_block: u64) -> Result<Vec<Log>> {
+        fetch_logs_core(
+            self.get_client(),
+            self.http_client.clone(),
+            self.remote_checkpoint_url.clone(),
+            self.package_id.clone(),
+            self.prefer_http,
+            start_block,
+            end_block,
+        )
+        .await
     }
 }
 
 impl LogsProvider for SuiProvider {
     fn latest_block(&mut self) -> Result<u64> {
-        // Reuse the shared runtime instead of creating a new one each time
-        self.runtime.block_on(self.fetch_latest_checkpoint_async())
+        // Return cached value if still valid (avoids redundant RPC calls during catch-up)
+        if let Some((cached_block, cached_at)) = self.cached_latest_block {
+            if cached_at.elapsed() < DEFAULT_LATEST_BLOCK_CACHE_TTL {
+                return Ok(cached_block);
+            }
+        }
+
+        let block = self
+            .runtime
+            .block_on(self.fetch_latest_checkpoint_async())?;
+        self.cached_latest_block = Some((block, Instant::now()));
+        Ok(block)
     }
 
     fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>> {
-        // Reuse the shared runtime instead of creating a new one each time
         self.runtime
             .block_on(self.fetch_logs_async(start_block, end_block))
     }
 
     fn block_timestamp(&self, block_number: u64) -> Result<u64> {
-        // Reuse the shared runtime instead of creating a new one each time
         self.runtime
             .block_on(self.fetch_checkpoint_timestamp_async(block_number))
+    }
+
+    fn start_prefetch(&self, start_block: u64, end_block: u64) {
+        // Clone the data needed by the background task
+        let grpc_client = self.get_client();
+        let http_client = self.http_client.clone();
+        let remote_checkpoint_url = self.remote_checkpoint_url.clone();
+        let package_id = self.package_id.clone();
+        let prefer_http = self.prefer_http;
+
+        // Spawn the fetch on the runtime's worker threads
+        let handle = self.runtime.spawn(async move {
+            fetch_logs_core(
+                grpc_client,
+                http_client,
+                remote_checkpoint_url,
+                package_id,
+                prefer_http,
+                start_block,
+                end_block,
+            )
+            .await
+        });
+
+        // Store the handle so take_prefetched_logs can retrieve it
+        *self.prefetch_state.lock().unwrap() = Some(PrefetchState {
+            start_block,
+            end_block,
+            handle,
+        });
+    }
+
+    fn take_prefetched_logs(&self, start_block: u64, end_block: u64) -> Result<Vec<Log>> {
+        // Check if there's a matching prefetch in flight
+        let prefetch = self.prefetch_state.lock().unwrap().take();
+
+        if let Some(pf) = prefetch {
+            if pf.start_block == start_block && pf.end_block == end_block {
+                // Block on the prefetch result
+                return self
+                    .runtime
+                    .block_on(pf.handle)
+                    .context("prefetch task panicked")?;
+            }
+            // Mismatched range -- abort the stale prefetch and fetch fresh
+            pf.handle.abort();
+        }
+
+        // No matching prefetch available; fetch synchronously
+        self.runtime
+            .block_on(self.fetch_logs_async(start_block, end_block))
     }
 }
 
