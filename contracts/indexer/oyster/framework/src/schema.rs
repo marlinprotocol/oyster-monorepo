@@ -19,6 +19,12 @@ diesel::table! {
 }
 
 diesel::table! {
+    lock_duration (duration) {
+        duration -> Numeric,
+    }
+}
+
+diesel::table! {
     providers (id) {
         #[max_length = 66]
         id -> Varchar,
@@ -85,6 +91,7 @@ diesel::joinable!(transactions -> jobs (job));
 
 diesel::allow_tables_to_appear_in_same_query!(
     jobs,
+    lock_duration,
     providers,
     rate_revisions,
     revise_rate_requests,
