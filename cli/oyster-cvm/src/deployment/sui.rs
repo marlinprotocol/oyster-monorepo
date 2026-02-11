@@ -974,7 +974,7 @@ fn decode_wallet_key(value: &str) -> Result<(SimpleKeypair, Address)> {
     }
 }
 
-async fn kind_to_transaction(
+pub async fn kind_to_transaction(
     client: &mut Client,
     transaction_kind: TransactionKind,
     sender: Address,

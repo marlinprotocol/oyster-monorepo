@@ -1,4 +1,3 @@
-use crate::configs::global::INDEXER_URL;
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use clap::Args;
@@ -8,11 +7,18 @@ use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
+use crate::configs::{arb, bsc, sui};
+use crate::deployment::Deployment;
+
 const BUFFER_TIME_HOURS: f64 = 5.0 / 60.0; // 5 minutes in hours
 
 /// List active jobs for a wallet address
 #[derive(Args)]
 pub struct ListArgs {
+    /// Deployment (e.g. arb, sui, bsc)
+    #[arg(long, default_value = "arb")]
+    deployment: Deployment,
+
     /// Wallet address to query jobs for
     #[arg(short, long, required = true)]
     address: String,
@@ -37,35 +43,65 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
 
     info!("Listing active jobs for wallet address: {}", wallet_address);
 
+    let indexer_url = match args.deployment {
+        Deployment::Arbitrum => arb::INDEXER_URL,
+        Deployment::Bsc => bsc::INDEXER_URL,
+        Deployment::Sui => sui::INDEXER_URL,
+    };
+
     let client = Client::new();
-    let query = json!({
-        "query": r#"
-            query($owner: String!) {
-                allJobs(
-                    filter: {
-                        owner: { equalToInsensitive: $owner },
+    let query = match args.deployment {
+        Deployment::Arbitrum | Deployment::Sui => json!({
+            "query": r#"
+                query($owner: String!) {
+                    allJobs(
+                        filter: {
+                            owner: { equalToInsensitive: $owner },
+                        }
+                        orderBy: CREATED_DESC
+                    ) {
+                        nodes {
+                            id
+                            balance
+                            lastSettled
+                            rate
+                            provider
+                        }
                     }
-                    orderBy: CREATED_DESC
-                ) {
-                    nodes {
+                }
+            "#,
+            "variables": {
+                "owner": wallet_address,
+            }
+        }),
+        Deployment::Bsc => json!({
+            "query": r#"
+                query($owner: String!) {
+                    jobs(
+                        orderBy: createdAt
+                        orderDirection: desc
+                        where: {owner: $owner}
+                    ) {
                         id
                         balance
                         lastSettled
                         rate
                         provider
-                        metadata
                     }
                 }
+            "#,
+            "variables": {
+                "owner": wallet_address,
             }
-        "#,
-        "variables": {
-            "owner": wallet_address,
-        }
-    });
+        }),
+    };
 
-    let response = client
-        .post(INDEXER_URL)
-        .json(&query)
+    let mut request = client.post(indexer_url).json(&query);
+    if let Deployment::Bsc = args.deployment {
+        request = request.bearer_auth(bsc::INDEXER_API_KEY);
+    }
+
+    let response = request
         .send()
         .await
         .context("Failed to send GraphQL query")?;
@@ -79,13 +115,21 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
         anyhow::bail!("GraphQL query failed: {:?}", errors);
     }
 
-    let nodes = data
-        .get("data")
-        .and_then(|data| data.get("allJobs"))
-        .and_then(|all_jobs| all_jobs.get("nodes"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let nodes = match args.deployment {
+        Deployment::Arbitrum | Deployment::Sui => data
+            .get("data")
+            .and_then(|data| data.get("allJobs"))
+            .and_then(|all_jobs| all_jobs.get("nodes"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        Deployment::Bsc => data
+            .get("data")
+            .and_then(|data| data.get("jobs"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    };
 
     if nodes.is_empty() {
         info!("No active jobs found for address: {}", wallet_address);
@@ -108,7 +152,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
 
     let processed_jobs: Vec<_> = nodes
         .iter()
-        .filter_map(|node| process_job_data(node, now))
+        .filter_map(|node| process_job_data(node, now, args.deployment.clone()))
         .take(count.unwrap_or(nodes.len().try_into().unwrap()) as usize)
         .collect();
 
@@ -134,7 +178,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
+fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobData> {
     let id = node
         .get("id")
         .and_then(|v| v.as_str())
@@ -148,34 +192,43 @@ fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
     );
 
     // Get raw rate value first to properly handle zero rates
-    let rate_str = node.get("rate").and_then(|v| v.as_str())?;
-    let rate_raw = rate_str.parse::<f64>().ok()?;
-    let rate_per_hour = (rate_raw / 1_000_000_000_000_000_000.0) * 3600.0;
+    let rate_raw: u128 = node
+        .get("rate")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())?;
 
-    debug!("Calculated rate: {} USDC/hour", rate_per_hour);
-
-    // Skip if rate is zero, negative, or negligible (less than 0.01 USDC/hour)
-    if rate_per_hour <= 0.0 {
-        debug!("Skipping job {} due to rate <= 0", id);
+    // Skip if rate is zero
+    if rate_raw == 0 {
+        debug!("Skipping job {} due to zero rate", id);
         return None;
     }
+    let rate_per_hour = (rate_raw as f64 / 1_000_000_000_000_000_000.0) * 3600.0;
 
-    let balance_usdc = node
+    debug!("Calculated rate: {:.6} USDC/hour", rate_per_hour);
+
+    let balance_raw: u128 = node
         .get("balance")
         .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .map(|n| n / 1_000_000.0)?;
+        .and_then(|s| s.parse().ok())?;
 
-    if balance_usdc <= 0.0 {
-        debug!("Skipping job {} due to zero or negative balance", id);
+    if balance_raw == 0 {
+        debug!("Skipping job {} due to zero balance", id);
         return None;
     }
+    let balance_usdc = balance_raw as f64 / 1_000_000.0;
 
-    let last_settled = node
-        .get("lastSettled")
-        .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(&format!("{s}Z")).ok())
-        .map(|dt| dt.timestamp() as f64)?;
+    let last_settled = match deploy {
+        Deployment::Arbitrum | Deployment::Sui => node
+            .get("lastSettled")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(&format!("{s}Z")).ok())
+            .map(|dt| dt.timestamp() as f64)?,
+        Deployment::Bsc => node
+            .get("lastSettled")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i64>().ok())
+            .map(|timestamp| timestamp as f64)?,
+    };
 
     let delta_hours = (now - last_settled) / 3600.0;
 
@@ -189,7 +242,7 @@ fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
 
     let current_balance = balance_usdc - (delta_hours * rate_per_hour);
 
-    if current_balance <= 0.0 {
+    if current_balance <= f64::EPSILON {
         debug!(
             "Skipping job {} due to zero or negative current balance",
             id
@@ -199,7 +252,7 @@ fn process_job_data(node: &Value, now: f64) -> Option<JobData> {
 
     let time_remaining = (current_balance / rate_per_hour) - BUFFER_TIME_HOURS;
 
-    if time_remaining <= 0.0 {
+    if time_remaining <= f64::EPSILON {
         debug!(
             "Skipping job {} due to insufficient time remaining after buffer",
             id

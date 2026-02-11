@@ -7,3 +7,9 @@ pub const BSC_RPC_URL: &str = "https://bsc.drpc.org";
 
 // Default operators
 pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xD379eAb71eC709B20A85e953EbD3d395E032a9Af";
+
+// Indexer URL
+pub const INDEXER_URL: &str =
+    "https://gateway.thegraph.com/api/subgraphs/id/AqbdfugmZpgJGrE1ZRbWZ1hLwbX6z9CeKWx3XrzSh72W";
+// TODO: Enter real key before release
+pub const INDEXER_API_KEY: &str = "";
