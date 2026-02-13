@@ -10,3 +10,5 @@ pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xe10fa12f580e660ecd593ea4119cebc905
 
 // Indexer URL
 pub const INDEXER_URL: &str = "https://indexer.oyster.marlin.org/graphql";
+
+pub const USDC_DECIMALS: u8 = 6;

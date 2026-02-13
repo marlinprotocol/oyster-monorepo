@@ -13,3 +13,5 @@ pub const INDEXER_URL: &str =
     "https://gateway.thegraph.com/api/subgraphs/id/AqbdfugmZpgJGrE1ZRbWZ1hLwbX6z9CeKWx3XrzSh72W";
 // TODO: Enter real key before release
 pub const INDEXER_API_KEY: &str = "";
+
+pub const USDC_DECIMALS: u8 = 18;

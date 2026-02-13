@@ -10,7 +10,9 @@ use tracing::{debug, error, info};
 use crate::configs::{arb, bsc, sui};
 use crate::deployment::Deployment;
 
-const BUFFER_TIME_HOURS: f64 = 5.0 / 60.0; // 5 minutes in hours
+const RATE_SCALE: u128 = 1_000_000_000_000_000_000;
+const SECONDS_PER_HOUR: u128 = 3600;
+const BUFFER_SECONDS: u128 = 5 * 60;
 
 /// List active jobs for a wallet address
 #[derive(Args)]
@@ -43,10 +45,10 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
 
     info!("Listing active jobs for wallet address: {}", wallet_address);
 
-    let indexer_url = match args.deployment {
-        Deployment::Arbitrum => arb::INDEXER_URL,
-        Deployment::Bsc => bsc::INDEXER_URL,
-        Deployment::Sui => sui::INDEXER_URL,
+    let (indexer_url, usdc_decimals) = match args.deployment {
+        Deployment::Arbitrum => (arb::INDEXER_URL, arb::USDC_DECIMALS),
+        Deployment::Bsc => (bsc::INDEXER_URL, bsc::USDC_DECIMALS),
+        Deployment::Sui => (sui::INDEXER_URL, sui::USDC_DECIMALS),
     };
 
     let client = Client::new();
@@ -139,7 +141,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs_f64();
+        .as_secs();
 
     let mut table = Table::new();
     table.add_row(row![
@@ -152,7 +154,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
 
     let processed_jobs: Vec<_> = nodes
         .iter()
-        .filter_map(|node| process_job_data(node, now, args.deployment.clone()))
+        .filter_map(|node| process_job_data(node, now, args.deployment.clone(), usdc_decimals))
         .take(count.unwrap_or(nodes.len().try_into().unwrap()) as usize)
         .collect();
 
@@ -178,7 +180,14 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobData> {
+fn process_job_data(
+    node: &Value,
+    now: u64,
+    deploy: Deployment,
+    usdc_decimals: u8,
+) -> Option<JobData> {
+    let balance_scale: u128 = 10u128.pow(usdc_decimals as u32);
+
     let id = node
         .get("id")
         .and_then(|v| v.as_str())
@@ -202,9 +211,7 @@ fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobDat
         debug!("Skipping job {} due to zero rate", id);
         return None;
     }
-    let rate_per_hour = (rate_raw as f64 / 1_000_000_000_000_000_000.0) * 3600.0;
-
-    debug!("Calculated rate: {:.6} USDC/hour", rate_per_hour);
+    let rate_per_hour_raw = rate_raw.saturating_mul(SECONDS_PER_HOUR);
 
     let balance_raw: u128 = node
         .get("balance")
@@ -215,24 +222,27 @@ fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobDat
         debug!("Skipping job {} due to zero balance", id);
         return None;
     }
-    let balance_usdc = balance_raw as f64 / 1_000_000.0;
+    let balance_scaled = if RATE_SCALE >= balance_scale {
+        balance_raw.saturating_mul(RATE_SCALE / balance_scale)
+    } else {
+        balance_raw / (balance_scale / RATE_SCALE)
+    };
 
     let last_settled = match deploy {
         Deployment::Arbitrum | Deployment::Sui => node
             .get("lastSettled")
             .and_then(|v| v.as_str())
             .and_then(|s| DateTime::parse_from_rfc3339(&format!("{s}Z")).ok())
-            .map(|dt| dt.timestamp() as f64)?,
+            .map(|dt| dt.timestamp())?,
         Deployment::Bsc => node
             .get("lastSettled")
             .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i64>().ok())
-            .map(|timestamp| timestamp as f64)?,
+            .and_then(|s| s.parse::<i64>().ok())?,
     };
 
-    let delta_hours = (now - last_settled) / 3600.0;
+    let now_ts = now as i64;
 
-    if delta_hours < 0.0 {
+    if now_ts < last_settled {
         error!(
             "Job Settled time is in the future for job {}. Make sure your system clock is correct.",
             id
@@ -240,9 +250,12 @@ fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobDat
         return None;
     }
 
-    let current_balance = balance_usdc - (delta_hours * rate_per_hour);
+    let delta_seconds = (now_ts - last_settled) as u128;
 
-    if current_balance <= f64::EPSILON {
+    // Consumed balance = rate_per_second * elapsed_seconds
+    let consumed_scaled = rate_raw.saturating_mul(delta_seconds);
+
+    if consumed_scaled >= balance_scaled {
         debug!(
             "Skipping job {} due to zero or negative current balance",
             id
@@ -250,15 +263,23 @@ fn process_job_data(node: &Value, now: f64, deploy: Deployment) -> Option<JobDat
         return None;
     }
 
-    let time_remaining = (current_balance / rate_per_hour) - BUFFER_TIME_HOURS;
+    let current_balance_scaled = balance_scaled.saturating_sub(consumed_scaled);
 
-    if time_remaining <= f64::EPSILON {
+    let remaining_seconds = current_balance_scaled / rate_raw;
+
+    if remaining_seconds <= BUFFER_SECONDS {
         debug!(
             "Skipping job {} due to insufficient time remaining after buffer",
             id
         );
         return None;
     }
+
+    let time_remaining = (remaining_seconds - BUFFER_SECONDS) as f64 / 3600.0;
+
+    let rate_per_hour = rate_per_hour_raw as f64 / RATE_SCALE as f64;
+
+    let current_balance = current_balance_scaled as f64 / RATE_SCALE as f64;
 
     let provider = node
         .get("provider")
