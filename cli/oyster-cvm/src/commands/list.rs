@@ -52,9 +52,8 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     };
 
     let client = Client::new();
-    let query = match args.deployment {
-        Deployment::Arbitrum | Deployment::Sui => json!({
-            "query": r#"
+    let query = json!({
+        "query": r#"
                 query($owner: String!) {
                     allJobs(
                         filter: {
@@ -72,38 +71,14 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
                     }
                 }
             "#,
-            "variables": {
-                "owner": wallet_address,
-            }
-        }),
-        Deployment::Bsc => json!({
-            "query": r#"
-                query($owner: String!) {
-                    jobs(
-                        orderBy: createdAt
-                        orderDirection: desc
-                        where: {owner: $owner}
-                    ) {
-                        id
-                        balance
-                        lastSettled
-                        rate
-                        provider
-                    }
-                }
-            "#,
-            "variables": {
-                "owner": wallet_address,
-            }
-        }),
-    };
+        "variables": {
+            "owner": wallet_address,
+        }
+    });
 
-    let mut request = client.post(indexer_url).json(&query);
-    if let Deployment::Bsc = args.deployment {
-        request = request.bearer_auth(bsc::INDEXER_API_KEY);
-    }
-
-    let response = request
+    let response = client
+        .post(indexer_url)
+        .json(&query)
         .send()
         .await
         .context("Failed to send GraphQL query")?;
@@ -117,21 +92,13 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
         anyhow::bail!("GraphQL query failed: {:?}", errors);
     }
 
-    let nodes = match args.deployment {
-        Deployment::Arbitrum | Deployment::Sui => data
-            .get("data")
-            .and_then(|data| data.get("allJobs"))
-            .and_then(|all_jobs| all_jobs.get("nodes"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-        Deployment::Bsc => data
-            .get("data")
-            .and_then(|data| data.get("jobs"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-    };
+    let nodes = data
+        .get("data")
+        .and_then(|data| data.get("allJobs"))
+        .and_then(|all_jobs| all_jobs.get("nodes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     if nodes.is_empty() {
         info!("No active jobs found for address: {}", wallet_address);
@@ -154,7 +121,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
 
     let processed_jobs: Vec<_> = nodes
         .iter()
-        .filter_map(|node| process_job_data(node, now, args.deployment.clone(), usdc_decimals))
+        .filter_map(|node| process_job_data(node, now, usdc_decimals))
         .take(count.unwrap_or(nodes.len().try_into().unwrap()) as usize)
         .collect();
 
@@ -180,12 +147,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn process_job_data(
-    node: &Value,
-    now: u64,
-    deploy: Deployment,
-    usdc_decimals: u8,
-) -> Option<JobData> {
+fn process_job_data(node: &Value, now: u64, usdc_decimals: u8) -> Option<JobData> {
     let balance_scale: u128 = 10u128.pow(usdc_decimals as u32);
 
     let id = node
@@ -228,17 +190,11 @@ fn process_job_data(
         balance_raw / (balance_scale / RATE_SCALE)
     };
 
-    let last_settled = match deploy {
-        Deployment::Arbitrum | Deployment::Sui => node
-            .get("lastSettled")
-            .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(&format!("{s}Z")).ok())
-            .map(|dt| dt.timestamp())?,
-        Deployment::Bsc => node
-            .get("lastSettled")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i64>().ok())?,
-    };
+    let last_settled = node
+        .get("lastSettled")
+        .and_then(|v| v.as_str())
+        .and_then(|s| DateTime::parse_from_rfc3339(&format!("{s}Z")).ok())
+        .map(|dt| dt.timestamp())?;
 
     let now_ts = now as i64;
 
