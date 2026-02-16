@@ -256,6 +256,8 @@ mod tests {
             ))
         );
 
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
+
         // log under test
         let log = Log {
             block_hash: Some(keccak256!("some block").into()),
@@ -838,6 +840,8 @@ mod tests {
                 )
             ])
         );
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
 
         // log under test
         let log = Log {
