@@ -19,7 +19,6 @@ use indexer_framework::schema::jobs;
 use indexer_framework::schema::lock_duration;
 use indexer_framework::schema::revise_rate_requests;
 use indexer_framework::LogsProvider;
-use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
@@ -44,8 +43,7 @@ pub fn handle_job_revise_rate_initiated(
     let lock_duration = lock_duration::table
         .select(lock_duration::duration)
         .get_result::<BigDecimal>(conn)
-        .context("failed to get lock duration");
-    let lock_duration = lock_duration.unwrap();
+        .context("failed to get lock duration")?;
 
     let updates_at_epoch = &block_timestamp + &lock_duration;
     let updates_at = std::time::SystemTime::UNIX_EPOCH

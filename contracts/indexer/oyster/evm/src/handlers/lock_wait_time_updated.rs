@@ -10,7 +10,6 @@ use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
 use indexer_framework::schema::lock_duration;
-use tracing::warn;
 use tracing::{info, instrument};
 
 #[instrument(level = "info", skip_all, parent = None, fields(block = log.block_number, idx = log.log_index))]
