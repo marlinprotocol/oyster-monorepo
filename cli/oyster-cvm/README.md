@@ -196,7 +196,8 @@ Optional args:
 Lists all active jobs for a given wallet address.
 
 Required args:
-- `--wallet-address` (-w): The wallet address to list jobs for
+- `--address` (-a): The wallet address to list jobs for
+- `--deployment`: Chain where the jobs are deployed (default: arb)
 
 Sample output:
 ```
@@ -236,6 +237,20 @@ Required args:
   - `--max`: Withdraw maximum available amount while maintaining required buffer
 
 Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensure smooth operation.
+
+#### `register`
+Registers an Oyster enclave on SUI chain.
+
+Required args:
+- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--enclave-ip`: Oyster CVM instance IP, e.g. 100.26.111.45
+
+Optional args:
+- `--deployment`: Chain on which to register the instance (default: sui)
+- `--rpc`: RPC URL to interact with the chain
+- `--auth-token`: Auth token value for provided Sui chain gRPC URL
+- `--gas-coin`: Coin ID for gas payment on Sui chain (optional, will be chosen automatically from user's account via simulation results)
+- `--attestation-port`: Attestation port (default: 1301)
 
 #### `compute-image-id`
 Calculates the image ID based on the enclave image and input parameters. Intended to be used for applications using contract based KMS.

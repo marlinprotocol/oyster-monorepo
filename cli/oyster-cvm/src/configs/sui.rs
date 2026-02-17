@@ -17,3 +17,15 @@ pub const SUI_CLOCK_INITIAL_VERSION: u64 = 1;
 
 pub const DEFAULT_OPERATOR_ADDRESS: &str =
     "0x31777daafca0aac90f1171039735c87d3a933c95b997d34cc4fb2ea323f48ff4";
+
+// Indexer URL
+pub const INDEXER_URL: &str = "https://sui.indexer.oyster.marlin.org/graphql";
+
+pub const OYSTER_ENCLAVE_REGISTRY_PACKAGE_NAME: &str = "enclave_registry";
+pub const OYSTER_ENCLAVE_REGISTER_METHOD_NAME: &str = "register_enclave";
+pub const OYSTER_ENCLAVE_REGISTRY_PACKAGE_ID: &str =
+    "0x8df76b79118ffad2bacb55705c84474802ddb3d62199b98db720c5088e161ab8";
+pub const REGISTRY_ID: &str = "0xf67a9392da1749e8442d71eb6139a9dc1c199b88ef3da49385eeda175246d9d0";
+pub const REGISTRY_INITIAL_VERSION: u64 = 700389929;
+
+pub const USDC_DECIMALS: u8 = 6;

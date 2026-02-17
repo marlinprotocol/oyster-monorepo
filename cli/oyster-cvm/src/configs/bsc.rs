@@ -7,3 +7,8 @@ pub const BSC_RPC_URL: &str = "https://bsc.drpc.org";
 
 // Default operators
 pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xD379eAb71eC709B20A85e953EbD3d395E032a9Af";
+
+// Indexer URL
+pub const INDEXER_URL: &str = "https://bsc.indexer.oyster.marlin.org/graphql";
+
+pub const USDC_DECIMALS: u8 = 18;

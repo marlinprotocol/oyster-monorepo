@@ -357,7 +357,7 @@ fn parse_operator(deployment: &Deployment, operator: Option<String>) -> String {
         Deployment::Arbitrum => {
             operator.unwrap_or(configs::arb::DEFAULT_OPERATOR_ADDRESS.to_string())
         }
-        Deployment::BSC => operator.unwrap_or(configs::bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
+        Deployment::Bsc => operator.unwrap_or(configs::bsc::DEFAULT_OPERATOR_ADDRESS.to_string()),
         Deployment::Sui => operator.unwrap_or(configs::sui::DEFAULT_OPERATOR_ADDRESS.to_string()),
     }
 }

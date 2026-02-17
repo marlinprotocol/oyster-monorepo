@@ -2,22 +2,22 @@ use clap::{ValueEnum, builder::PossibleValue};
 use sui_sdk_types::Address;
 
 use crate::{
-    deployment::{adapter::DeploymentAdapter, evm::EvmAdapter, sui::SuiAdapter},
     configs::{
         arb::{ARBITRUM_ONE_RPC_URL, OYSTER_MARKET_ADDRESS, USDC_ADDRESS},
         bsc::{self, BSC_RPC_URL},
         sui::*,
     },
+    deployment::{adapter::DeploymentAdapter, evm::EvmAdapter, sui::SuiAdapter},
 };
 
 pub mod adapter;
 pub mod evm;
 pub mod sui;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Deployment {
     Arbitrum,
-    BSC,
+    Bsc,
     Sui,
 }
 
@@ -25,7 +25,7 @@ impl Deployment {
     pub fn as_str(&self) -> &'static str {
         match self {
             Deployment::Arbitrum => "arb",
-            Deployment::BSC => "bsc",
+            Deployment::Bsc => "bsc",
             Deployment::Sui => "sui",
         }
     }
@@ -33,7 +33,7 @@ impl Deployment {
 
 impl ValueEnum for Deployment {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Arbitrum, Self::BSC, Self::Sui]
+        &[Self::Arbitrum, Self::Bsc, Self::Sui]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -55,7 +55,7 @@ pub fn get_deployment_adapter(
             usdc_address: USDC_ADDRESS.to_owned(),
             sender_address: None,
         }),
-        Deployment::BSC => Box::new(EvmAdapter {
+        Deployment::Bsc => Box::new(EvmAdapter {
             rpc_url: rpc_url.unwrap_or(BSC_RPC_URL.to_owned()),
             market_address: bsc::OYSTER_MARKET_ADDRESS.to_owned(),
             usdc_address: bsc::USDC_ADDRESS.to_owned(),
