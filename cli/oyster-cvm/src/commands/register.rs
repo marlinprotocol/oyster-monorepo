@@ -6,7 +6,7 @@ use sui_sdk_types::{
     Address, Argument, Command, Identifier, Input, MoveCall, ProgrammableTransaction,
     TransactionKind,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::args::wallet::WalletArgs;
 use crate::configs::sui::*;
@@ -46,6 +46,8 @@ pub struct RegisterArgs {
 }
 
 pub async fn register_oyster_instance(args: RegisterArgs) -> Result<()> {
+    print_warning();
+
     if args.deployment != Deployment::Sui {
         return Err(anyhow!(
             "Register enclave only supported for Sui based deployment currently"
@@ -121,6 +123,14 @@ pub async fn register_oyster_instance(args: RegisterArgs) -> Result<()> {
 
     info!("Enclave registered successfully!");
     Ok(())
+}
+
+fn print_warning() {
+    warn!("⚠️ WARNING: UNAUDITED CODE - EXPERIMENTAL USE ONLY");
+    warn!("    This code has NOT been audited and may contain vulnerabilities or bugs.");
+    warn!("    It is provided for experimental and educational purposes only.");
+    warn!("    DO NOT use this in production environments or with real assets.");
+    warn!("     Use at your own risk.");
 }
 
 fn get_sui_adapter(
