@@ -122,8 +122,8 @@ pub fn handle_job_revise_rate_finalized(
     }
 
     // target sql:
-    // INSERT INTO rate_revisions (job_id, value, block)
-    // VALUES ("<id>", "<rate>", "<block>");
+    // INSERT INTO rate_revisions (job_id, value, block, timestamp)
+    // VALUES ("<id>", "<rate>", "<block>", "<block_timestamp>");
     diesel::insert_into(rate_revisions::table)
         .values((
             rate_revisions::job_id.eq(&id),

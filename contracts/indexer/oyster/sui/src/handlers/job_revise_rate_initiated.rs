@@ -49,8 +49,7 @@ pub fn handle_job_revise_rate_initiated(
     let lock_duration = lock_duration::table
         .select(lock_duration::duration)
         .get_result::<BigDecimal>(conn)
-        .context("failed to get lock duration");
-    let lock_duration = lock_duration.unwrap();
+        .context("failed to get lock duration")?;
 
     let updates_at_epoch = &block_timestamp + &lock_duration;
     let updates_at = std::time::SystemTime::UNIX_EPOCH
@@ -67,8 +66,8 @@ pub fn handle_job_revise_rate_initiated(
         "initiating job rate revision"
     );
 
-    // we want to insert if request does not exist and job exists and is not closed
-    // we want to error out if request already exists or job does not exist or is closed
+    // we want to insert if request for a rate revision does not exist, the job exists and is not closed
+    // we want to error out if request for a rate revision already exists, the job does not exist or is closed
 
     // target sql:
     // INSERT INTO revise_rate_requests (id, value, updates_at)
@@ -98,7 +97,8 @@ pub fn handle_job_revise_rate_initiated(
     if count != 1 {
         // !!! should never happen
         // we have failed to make any changes
-        // the only real condition is when the request does not exist or job does not exist or is closed
+        // the only real condition is when the request for a rate revision already exists or
+        // the job does not exist or is closed
         // we error out for now, can consider just moving on
         return Err(anyhow::anyhow!(
             "did not expect to find a non existent request or closed job"
