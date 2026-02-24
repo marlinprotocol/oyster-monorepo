@@ -1,3 +1,4 @@
+use crate::constants::RATE_SCALING_FACTOR;
 use crate::provider::ParsedSuiLog;
 use anyhow::Context;
 use anyhow::Result;
@@ -54,7 +55,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, parsed: &ParsedSuiLog) -> Resu
     let mut end_epoch = timestamp_epoch.clone();
 
     if &rate != &BigDecimal::from(0) {
-        run_duration = (&balance / &rate).round(0);
+        run_duration = ((&balance * RATE_SCALING_FACTOR) / &rate).round(0);
         end_epoch = &timestamp_epoch + &run_duration;
     }
 
@@ -143,6 +144,7 @@ pub fn handle_job_opened(conn: &mut PgConnection, parsed: &ParsedSuiLog) -> Resu
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::RATE_SCALING_FACTOR;
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::*;
     use anyhow::Context;
@@ -205,7 +207,7 @@ mod tests {
                 now,
                 now,
                 false,
-                BigDecimal::from(timestamp + (10000 / 100)),
+                BigDecimal::from(timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
             )])
         );
 
@@ -268,7 +270,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (10000 * RATE_SCALING_FACTOR / 100),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -311,7 +315,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp + (10000 / 100)),
+                BigDecimal::from(original_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
             )])
         );
 
@@ -385,7 +389,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                    BigDecimal::from(original_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
                 ),
                 (
                     "0x00000000000000000000000000000002".to_string(),
@@ -399,7 +403,7 @@ mod tests {
                     now,
                     now,
                     false,
-                    BigDecimal::from(timestamp + (20000 / 200)),
+                    BigDecimal::from(timestamp + (20000 * RATE_SCALING_FACTOR / 200)),
                 )
             ])
         );
@@ -567,7 +571,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (10000 * RATE_SCALING_FACTOR / 100),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -610,7 +616,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp + (10000 / 100)),
+                BigDecimal::from(original_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
             )])
         );
 
@@ -684,7 +690,7 @@ mod tests {
                 original_now,
                 original_now,
                 false,
-                BigDecimal::from(original_timestamp + (10000 / 100)),
+                BigDecimal::from(original_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
             ),])
         );
 
