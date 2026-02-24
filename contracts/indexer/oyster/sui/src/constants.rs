@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-#[allow(dead_code)]
 pub const RATE_SCALING_FACTOR: u64 = 10u64.pow(12);
 
 /// BCS encoding identifier used in Sui checkpoint binary format

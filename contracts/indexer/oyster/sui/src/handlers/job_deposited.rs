@@ -1,5 +1,6 @@
 use std::ops::Add;
 
+use crate::constants::RATE_SCALING_FACTOR;
 use crate::provider::ParsedSuiLog;
 use anyhow::Context;
 use anyhow::Result;
@@ -66,9 +67,9 @@ pub fn handle_job_deposited(conn: &mut PgConnection, parsed: &ParsedSuiLog) -> R
 
     let rate = rate.unwrap();
 
-    // Calculate additional duration: amount / rate (no scaling factor for Sui)
+    // Calculate additional duration: (amount * RATE_SCALING_FACTOR) / rate
     let additional_duration = if rate != BigDecimal::from(0) {
-        (&amount / &rate).round(0)
+        ((&amount * RATE_SCALING_FACTOR) / &rate).round(0)
     } else {
         BigDecimal::from(0)
     };
@@ -128,6 +129,7 @@ pub fn handle_job_deposited(conn: &mut PgConnection, parsed: &ParsedSuiLog) -> R
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::RATE_SCALING_FACTOR;
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::*;
     use anyhow::Context;
@@ -168,7 +170,9 @@ mod tests {
                 jobs::last_settled.eq(&original_now),
                 jobs::created.eq(&original_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(original_timestamp + (10000 / 100))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    original_timestamp + (10000 * RATE_SCALING_FACTOR / 100),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -191,7 +195,9 @@ mod tests {
                 jobs::last_settled.eq(&creation_now),
                 jobs::created.eq(&creation_now),
                 jobs::is_closed.eq(false),
-                jobs::end_epoch.eq(BigDecimal::from(creation_timestamp + (10000 / 100))),
+                jobs::end_epoch.eq(BigDecimal::from(
+                    creation_timestamp + (10000 * RATE_SCALING_FACTOR / 100),
+                )),
             ))
             .execute(conn)
             .context("failed to create job")?;
@@ -225,7 +231,7 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 100)),
+                    BigDecimal::from(original_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
                 ),
                 (
                     "0x00000000000000000000000000000002".to_owned(),
@@ -237,7 +243,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                    BigDecimal::from(creation_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
                 )
             ])
         );
@@ -290,7 +296,11 @@ mod tests {
                     original_now,
                     original_now,
                     false,
-                    BigDecimal::from(original_timestamp + (10000 / 100) + (5000 / 100)),
+                    BigDecimal::from(
+                        original_timestamp
+                            + (10000 * RATE_SCALING_FACTOR / 100)
+                            + (5000 * RATE_SCALING_FACTOR / 100)
+                    ),
                 ),
                 (
                     "0x00000000000000000000000000000002".to_owned(),
@@ -302,7 +312,7 @@ mod tests {
                     creation_now,
                     creation_now,
                     false,
-                    BigDecimal::from(creation_timestamp + (10000 / 100)),
+                    BigDecimal::from(creation_timestamp + (10000 * RATE_SCALING_FACTOR / 100)),
                 )
             ])
         );
