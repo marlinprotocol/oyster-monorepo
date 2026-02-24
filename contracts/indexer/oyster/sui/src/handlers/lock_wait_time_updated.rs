@@ -92,7 +92,7 @@ mod tests {
             Ok(BigDecimal::from(0))
         );
 
-        let bcs_data = encode_lock_wait_time_updated_event(100, 200);
+        let bcs_data = encode_lock_wait_time_updated_event(vec![0], 100, 200);
         let log = TestSuiLog::new(
             "LockWaitTimeUpdated",
             "DigestABC123xyz789test",
@@ -139,7 +139,7 @@ mod tests {
             Ok(BigDecimal::from(0))
         );
 
-        let bcs_data = encode_lock_wait_time_updated_event(0, 200);
+        let bcs_data = encode_lock_wait_time_updated_event(vec![0], 0, 200);
         let log = TestSuiLog::new(
             "LockWaitTimeUpdated",
             "DigestABC123xyz789test",

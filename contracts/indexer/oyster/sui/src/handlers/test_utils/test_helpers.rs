@@ -127,8 +127,13 @@ pub fn encode_job_revise_rate_finalized_event(job_id: u128, new_rate: u64) -> Ve
 
 /// BCS-encode a LockWaitTimeUpdated event
 /// Event structure: { prev_lock_time: u64, updated_lock_time: u64 }
-pub fn encode_lock_wait_time_updated_event(prev_lock_time: u64, updated_lock_time: u64) -> Vec<u8> {
+pub fn encode_lock_wait_time_updated_event(
+    selector: Vec<u8>,
+    prev_lock_time: u64,
+    updated_lock_time: u64,
+) -> Vec<u8> {
     let mut data = Vec::new();
+    data.extend_from_slice(&selector);
     data.extend_from_slice(&prev_lock_time.to_le_bytes());
     data.extend_from_slice(&updated_lock_time.to_le_bytes());
     data
