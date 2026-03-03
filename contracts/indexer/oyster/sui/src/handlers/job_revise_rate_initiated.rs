@@ -13,7 +13,6 @@ use indexer_framework::schema::lock_duration;
 use indexer_framework::schema::revise_rate_requests;
 use indexer_framework::LogsProvider;
 use serde::Deserialize;
-use tracing::warn;
 use tracing::{info, instrument};
 
 use crate::provider::ParsedSuiLog;
