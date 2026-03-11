@@ -86,6 +86,7 @@ pub fn handle_job_revise_rate_initiated(
                     jobs::id,
                     new_rate.as_sql::<Numeric>(),
                     updates_at.as_sql::<Timestamp>(),
+                    updates_at_epoch.as_sql::<Numeric>(),
                 ))
                 .filter(jobs::is_closed.eq(false))
                 .filter(jobs::id.eq(&id)),
