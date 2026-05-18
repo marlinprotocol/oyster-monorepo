@@ -1,9 +1,9 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use alloy::{
     hex::ToHexExt,
     network::EthereumWallet,
-    primitives::{Address, FixedBytes, U256, keccak256},
+    primitives::{Address, B256, FixedBytes, U256, keccak256},
     providers::{
         Provider, ProviderBuilder, RootProvider, WalletProvider,
         fillers::{
@@ -11,11 +11,13 @@ use alloy::{
             WalletFiller,
         },
     },
+    rpc::types::TransactionReceipt,
     signers::local::PrivateKeySigner,
     sol,
 };
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
+use tokio::time::{Instant, sleep};
 use tracing::info;
 
 use crate::deployment::adapter::{
@@ -57,6 +59,52 @@ pub struct EvmAdapter {
     pub market_address: String,
     pub usdc_address: String,
     pub sender_address: Option<Address>,
+}
+
+impl EvmAdapter {
+    async fn watch(provider: impl Provider, tx_hash: B256, timeout: u64) -> Result<()> {
+        let end = Instant::now() + Duration::from_secs(timeout);
+        loop {
+            tokio::select! {
+                tx = provider.get_transaction_by_hash(tx_hash) => {
+                    let tx = tx.context("Failed to get transaction by hash")?;
+                    if let Some(tx) = tx && tx.block_hash.is_some() {
+                        return Ok(())
+                    };
+                    // tx not found
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                _ = sleep(end.duration_since(Instant::now())) => {
+                    bail!("Timed out waiting for transaction");
+                }
+            }
+        }
+    }
+
+    async fn get_receipt(
+        provider: impl Provider,
+        tx_hash: B256,
+        timeout: u64,
+    ) -> Result<TransactionReceipt> {
+        let end = Instant::now() + Duration::from_secs(timeout);
+        loop {
+            tokio::select! {
+                tx = provider.get_transaction_receipt(tx_hash) => {
+                    let tx = tx.context("Failed to get transaction by hash")?;
+                    if let Some(tx) = tx && tx.block_hash.is_some() {
+                        return Ok(tx)
+                    };
+                    // tx not found
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                _ = sleep(end.duration_since(Instant::now())) => {
+                    bail!("Timed out waiting for transaction");
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -187,16 +235,16 @@ impl DeploymentAdapter for EvmAdapter {
                 "Current allowance ({}) is less than required amount ({}), approving USDC transfer...",
                 current_allowance, amount_usdc
             );
-            let tx_hash = usdc
+            let tx = usdc
                 .approve(market_address, amount_usdc)
                 .send()
                 .await
-                .context("Failed to send USDC approval transaction")?
-                .watch()
+                .context("Failed to send USDC approval transaction")?;
+            info!("Transaction sent, waiting for receipt: {:?}", tx.tx_hash());
+            Self::watch(provider, *tx.tx_hash(), 60)
                 .await
-                .context("Failed to get USDC approval transaction hash")?;
-
-            info!("USDC approval transaction: {:?}", tx_hash);
+                .context("Failed to get receipt, transaction might still have been included")?;
+            info!("Transaction included: {:?}", tx.tx_hash());
         } else {
             info!(
                 "Current allowance ({}) is sufficient for the required amount ({}), skipping approval",
@@ -221,17 +269,12 @@ impl DeploymentAdapter for EvmAdapter {
         };
 
         // Create job_open call
-        let tx_hash = provider
-            .send_transaction(*transaction.clone())
-            .await?
-            .watch()
-            .await?;
-        info!("Transaction hash: {:?}", tx_hash);
-
-        let receipt = provider
-            .get_transaction_receipt(tx_hash)
-            .await?
-            .ok_or_else(|| anyhow!("Transaction receipt not found"))?;
+        let tx = provider.send_transaction(*transaction.clone()).await?;
+        info!("Transaction sent, waiting for receipt: {:?}", tx.tx_hash());
+        let receipt = Self::get_receipt(&provider, *tx.tx_hash(), 60)
+            .await
+            .context("Failed to get receipt, transaction might still have been included")?;
+        info!("Transaction included: {:?}", tx.tx_hash());
 
         // Add logging to check transaction status
         if !receipt.status() {
