@@ -59,7 +59,11 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
     }
 
     let rate = rate.unwrap();
-    let duration_removed = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
+    let duration_removed = if &rate != &BigDecimal::from(0) {
+        ((&amount * RATE_SCALING_FACTOR) / &rate).round(0)
+    } else {
+        BigDecimal::from(0)
+    };
 
     info!(?rate, ?duration_removed, "duration removed");
 
