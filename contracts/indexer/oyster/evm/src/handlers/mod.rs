@@ -3,9 +3,10 @@ use anyhow::anyhow;
 use anyhow::Result;
 use diesel::PgConnection;
 use ethp::event;
-use indexer_framework::LogsProvider;
 use tracing::warn;
 use tracing::{info, instrument};
+
+use indexer_framework::LogsProvider;
 
 mod provider_added;
 use provider_added::handle_provider_added;
@@ -43,11 +44,8 @@ use job_revise_rate_finalized::handle_job_revise_rate_finalized;
 mod job_metadata_updated;
 use job_metadata_updated::handle_job_metadata_updated;
 
-mod lock_created;
-use lock_created::handle_lock_created;
-
-mod lock_deleted;
-use lock_deleted::handle_lock_deleted;
+mod lock_wait_time_updated;
+use lock_wait_time_updated::handle_lock_wait_time_updated;
 
 // provider logs
 static PROVIDER_ADDED: [u8; 32] = event!("ProviderAdded(address,string)");
@@ -66,21 +64,14 @@ static JOB_REVISE_RATE_CANCELLED: [u8; 32] = event!("JobReviseRateCancelled(byte
 static JOB_REVISE_RATE_FINALIZED: [u8; 32] = event!("JobReviseRateFinalized(bytes32,uint256)");
 static JOB_METADATA_UPDATED: [u8; 32] = event!("JobMetadataUpdated(bytes32,string)");
 
-// we need the unlock time for JobReviseRateInitiated, use LockCreated directly instead
-// blergh
-static LOCK_CREATED: [u8; 32] = event!("LockCreated(bytes32,bytes32,uint256,uint256)");
-
-// need to set revise rate requests to completed on both JobReviseRateFinalized and JobClosed
-// but not if JobClosed is emitted after a rate change is already finalized
-// or job is closed when rate is zero without any rate changes
-// way simpler to just use the lock event
-// blergh
-static LOCK_DELETED: [u8; 32] = event!("LockDeleted(bytes32,bytes32,uint256)");
+// lock related events
+static LOCK_WAIT_TIME_UPDATED: [u8; 32] = event!("LockWaitTimeUpdated(bytes32,uint256,uint256)");
 
 // ignored logs
 static UPGRADED: [u8; 32] = event!("Upgraded(address)");
-static LOCK_WAIT_TIME_UPDATED: [u8; 32] = event!("LockWaitTimeUpdated(bytes32,uint256,uint256)");
 static ROLE_GRANTED: [u8; 32] = event!("RoleGranted(bytes32,address,address)");
+static LOCK_CREATED: [u8; 32] = event!("LockCreated(bytes32,bytes32,uint256,uint256)");
+static LOCK_DELETED: [u8; 32] = event!("LockDeleted(bytes32,bytes32,uint256)");
 static TOKEN_UPDATED: [u8; 32] = event!("TokenUpdated(address,address)");
 static INITIALIZED: [u8; 32] = event!("Initialized(uint8)");
 
@@ -114,20 +105,19 @@ pub fn handle_log(conn: &mut PgConnection, log: Log, provider: &impl LogsProvide
     } else if log_type == JOB_WITHDREW {
         handle_job_withdrew(conn, log)
     } else if log_type == JOB_REVISE_RATE_INITIATED {
-        handle_job_revise_rate_initiated(conn, log)
+        handle_job_revise_rate_initiated(conn, log, provider)
     } else if log_type == JOB_REVISE_RATE_CANCELLED {
         handle_job_revise_rate_cancelled(conn, log)
     } else if log_type == JOB_REVISE_RATE_FINALIZED {
         handle_job_revise_rate_finalized(conn, log, provider)
     } else if log_type == JOB_METADATA_UPDATED {
         handle_job_metadata_updated(conn, log)
-    } else if log_type == LOCK_CREATED {
-        handle_lock_created(conn, log)
-    } else if log_type == LOCK_DELETED {
-        handle_lock_deleted(conn, log)
+    } else if log_type == LOCK_WAIT_TIME_UPDATED {
+        handle_lock_wait_time_updated(conn, log)
     } else if log_type == UPGRADED
-        || log_type == LOCK_WAIT_TIME_UPDATED
         || log_type == ROLE_GRANTED
+        || log_type == LOCK_CREATED
+        || log_type == LOCK_DELETED
         || log_type == TOKEN_UPDATED
         || log_type == INITIALIZED
     {

@@ -1,9 +1,6 @@
 use std::str::FromStr;
 
 use crate::constants::RATE_SCALING_FACTOR;
-use indexer_framework::schema::jobs;
-use indexer_framework::schema::rate_revisions;
-use indexer_framework::LogsProvider;
 use alloy::hex::ToHexExt;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
@@ -16,6 +13,10 @@ use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::QueryDsl;
 use diesel::RunQueryDsl;
+use indexer_framework::schema::jobs;
+use indexer_framework::schema::rate_revisions;
+use indexer_framework::schema::revise_rate_requests;
+use indexer_framework::LogsProvider;
 use tracing::warn;
 use tracing::{info, instrument};
 
@@ -102,6 +103,23 @@ pub fn handle_job_revise_rate_finalized(
     }
 
     // target sql:
+    // DELETE FROM revise_rate_requests
+    // WHERE id = "<id>";
+    let count = diesel::delete(revise_rate_requests::table)
+        .filter(revise_rate_requests::id.eq(&id))
+        .execute(conn)
+        .context("failed to delete revise rate request")?;
+
+    if count != 1 {
+        // !!! should never happen
+        // the only real condition is when the request does not exist
+        // we error out for now, can consider just moving on
+        return Err(anyhow::anyhow!(
+            "did not expect to find a non existent request when finalizing job rate revision"
+        ));
+    }
+
+    // target sql:
     // INSERT INTO rate_revisions (job_id, value, block)
     // VALUES ("<id>", "<rate>", "<block>");
     diesel::insert_into(rate_revisions::table)
@@ -121,6 +139,9 @@ pub fn handle_job_revise_rate_finalized(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Add;
+    use std::time::Duration;
+
     use alloy::{primitives::LogData, rpc::types::Log};
     use anyhow::Result;
     use bigdecimal::BigDecimal;
@@ -130,7 +151,8 @@ mod tests {
     use crate::handlers::handle_log;
     use crate::handlers::test_utils::MockProvider;
     use crate::handlers::test_utils::TestDb;
-    use indexer_framework::schema::{jobs, providers};
+    use indexer_framework::schema::jobs;
+    use indexer_framework::schema::providers;
 
     use super::*;
 
@@ -201,6 +223,18 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id
+                    .eq("0x3333333333333333333333333333333333333333333333333333333333333333"),
+                revise_rate_requests::value.eq(BigDecimal::from(5)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
+        assert_eq!(rate_revisions::table.count().get_result(conn), Ok(0));
+
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
         assert_eq!(
             providers::table.select(providers::all_columns).first(conn),
@@ -245,6 +279,18 @@ mod tests {
                     BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
                 )
             ])
+        );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                BigDecimal::from(5),
+                original_now.add(Duration::from_secs(600)),
+            ))
         );
 
         let log = Log {
@@ -333,6 +379,8 @@ mod tests {
             )])
         );
 
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(0));
+
         Ok(())
     }
 
@@ -380,6 +428,16 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id
+                    .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
+                revise_rate_requests::value.eq(BigDecimal::from(0)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
         assert_eq!(
             providers::table.select(providers::all_columns).first(conn),
@@ -406,6 +464,18 @@ mod tests {
                 original_now,
                 false,
                 BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
+            ))
+        );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(0),
+                original_now.add(Duration::from_secs(600)),
             ))
         );
 
@@ -468,6 +538,8 @@ mod tests {
             ))
         );
 
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(0));
+
         Ok(())
     }
 
@@ -515,6 +587,16 @@ mod tests {
             .execute(conn)
             .context("failed to create job")?;
 
+        diesel::insert_into(revise_rate_requests::table)
+            .values((
+                revise_rate_requests::id
+                    .eq("0x4444444444444444444444444444444444444444444444444444444444444444"),
+                revise_rate_requests::value.eq(BigDecimal::from(5)),
+                revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+            ))
+            .execute(conn)
+            .context("failed to create revise rate request")?;
+
         assert_eq!(providers::table.count().get_result(conn), Ok(1));
         assert_eq!(
             providers::table.select(providers::all_columns).first(conn),
@@ -545,6 +627,18 @@ mod tests {
                 false,
                 BigDecimal::from(original_timestamp + (7 * RATE_SCALING_FACTOR)),
             )])
+        );
+
+        assert_eq!(revise_rate_requests::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            revise_rate_requests::table
+                .select(revise_rate_requests::all_columns)
+                .first(conn),
+            Ok((
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+                BigDecimal::from(5),
+                original_now.add(Duration::from_secs(600)),
+            ))
         );
 
         let log = Log {
