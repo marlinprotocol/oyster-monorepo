@@ -61,7 +61,11 @@ pub fn handle_job_deposited(conn: &mut PgConnection, log: Log) -> Result<()> {
 
     let rate = rate.unwrap();
 
-    let additional_duration = ((&amount * RATE_SCALING_FACTOR) / &rate).round(0);
+    let additional_duration = if &rate != &BigDecimal::from(0) {
+        ((&amount * RATE_SCALING_FACTOR) / &rate).round(0)
+    } else {
+        BigDecimal::from(0)
+    };
 
     info!(
         id,
