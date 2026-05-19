@@ -58,7 +58,7 @@ struct Args {
     coordinator: String,
 
     /// RPC URL
-    #[arg(long, default_value = "https://polygon-rpc.com")]
+    #[arg(long, default_value = "https://polygon.drpc.org")]
     rpc: String,
 
     /// DKG threshold
