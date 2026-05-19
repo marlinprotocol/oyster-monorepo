@@ -267,6 +267,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(200),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -411,6 +412,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -539,6 +541,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -593,6 +596,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -672,6 +676,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -723,6 +728,7 @@ mod tests {
                 "0x00000000000000000000000000000001".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 

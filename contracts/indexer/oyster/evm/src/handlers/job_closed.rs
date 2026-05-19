@@ -253,6 +253,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(0),
                 creation_now.add(Duration::from_secs(600)),
+                BigDecimal::from(creation_timestamp + 600)
             ))
         );
 

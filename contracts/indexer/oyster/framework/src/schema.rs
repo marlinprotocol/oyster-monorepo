@@ -52,6 +52,7 @@ diesel::table! {
         id -> Varchar,
         value -> Numeric,
         updates_at -> Timestamp,
+        updates_at_epoch -> Numeric,
     }
 }
 

@@ -290,6 +290,7 @@ mod tests {
                 "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
                 BigDecimal::from(5),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -476,6 +477,7 @@ mod tests {
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(0),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
@@ -638,6 +640,7 @@ mod tests {
                 "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
                 BigDecimal::from(5),
                 original_now.add(Duration::from_secs(600)),
+                BigDecimal::from(original_timestamp + 600),
             ))
         );
 
