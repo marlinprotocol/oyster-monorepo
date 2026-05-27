@@ -1,0 +1,10 @@
+{
+    "MGT": {
+      "implementation": "0x0a3ae3C1F42Ea9AD5C1fB1A62796735C13801890",
+      "proxy": "0x0a3ae3C1F42Ea9AD5C1fB1A62796735C13801890"
+    },
+    "DET": {
+      "implementation": "0xDDa3B8c0247DeBb4C4f54681CaD3d747B883d7fD",
+      "proxy": "0xc5b41bD20808B4695CBf402AD27d608673FDC888"
+    }
+}
