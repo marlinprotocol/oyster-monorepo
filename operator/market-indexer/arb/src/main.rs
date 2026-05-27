@@ -15,7 +15,7 @@ use arb::ArbProvider;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// RPC URL
+    /// Websocket RPC URL
     #[arg(short, long)]
     rpc: String,
 
@@ -62,7 +62,8 @@ async fn main() -> Result<()> {
         args.contract
             .parse()
             .context("Failed to parse contract into ethereum address")?,
-    )?;
+    )
+    .await?;
 
     info!(
         rpc = %args.rpc,

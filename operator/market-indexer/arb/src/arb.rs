@@ -3,22 +3,24 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy::hex::ToHexExt;
-use alloy::network::Ethereum;
 use alloy::primitives::Address;
-use alloy::providers::{Provider, RootProvider};
-use alloy::rpc::client::RpcClient;
+use alloy::providers::fillers::{
+    BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+};
+use alloy::providers::{Identity, Provider, ProviderBuilder, RootProvider, WsConnect};
 use alloy::rpc::types::Filter;
 use alloy::rpc::types::eth::Log;
 use alloy::sol;
 use alloy::sol_types::SolEvent;
-use alloy::transports::http::Http;
 use alloy::transports::http::reqwest::Url;
+use alloy::transports::ws::WebSocketConfig;
 use anyhow::{Context, Result};
 use indexer_framework::chain::{ChainHandler, FromLog};
 use indexer_framework::events::*;
-use reqwest::Client;
+use tokio::time::timeout;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
+use tokio_stream::StreamExt;
 use tracing::warn;
 
 sol!(
@@ -144,21 +146,32 @@ impl FromLog for ArbLog {
     }
 }
 
+type WsProvider = FillProvider<
+    JoinFill<
+        Identity,
+        JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+    >,
+    RootProvider,
+>;
+
 #[derive(Clone)]
 pub struct ArbProvider {
-    pub provider: Arc<RootProvider<Ethereum>>,
+    pub provider: Arc<WsProvider>,
     pub contract: Address,
 }
 
 impl ArbProvider {
-    pub fn new(rpc_url: Url, contract: Address) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(8))
-            .build()
-            .context("Failed to initialize client for sending rpc requests")?;
+    pub async fn new(rpc_url: Url, contract: Address) -> Result<Self> {
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_frame_size = Some(64 << 20);
 
-        let transport = Http::with_client(client, rpc_url);
-        let provider = RootProvider::<Ethereum>::new(RpcClient::new(transport, false));
+        let provider = timeout(
+            Duration::from_secs(10),
+            ProviderBuilder::new().connect_ws(WsConnect::new(rpc_url).with_config(ws_config)),
+        )
+        .await
+        .context("Timed out connecting to the websocket RPC URL")?
+        .context("Failed to connect to the websocket RPC URL")?;
 
         Ok(Self {
             provider: Arc::new(provider),
@@ -217,7 +230,7 @@ impl ChainHandler for ArbProvider {
         Ok(block_number)
     }
 
-    async fn fetch_logs_and_group_by_block(
+    async fn fetch_logs_grouped_by_block(
         &self,
         start_block: u64,
         end_block: u64,
@@ -275,5 +288,80 @@ impl ChainHandler for ArbProvider {
         }
 
         Ok(block_logs)
+    }
+
+    async fn subscribe_logs_grouped_by_block<'a>(
+        &'a self,
+    ) -> Result<impl StreamExt<Item = (u64, Vec<Self::RawLog>)> + Send + 'a> {
+        let provider = self.provider.clone();
+
+        let stream = Retry::spawn(
+            ExponentialBackoff::from_millis(500)
+                .max_delay(Duration::from_secs(10))
+                .map(jitter)
+                .take(5),
+            || async {
+                provider
+                    .subscribe_logs(
+                        &Filter::new()
+                            .events(vec![
+                                MarketV1Contract::JobOpened::SIGNATURE,
+                                MarketV1Contract::JobSettled::SIGNATURE,
+                                MarketV1Contract::JobClosed::SIGNATURE,
+                                MarketV1Contract::JobDeposited::SIGNATURE,
+                                MarketV1Contract::JobWithdrew::SIGNATURE,
+                                MarketV1Contract::JobReviseRateInitiated::SIGNATURE,
+                                MarketV1Contract::JobReviseRateCancelled::SIGNATURE,
+                                MarketV1Contract::JobReviseRateFinalized::SIGNATURE,
+                                MarketV1Contract::JobMetadataUpdated::SIGNATURE,
+                            ])
+                            .address(self.contract),
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        warn!(
+                            error = ?err,
+                            "Retrying subscribe_logs RPC call"
+                        );
+                    })
+            },
+        )
+        .await
+        .context("Failed to subscribe to logs on chain using RPC")?
+        .into_stream();
+
+        let grouped_stream = async_stream::stream! {
+            let _keep_alive = provider;
+
+            let mut current_block: Option<u64> = None;
+            let mut current_batch: Vec<ArbLog> = Vec::new();
+
+            tokio::pin!(stream);
+
+            while let Some(log) = stream.next().await {
+                if let Some(block_number) = log.block_number {
+                    match current_block {
+                        Some(cur) if cur == block_number => {
+                            current_batch.push(ArbLog(log));
+                        }
+                        Some(cur) => {
+                            yield (cur, std::mem::take(&mut current_batch));
+                            current_block = Some(block_number);
+                            current_batch.push(ArbLog(log));
+                        }
+                        None => {
+                            current_block = Some(block_number);
+                            current_batch.push(ArbLog(log));
+                        }
+                    }
+                }
+            }
+
+            if let Some(cur) = current_block {
+                yield (cur, current_batch);
+            }
+        };
+
+        Ok(grouped_stream)
     }
 }

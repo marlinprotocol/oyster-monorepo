@@ -132,18 +132,14 @@ impl Repository {
         Ok(active_jobs_set)
     }
 
-    pub async fn insert_batch(
-        &self,
-        records: Vec<JobEventRecord>,
-        block: i64,
-    ) -> Result<(u64, u64)> {
+    pub async fn insert_batch(&self, records: &[JobEventRecord], block: i64) -> Result<(u64, u64)> {
         let mut tx = self
             .pool
             .begin()
             .await
             .context("Failed to begin transaction for inserting events batch into DB")?;
         let inserted_batch = self
-            .insert_events(&mut tx, records.clone())
+            .insert_events(&mut tx, records.to_owned())
             .await
             .context("Transaction failed for batch inserting records into job_events table")?;
         let updated = self
