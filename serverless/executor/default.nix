@@ -7,15 +7,9 @@
   system = systemConfig.system;
   pkgs = nixpkgs.legacyPackages."${system}";
   target = systemConfig.rust_target;
-  toolchain = with fenix.packages.${system};
-    combine [
-      stable.cargo
-      stable.rustc
-      targets.${target}.stable.rust-std
-    ];
   naersk' = naersk.lib.${system}.override {
-    cargo = toolchain;
-    rustc = toolchain;
+    cargo = fenix.packages.${system}.stable.cargo;
+    rustc = fenix.packages.${system}.stable.rustc;
   };
   cc =
     if systemConfig.static
@@ -25,8 +19,12 @@ in rec {
   uncompressed = naersk'.buildPackage {
     src = ./.;
     CARGO_BUILD_TARGET = target;
-    TARGET_CC = "${cc}/bin/${cc.targetPrefix}cc";
-    nativeBuildInputs = [cc pkgs.perl];
+    TARGET_CC = "${cc}/bin/cc";
+    nativeBuildInputs = [
+      cc
+      pkgs.perl
+      fenix.packages.${system}.targets.${target}.stable.rust-std
+    ];
   };
 
   compressed =
