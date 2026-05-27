@@ -149,7 +149,7 @@ async fn run() -> Result<()> {
     info!(?cli.address_whitelist);
     info!(?cli.port);
 
-    let regions: Vec<String> = cli.regions.split(',').map(|r| (r.into())).collect();
+    let regions: Vec<String> = cli.regions.split(',').map(|r| r.into()).collect();
 
     let eif_whitelist = if !cli.whitelist.is_empty() {
         let eif_whitelist_vec: Vec<String> = parse_file(cli.whitelist)

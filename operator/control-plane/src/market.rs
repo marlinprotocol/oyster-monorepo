@@ -15,6 +15,8 @@ use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, info_span, Instrument};
 
+use crate::server::Error;
+
 // IMPORTANT: do not import SystemTime, use a SystemContext
 
 // Trait to encapsulate behavior that should be simulated in tests
@@ -64,7 +66,11 @@ pub trait InfraProvider {
 
     fn spin_down(&mut self, job: &JobId, region: &str) -> impl Future<Output = Result<()>> + Send;
 
-    fn get_job_ip(&self, job: &JobId, region: &str) -> impl Future<Output = Result<String>> + Send;
+    fn get_job_ip(
+        &self,
+        job: &JobId,
+        region: &str,
+    ) -> impl Future<Output = std::result::Result<String, Error>> + Send;
 
     fn check_enclave_running(
         &mut self,
@@ -110,7 +116,7 @@ where
         (**self).spin_down(job, region).await
     }
 
-    async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
+    async fn get_job_ip(&self, job: &JobId, region: &str) -> std::result::Result<String, Error> {
         (**self).get_job_ip(job, region).await
     }
 
