@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use alloy::sol_types::SolCall;
 use axum::extract::State;
 use tokio::sync::mpsc::Receiver;
+use tracing::{debug, error};
 
 use crate::{
     constant::TIMEOUT_TXN_RESEND_DEADLINE_SECS,
@@ -35,8 +36,9 @@ pub async fn send_transaction(
                     )
                     .await
                 {
-                    eprintln!(
-                        "Failed to call 'Jobs' contract function with transaction manager: {:?}",
+                    error!(
+                        %call._jobId,
+                        "Failed to call 'Jobs' contract submitOutput with transaction manager: {:?}",
                         err
                     );
                 };
@@ -50,8 +52,9 @@ pub async fn send_transaction(
                     )
                     .await
                 {
-                    eprintln!(
-                        "Failed to call 'Jobs' contract function with transaction manager: {:?}",
+                    error!(
+                        %call._jobId,
+                        "Failed to call 'Jobs' contract slashOnExecutionTimeout with transaction manager: {:?}",
                         err
                     );
                 };
@@ -59,6 +62,6 @@ pub async fn send_transaction(
         }
     }
 
-    println!("Executor transaction sender channel stopped!");
+    debug!("Executor transaction sender channel stopped!");
     return;
 }

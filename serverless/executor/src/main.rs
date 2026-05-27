@@ -19,6 +19,8 @@ use serverless::server::{
     inject_mutable_config,
 };
 use tokio_vsock::VsockListener;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 // EXECUTOR CONFIGURATION PARAMETERS
 #[derive(Parser, Debug)]
@@ -40,6 +42,8 @@ struct Cli {
 #[tokio::main]
 // Program to run the executor
 async fn main() -> Result<()> {
+    setup_logging();
+
     let args = Cli::parse();
     let config_manager = ConfigManager::new(&args.config_file);
     let mut config = config_manager.load_config().unwrap();
@@ -58,6 +62,8 @@ async fn main() -> Result<()> {
             .as_slice(),
     ))
     .context("Invalid enclave signer key")?;
+
+    info!("Enclave address: {}", enclave_signer_key.address());
 
     // Validate the format of the http_rpc_url and web_socket_url
     let _ = config
@@ -111,7 +117,7 @@ async fn main() -> Result<()> {
         )
         .with_state(app_data);
 
-    println!("Node server started on port {:?}", args.vsock_addr);
+    info!("Node server started on port {:?}", args.vsock_addr);
 
     let server = axum::Server::builder(VsockServer {
         listener: VsockListener::bind(args.vsock_addr.0, args.vsock_addr.1)
@@ -122,4 +128,13 @@ async fn main() -> Result<()> {
     server.await.context("server exited with error")?;
 
     Ok(())
+}
+
+fn setup_logging() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 }
