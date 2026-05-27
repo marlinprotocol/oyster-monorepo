@@ -1,0 +1,26 @@
+node_modules
+vendor
+build
+slither.log
+.env
+*merged.sol
+temp
+.DS_Store
+accounts.json
+cache
+artifacts
+coverage
+coverage.json
+.openzeppelin/unknown-31337.json
+.openzeppelin/unknown-421611.json
+.openzeppelin/unknown-421613.json
+.openzeppelin/*-9876543210.json
+.gitsigners
+typechain-types/*
+*.log
+.vscode
+
+# Local Network
+addresses/31337.json
+
+.openzeppelin
