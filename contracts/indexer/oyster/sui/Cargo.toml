@@ -25,8 +25,8 @@ openssl = { version = "0.10", features = ["vendored"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sui_rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-rpc" }
-sui_sdk_types = { git = "https://github.com/mystenlabs/sui-rust-sdk/", package = "sui-sdk-types" }
+sui_rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk/", rev = "49345f1c", package = "sui-rpc" }
+sui_sdk_types = { git = "https://github.com/mystenlabs/sui-rust-sdk/", rev = "49345f1c", package = "sui-sdk-types" }
 tokio = { version = "1.40.0", features = ["full"] }
 tokio-retry = "0.3"
 tracing = "0.1.40"
