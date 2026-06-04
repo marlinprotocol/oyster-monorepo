@@ -2053,7 +2053,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9120690fafc389a67ba3803df527d0ec9cbbc9cc45e4cc20b332996dfb672425"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -2964,14 +2964,15 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sui-rpc"
-version = "0.2.1"
-source = "git+https://github.com/mystenlabs/sui-rust-sdk/#5a2f2d6bd5788d2c0f5644edbdcde23102f88663"
+version = "0.3.1"
+source = "git+https://github.com/mystenlabs/sui-rust-sdk/?rev=49345f1c#49345f1ca16cee967e8d045ad965e0a764d7e95b"
 dependencies = [
  "base64",
  "bcs",
  "bytes",
  "futures",
  "http",
+ "http-body",
  "prost",
  "prost-types",
  "serde",
@@ -2981,12 +2982,13 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost",
+ "tower",
 ]
 
 [[package]]
 name = "sui-sdk-types"
-version = "0.2.1"
-source = "git+https://github.com/mystenlabs/sui-rust-sdk/#5a2f2d6bd5788d2c0f5644edbdcde23102f88663"
+version = "0.3.1"
+source = "git+https://github.com/mystenlabs/sui-rust-sdk/?rev=49345f1c#49345f1ca16cee967e8d045ad965e0a764d7e95b"
 dependencies = [
  "base64ct",
  "bcs",
@@ -3312,9 +3314,9 @@ dependencies = [
 
 [[package]]
 name = "tower"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
+checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
 dependencies = [
  "futures-core",
  "futures-util",
