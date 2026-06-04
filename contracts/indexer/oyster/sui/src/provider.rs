@@ -333,27 +333,39 @@ async fn fetch_single_checkpoint(
 ) -> Result<(u64, Vec<SuiLog>)> {
     if prefer_http {
         // HTTP-first: better for bulk historical ingestion from CDN/object store
-        match fetch_checkpoint_http(seq_num, &http_client, remote_checkpoint_url, package_id).await
+        let http_err = match fetch_checkpoint_http(
+            seq_num,
+            &http_client,
+            remote_checkpoint_url,
+            package_id,
+        )
+        .await
         {
             Ok(result) => return Ok(result),
-            Err(_) => {
-                // Fallback to gRPC
-            }
-        }
+            Err(e) => e,
+        };
         fetch_checkpoint_grpc(seq_num, &grpc_client, package_id)
             .await
-            .context(format!("All methods failed for checkpoint {}", seq_num))
+            .with_context(|| {
+                format!(
+                    "All methods failed for checkpoint {} (HTTP error: {:#})",
+                    seq_num, http_err
+                )
+            })
     } else {
         // gRPC-first: lower latency, narrower field mask (only digest + events)
-        match fetch_checkpoint_grpc(seq_num, &grpc_client, package_id).await {
+        let grpc_err = match fetch_checkpoint_grpc(seq_num, &grpc_client, package_id).await {
             Ok(result) => return Ok(result),
-            Err(_) => {
-                // Fallback to HTTP
-            }
-        }
+            Err(e) => e,
+        };
         fetch_checkpoint_http(seq_num, &http_client, remote_checkpoint_url, package_id)
             .await
-            .context(format!("All methods failed for checkpoint {}", seq_num))
+            .with_context(|| {
+                format!(
+                    "All methods failed for checkpoint {} (gRPC error: {:#})",
+                    seq_num, grpc_err
+                )
+            })
     }
 }
 

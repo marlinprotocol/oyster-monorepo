@@ -217,6 +217,7 @@ mod tests {
                 revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
                 revise_rate_requests::value.eq(BigDecimal::from(200)),
                 revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+                revise_rate_requests::updates_at_epoch.eq(BigDecimal::from(original_timestamp + 600)),
             ))
             .execute(conn)
             .context("failed to create revise rate request")?;
@@ -379,6 +380,7 @@ mod tests {
                 revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
                 revise_rate_requests::value.eq(BigDecimal::from(0)),
                 revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+                revise_rate_requests::updates_at_epoch.eq(BigDecimal::from(original_timestamp + 600)),
             ))
             .execute(conn)
             .context("failed to create revise rate request")?;
@@ -507,6 +509,7 @@ mod tests {
                 revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
                 revise_rate_requests::value.eq(BigDecimal::from(0)),
                 revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+                revise_rate_requests::updates_at_epoch.eq(BigDecimal::from(original_timestamp + 600)),
             ))
             .execute(conn)
             .context("failed to create revise rate request")?;
@@ -643,6 +646,7 @@ mod tests {
                 revise_rate_requests::id.eq("0x00000000000000000000000000000001"),
                 revise_rate_requests::value.eq(BigDecimal::from(0)),
                 revise_rate_requests::updates_at.eq(&original_now.add(Duration::from_secs(600))),
+                revise_rate_requests::updates_at_epoch.eq(BigDecimal::from(original_timestamp + 600)),
             ))
             .execute(conn)
             .context("failed to create revise rate request")?;
