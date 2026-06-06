@@ -36,6 +36,7 @@ pub mod serverless_executor_test {
     use tokio::sync::mpsc::channel;
     use tokio::time::{sleep, Duration};
     use tokio_stream::StreamExt as _;
+    use tracing::error;
 
     use crate::cgroups::Cgroups;
     use crate::constant::{EXECUTION_ENV_ID, MAX_OUTPUT_BYTES_LENGTH};
@@ -2175,7 +2176,7 @@ pub mod serverless_executor_test {
 
         tokio::spawn(async move {
             if let Err(err) = server.await {
-                eprintln!("Server error: {}", err);
+                error!(%addr, "Server error with mock POST endpoint: {}", err);
             }
         });
 
@@ -2217,7 +2218,7 @@ pub mod serverless_executor_test {
 
         tokio::spawn(async move {
             if let Err(err) = server.await {
-                eprintln!("Server error: {}", err);
+                error!(%addr, "Server error with mock GET endpoint: {}", err);
             }
         });
 

@@ -10,13 +10,13 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use log::info;
 use multi_block_txns::TxnManager;
 use serde_json::json;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{atomic::Ordering, Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::info;
 
 use crate::contract_abi::GatewaysContract;
 use crate::model::{
@@ -1181,7 +1181,7 @@ mod api_impl_tests {
             .json(&json!({}))
             .await;
         resp.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
-        println!("{}", resp.text());
+        info!("{}", resp.text());
         assert!(resp.as_bytes().starts_with(
             "Failed to deserialize the JSON body into the target type: missing field `chain_ids`"
                 .as_bytes()

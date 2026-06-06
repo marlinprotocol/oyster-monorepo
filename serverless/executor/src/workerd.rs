@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tracing::{error, warn};
 
 use crate::cgroups::Cgroups;
 use crate::model::CodeContract::saveCodeInCallDataCall;
@@ -191,9 +192,10 @@ pub fn get_port(cgroup: &str) -> Result<u16, ServerlessError> {
     u16::from_str_radix(&cgroup[8..], 10)
         .map(|x| x + 11000)
         .map_err(|err| {
-            eprintln!(
-                "Failed to get the port number for cgroup {}: {:?}",
-                cgroup, err
+            error!(
+                %cgroup,
+                "Failed to get the port number: {:?}",
+                err
             );
             ServerlessError::BadPort(err)
         })
@@ -214,8 +216,10 @@ pub async fn execute(
     ];
 
     Ok(Cgroups::execute(cgroup, args).map_err(|err| {
-        eprintln!(
-            "Failed to execute cgroups or the workerd service: {:?}",
+        error!(
+            %cgroup,
+            ?args,
+            "Failed to run 'cgexec': {:?}",
             err
         );
         ServerlessError::Execute
@@ -241,42 +245,35 @@ pub async fn cleanup_code_file(
     slug: &str,
     workerd_runtime_path: &str,
 ) -> Result<(), ServerlessError> {
+    let file_path = workerd_runtime_path.to_owned() + "/" + tx_hash + "-" + slug + ".js";
+
     Retry::spawn(
         ExponentialBackoff::from_millis(5).map(jitter).take(3),
-        || async {
-            tokio::fs::remove_file(
-                workerd_runtime_path.to_owned() + "/" + tx_hash + "-" + slug + ".js",
-            )
-            .await
-        },
+        || async { tokio::fs::remove_file(&file_path).await },
     )
     .await
     .map_err(|err| {
-        eprintln!("Failed to clean up the code file: {:?}", err);
+        warn!(%file_path, "Failed to clean up the code file: {:?}", err);
         ServerlessError::CodeFileDelete(err)
     })?;
 
     Ok(())
 }
 
-// Cleanup the config file
+// Cleanup the config fi le
 pub async fn cleanup_config_file(
     tx_hash: &str,
     slug: &str,
     workerd_runtime_path: &str,
 ) -> Result<(), ServerlessError> {
+    let file_path = workerd_runtime_path.to_owned() + "/" + tx_hash + "-" + slug + ".capnp";
     Retry::spawn(
         ExponentialBackoff::from_millis(5).map(jitter).take(3),
-        || async {
-            tokio::fs::remove_file(
-                workerd_runtime_path.to_owned() + "/" + tx_hash + "-" + slug + ".capnp",
-            )
-            .await
-        },
+        || async { tokio::fs::remove_file(&file_path).await },
     )
     .await
     .map_err(|err| {
-        eprintln!("Failed to clean up the config file: {:?}", err);
+        warn!(%file_path, "Failed to clean up the code config file: {:?}", err);
         ServerlessError::ConfigFileDelete(err)
     })?;
 
@@ -292,7 +289,10 @@ pub async fn get_workerd_response(port: u16, inputs: Vec<u8>) -> Result<Vec<u8>,
         .redirect(Policy::none())
         .build()
         .map_err(|err| {
-            eprintln!("Failed to build the reqwest client: {:?}", err);
+            error!(
+                "Failed to build the reqwest client to retrieve code execution response: {:?}",
+                err
+            );
             ServerlessError::WorkerRequestError(err)
         })?;
 
@@ -324,7 +324,8 @@ async fn get_transaction_data(tx_hash: &str, rpc: &str) -> Result<Value, reqwest
         .send()
         .await
         .map_err(|err| {
-            eprintln!(
+            warn!(
+                transaction_hash = %tx_hash,
                 "Failed to send the request to retrieve code transaction data: {:?}",
                 err
             );
@@ -332,7 +333,8 @@ async fn get_transaction_data(tx_hash: &str, rpc: &str) -> Result<Value, reqwest
         })?;
 
     let json_response = response.json::<Value>().await.map_err(|err| {
-        eprintln!(
+        warn!(
+            transaction_hash = %tx_hash,
             "Failed to parse the response for the code transaction data: {:?}",
             err
         );
@@ -345,12 +347,12 @@ async fn get_transaction_data(tx_hash: &str, rpc: &str) -> Result<Value, reqwest
 // Create and write data to a file location asynchronously
 async fn create_and_populate_file(path: String, data: &[u8]) -> Result<(), tokio::io::Error> {
     let mut file = File::create(&path).await.map_err(|err| {
-        eprintln!("Failed to create the file at path {}: {:?}", path, err);
+        warn!(%path, "Failed to create the file: {:?}", err);
         err
     })?;
 
     file.write_all(data).await.map_err(|err| {
-        eprintln!("Failed to write to the file at path {}: {:?}", path, err);
+        warn!(%path, "Failed to write to the file: {:?}", err);
         err
     })?;
 
@@ -369,7 +371,7 @@ async fn client_call(
         .send()
         .await
         .map_err(|err| {
-            eprintln!("Failed to send request to the workerd port: {:?}", err);
+            warn!(workerd_server = %req_url, "Failed to send request: {:?}", err);
             err
         })?;
 
@@ -377,7 +379,7 @@ async fn client_call(
         .bytes()
         .await
         .map_err(|err| {
-            eprintln!("Failed to parse response from the worker: {:?}", err);
+            warn!(workerd_server = %req_url, "Failed to parse response: {:?}", err);
             err
         })?
         .to_vec())
