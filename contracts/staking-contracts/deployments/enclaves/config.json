@@ -1,0 +1,42 @@
+{
+  "137": {
+    "enclaves": {
+      "whitelistedImages": [
+        {
+          "PCR": {
+            "PCR0": "17bf8f048519797be90497001a7559a3d555395937117d76f8baaedf56ca6d97952de79479bc0c76e5d176d20f663790",
+            "PCR1": "5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16",
+            "PCR2": "249037310daa90f4eb0703e7b105a241fdb09f12d3c40b7aea2f39e57b07b887e6ff4e4f9757943e127e391626b5e4d5"
+          },
+          "enclaveKey": "0x54Be6e215F194645AFF49B348f303a7810881De9"
+        }
+      ],
+      "paymentToken": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+      "lockWaitTimes": [{
+        "selector": "0xbb00c34f1a27e23493f1bd516e88ec0af9b091cc990f207e765f5bd5af012243",
+        "time": 300
+      }]
+    },
+    "admin": "0x31CeB460C8085CD5324e90966ea718Ed7CBc09c6"
+  },
+  "421614": {
+    "enclaves": {
+      "whitelistedImages": [
+        {
+          "PCR": {
+            "PCR0": "cbc96d11393fc4c7209f0e802f73dfd4cc7620f38c6c05884e13f41852f2a7fdbe516e351632dc16eb6e26b55b2593eb",
+            "PCR1": "5d3938eb05288e20a981038b1861062ff4174884968a39aee5982b312894e60561883576cc7381d1a7d05b809936bd16",
+            "PCR2": "d58c90473be606c14b940bcea5694ac765a914a08038f216e485b5339cb609706f80838771d93b47c7944643097bef09"
+          },
+          "enclaveKey": "0x62f3392bcbc10f5ec56355d616eb598e5c5ca782"
+        }
+      ],
+      "paymentToken": "Pond",
+      "lockWaitTimes": [{
+        "selector": "0xbb00c34f1a27e23493f1bd516e88ec0af9b091cc990f207e765f5bd5af012243",
+        "time": 300
+      }]
+    },
+    "admin": "0xd7E109d2219b5b5b90656FB8B33F2ba679b22062"
+  }
+}
