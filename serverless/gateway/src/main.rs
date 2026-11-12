@@ -102,6 +102,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         epoch: config.epoch,
         time_interval: config.time_interval,
         offset_for_epoch: config.offset_for_epoch,
+        gateways_start_block: config.gateways_start_block,
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         immutable_params_injected: Arc::new(Mutex::new(false)),
         mutable_params_injected: Arc::new(AtomicBool::new(false)),

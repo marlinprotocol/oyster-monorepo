@@ -17,7 +17,8 @@ use crate::chain_util::get_block_number_by_timestamp;
 use crate::constant::{
     COMMON_CHAIN_GATEWAY_CHAIN_ADDED_EVENT, COMMON_CHAIN_GATEWAY_CHAIN_REMOVED_EVENT,
     COMMON_CHAIN_GATEWAY_DEREGISTERED_EVENT, COMMON_CHAIN_GATEWAY_REGISTERED_EVENT,
-    GATEWAY_BLOCK_STATES_TO_MAINTAIN, MAX_RETRY_ON_PROVIDER_ERROR, WAIT_BEFORE_HTTP_RPC_CALL,
+    GATEWAY_BLOCK_STATES_TO_MAINTAIN, LOGS_BLOCK_RANGE, MAX_RETRY_ON_PROVIDER_ERROR,
+    WAIT_BEFORE_HTTP_RPC_CALL,
 };
 use crate::contract_abi::GatewaysContract::{self, GatewaysContractInstance};
 use crate::model::{ContractsClient, GatewayData, Job};
@@ -74,6 +75,7 @@ pub async fn gateway_epoch_state_service(
                 cycle_number,
                 contracts_client.epoch,
                 contracts_client.time_interval,
+                contracts_client.gateways_start_block,
             )
             .await;
 
@@ -133,6 +135,7 @@ pub async fn gateway_epoch_state_service(
                 cycle_number,
                 contracts_client.epoch,
                 contracts_client.time_interval,
+                contracts_client.gateways_start_block,
             )
             .await;
 
@@ -181,11 +184,12 @@ pub async fn generate_gateway_epoch_state_for_cycle(
     cycle_number: u64,
     epoch: u64,
     time_interval: u64,
+    start_block: u64,
 ) -> Result<(), Error> {
     // last added cycle will be the cycle number which is less than the current cycle number
     let mut last_added_cycle: Option<u64> = None;
     let mut added_cycles: Vec<u64>;
-    let mut from_block_number: u64 = 0;
+    let mut from_block_number: u64 = start_block;
     // scope for the read lock
     {
         let gateway_epoch_state_guard = gateway_epoch_state.read().unwrap();
@@ -275,29 +279,36 @@ pub async fn generate_gateway_epoch_state_for_cycle(
             COMMON_CHAIN_GATEWAY_CHAIN_REMOVED_EVENT,
         ]);
 
-    let logs;
+    // fetch the logs in chunks since RPCs limit the block range of a single query
+    let mut logs = Vec::new();
     let time_to_wait =
         Instant::now() + Duration::from_secs(time_interval * GATEWAY_BLOCK_STATES_TO_MAINTAIN);
-    loop {
-        if Instant::now() > time_to_wait {
-            return Err(anyhow::anyhow!(
-                "Failed to get logs for the gateway contract"
-            ));
+    let mut chunk_from = from_block_number;
+    while chunk_from <= to_block_number {
+        let chunk_to = std::cmp::min(chunk_from + LOGS_BLOCK_RANGE - 1, to_block_number);
+        let chunk_filter = event_filter.clone().from_block(chunk_from).to_block(chunk_to);
+        loop {
+            if Instant::now() > time_to_wait {
+                return Err(anyhow::anyhow!(
+                    "Failed to get logs for the gateway contract"
+                ));
+            }
+
+            let res = provider.get_logs(&chunk_filter).await;
+
+            if res.is_err() {
+                error!(
+                    "Failed to get logs for the gateway contract - Error: {:?}",
+                    res.err().unwrap()
+                );
+                sleep(Duration::from_millis(WAIT_BEFORE_HTTP_RPC_CALL)).await;
+                continue;
+            }
+
+            logs.extend(res.unwrap());
+            break;
         }
-
-        let res = provider.get_logs(&event_filter).await;
-
-        if res.is_err() {
-            error!(
-                "Failed to get logs for the gateway contract - Error: {:?}",
-                res.err().unwrap()
-            );
-            sleep(Duration::from_millis(WAIT_BEFORE_HTTP_RPC_CALL)).await;
-            continue;
-        }
-
-        logs = res.unwrap();
-        break;
+        chunk_from = chunk_to + 1;
     }
 
     for log in logs {

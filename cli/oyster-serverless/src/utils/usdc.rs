@@ -27,12 +27,21 @@ pub async fn approve_usdc(
         .parse()
         .context("Failed to parse USDC address")?;
 
-    let usdc = USDC::new(usdc_address, provider);
+    let usdc = USDC::new(usdc_address, &provider);
 
-    info!("USDC increase allowance transaction in progress...");
+    // Add to the current allowance using approve, which every ERC20 token supports
+    let owner = provider.default_signer_address();
+    let current = usdc
+        .allowance(owner, spender)
+        .call()
+        .await
+        .context("Failed to get the current USDC allowance")?
+        ._0;
+
+    info!("USDC approval transaction in progress...");
 
     let tx_hash = usdc
-        .increaseAllowance(spender, amount)
+        .approve(spender, current + amount)
         .send()
         .await
         .context("Failed to send USDC approval transaction")?

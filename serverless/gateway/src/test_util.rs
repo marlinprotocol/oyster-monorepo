@@ -108,6 +108,7 @@ pub async fn generate_app_state() -> AppState {
         epoch: EPOCH,
         time_interval: TIME_INTERVAL,
         offset_for_epoch: OFFSET_FOR_EPCOH,
+        gateways_start_block: 0,
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         immutable_params_injected: Arc::new(Mutex::new(false)),
         mutable_params_injected: Arc::new(AtomicBool::new(false)),

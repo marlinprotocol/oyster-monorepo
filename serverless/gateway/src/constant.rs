@@ -44,3 +44,6 @@ pub const COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT: &str =
 
 pub const COMMON_CHAIN_TXN_CALL_TIMEOUT: u64 = 60;
 pub const REQUEST_CHAIN_TXN_CALL_TIMEOUT: u64 = 60;
+
+// maximum block range of a single eth_getLogs query
+pub const LOGS_BLOCK_RANGE: u64 = 50000;
