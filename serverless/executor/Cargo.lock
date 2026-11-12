@@ -2967,7 +2967,7 @@ dependencies = [
 [[package]]
 name = "http-on-vsock-server"
 version = "0.1.0"
-source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#da86c271cb99abec6d8ee877b50c2f5bf1139358"
+source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#39aaa5c65b57899b95f5cb114cc7cc2bac58b6a4"
 dependencies = [
  "clap",
  "hyper 0.14.32",
@@ -3588,6 +3588,7 @@ dependencies = [
 [[package]]
 name = "multi-block-txns"
 version = "0.1.0"
+source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#39aaa5c65b57899b95f5cb114cc7cc2bac58b6a4"
 dependencies = [
  "alloy 0.6.4",
  "thiserror 1.0.69",
@@ -4233,7 +4234,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

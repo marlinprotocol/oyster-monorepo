@@ -24,7 +24,7 @@ clap = { version = "4.4.7", features = ["derive"] }
 config = "0.14.0"
 http-on-vsock-server = { git = "https://github.com/marlinprotocol/oyster-monorepo.git", branch = "master" }
 hyper = { version = "0.14.28", features = ["full"] }
-multi-block-txns = { version = "0.1.0", path = "../transaction-manager" }
+multi-block-txns = { git = "https://github.com/marlinprotocol/oyster-monorepo", branch = "master" }
 openssl = { version = "0.10", features = ["vendored"] }
 rand = "0.8.5"
 reqwest = { version = "0.12.2", features = ["json"] }
