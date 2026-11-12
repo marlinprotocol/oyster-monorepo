@@ -17,47 +17,13 @@ import {
 import { takeSnapshotBeforeAndAfterEveryTest } from "../../../utils/testSuite";
 import { testERC165 } from '../../helpers/erc165';
 
-const image1: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image2: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image3: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image4: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image5: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image6: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image7: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
+const image1: string = ethers.hexlify(ethers.randomBytes(32));
+const image2: string = ethers.hexlify(ethers.randomBytes(32));
+const image3: string = ethers.hexlify(ethers.randomBytes(32));
+const image4: string = ethers.hexlify(ethers.randomBytes(32));
+const image5: string = ethers.hexlify(ethers.randomBytes(32));
+const image6: string = ethers.hexlify(ethers.randomBytes(32));
+const image7: string = ethers.hexlify(ethers.randomBytes(32));
 
 describe("Jobs - Init", function () {
     let signers: Signer[];
@@ -1989,14 +1955,6 @@ function normalize(key: string): string {
     return '0x' + key.substring(4);
 }
 
-type Attestation = {
-    enclavePubKey: string,
-    PCR0: BytesLike,
-    PCR1: BytesLike,
-    PCR2: BytesLike,
-    timestampInMilliseconds: number,
-}
-
 async function registerTeeNodeSignature(
     owner: string,
     jobCapacity: number,
@@ -2058,11 +2016,19 @@ async function createAcknowledgeSignature(
     return ethers.Signature.from(sign).serialized;
 }
 
+type Attestation = {
+    imageId: BytesLike,
+    timestampMs: number,
+    publicKey: string,
+    userData: BytesLike,
+}
+
 async function createAttestation(
     enclaveKey: string,
-    image: AttestationVerifier.EnclaveImageStruct,
+    image: string,
     sourceEnclaveKey: Wallet,
     timestamp: number,
+    userData: BytesLike = "0x",
 ): Promise<[string, Attestation]> {
     const domain = {
         name: 'marlin.oyster.AttestationVerifier',
@@ -2071,28 +2037,21 @@ async function createAttestation(
 
     const types = {
         Attestation: [
-            { name: 'enclavePubKey', type: 'bytes' },
-            { name: 'PCR0', type: 'bytes' },
-            { name: 'PCR1', type: 'bytes' },
-            { name: 'PCR2', type: 'bytes' },
-            { name: 'timestampInMilliseconds', type: 'uint256' },
+            { name: 'imageId', type: 'bytes32' },
+            { name: 'timestampMs', type: 'uint64' },
+            { name: 'publicKey', type: 'bytes' },
+            { name: 'userData', type: 'bytes' },
         ]
     }
 
-    const sign = await sourceEnclaveKey.signTypedData(domain, types, {
-        enclavePubKey: enclaveKey,
-        PCR0: image.PCR0,
-        PCR1: image.PCR1,
-        PCR2: image.PCR2,
-        timestampInMilliseconds: timestamp,
-    });
-    return [ethers.Signature.from(sign).serialized, {
-        enclavePubKey: enclaveKey,
-        PCR0: image.PCR0,
-        PCR1: image.PCR1,
-        PCR2: image.PCR2,
-        timestampInMilliseconds: timestamp,
-    }];
+    const attestation: Attestation = {
+        imageId: image,
+        timestampMs: timestamp,
+        publicKey: enclaveKey,
+        userData: userData,
+    };
+    const sign = await sourceEnclaveKey.signTypedData(domain, types, attestation);
+    return [ethers.Signature.from(sign).serialized, attestation];
 }
 
 async function createExecutorSignature(

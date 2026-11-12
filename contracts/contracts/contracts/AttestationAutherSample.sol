@@ -35,14 +35,14 @@ contract AttestationAutherSample is
 
     error AttestationAutherSampleNoImageProvided();
 
-    function initialize(EnclaveImage[] memory images) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function initialize(bytes32[] memory images) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (!(images.length != 0)) revert AttestationAutherSampleNoImageProvided();
 
         __AttestationAuther_constructor(images);
     }
 
     function initializeWithFamilies(
-        EnclaveImage[] memory images,
+        bytes32[] memory images,
         bytes32[] memory families
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (!(images.length != 0)) revert AttestationAutherSampleNoImageProvided();
@@ -54,12 +54,8 @@ contract AttestationAutherSample is
 
     //-------------------------------- Admin methods start --------------------------------//
 
-    function whitelistEnclaveImage(
-        bytes memory PCR0,
-        bytes memory PCR1,
-        bytes memory PCR2
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bytes32, bool) {
-        return _whitelistEnclaveImage(EnclaveImage(PCR0, PCR1, PCR2));
+    function whitelistEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        return _whitelistEnclaveImage(imageId);
     }
 
     function revokeEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {

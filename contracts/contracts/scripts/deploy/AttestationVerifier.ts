@@ -32,26 +32,19 @@ export async function deploy(): Promise<Contract> {
     return AttestationVerifier.attach(addresses[chainId]['AttestationVerifier']);
   }
 
+  // Image ids are computed off-chain by the attestation verifier enclave (they cover PCR0, PCR1, PCR2 and PCR16)
+  // and cannot be derived from PCRs here, so the config carries the image id directly.
   let enclaveImages = [];
   for (let i = 0; i < chainConfig.enclaves.whitelistedImages.length; i++) {
-    if (chainConfig.enclaves.whitelistedImages[i].PCR === undefined) {
-      throw new Error(`Image ${i}: PCR not defined for image`);
+    const imageId: string | undefined = chainConfig.enclaves.whitelistedImages[i].imageId;
+    if (imageId === undefined || imageId === "") {
+      throw new Error(`Image ${i}: imageId not defined for image`);
     }
-    if (chainConfig.enclaves.whitelistedImages[i].PCR.PCR0.length !== 96) {
-      throw new Error(`Image ${i}: PCR0 length is not 96`);
+    const imageIdHex = imageId.startsWith("0x") ? imageId.substring(2) : imageId;
+    if (!/^[0-9a-fA-F]{64}$/.test(imageIdHex)) {
+      throw new Error(`Image ${i}: imageId is not 32 bytes of hex`);
     }
-    if (chainConfig.enclaves.whitelistedImages[i].PCR.PCR1.length !== 96) {
-      throw new Error(`Image ${i}: PCR1 length is not 96`);
-    }
-    if (chainConfig.enclaves.whitelistedImages[i].PCR.PCR2.length !== 96) {
-      throw new Error(`Image ${i}: PCR2 length is not 96`);
-    }
-    const image = {
-      PCR0: "0x" + chainConfig.enclaves.whitelistedImages[i].PCR.PCR0,
-      PCR1: "0x" + chainConfig.enclaves.whitelistedImages[i].PCR.PCR1,
-      PCR2: "0x" + chainConfig.enclaves.whitelistedImages[i].PCR.PCR2,
-    };
-    enclaveImages.push(image);
+    enclaveImages.push("0x" + imageIdHex);
   }
 
   let enclaveKeys = [];

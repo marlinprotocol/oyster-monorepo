@@ -88,7 +88,7 @@ contract Gateways is
      * @param _admin The address to be granted the DEFAULT_ADMIN_ROLE.
      * @param _images The initial enclave images to be whitelisted.
      */
-    function initialize(address _admin, EnclaveImage[] memory _images) public initializer {
+    function initialize(address _admin, bytes32[] memory _images) public initializer {
         if (_admin == address(0)) revert GatewaysZeroAddressAdmin();
 
         __Context_init_unchained();
@@ -284,20 +284,13 @@ contract Gateways is
     }
 
     /**
-     * @notice Whitelists an enclave image by adding its PCR values.
+     * @notice Whitelists an enclave image by its image id.
      * @dev Can only be called by an account with the DEFAULT_ADMIN_ROLE.
-     * @param PCR0 The first PCR value of the enclave image.
-     * @param PCR1 The second PCR value of the enclave image.
-     * @param PCR2 The third PCR value of the enclave image.
-     * @return bytes32 The unique identifier (hash) of the whitelisted enclave image.
-     * @return bool Whether the whitelisting was successful.
+     * @param imageId The id of the enclave image, as computed by the attestation verifier enclave.
+     * @return true if the image was freshly whitelisted, false otherwise.
      */
-    function whitelistEnclaveImage(
-        bytes memory PCR0,
-        bytes memory PCR1,
-        bytes memory PCR2
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bytes32, bool) {
-        return _whitelistEnclaveImage(EnclaveImage(PCR0, PCR1, PCR2));
+    function whitelistEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        return _whitelistEnclaveImage(imageId);
     }
 
     /**
@@ -348,7 +341,7 @@ contract Gateways is
         // attestation verification
         _verifyEnclaveKey(_attestationSignature, _attestation);
 
-        address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
+        address enclaveAddress = _pubKeyToAddress(_attestation.publicKey);
         // signature check
         _verifyRegisterSign(_owner, _chainIds, _signTimestamp, _signature, enclaveAddress);
 
