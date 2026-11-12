@@ -18,10 +18,6 @@ struct Cli {
     #[clap(short, long, value_parser)]
     executor_gas_key: String,
 
-    /// secret store gas key
-    #[clap(short, long, value_parser)]
-    store_gas_key: String,
-
     /// ws api key
     #[clap(short, long, value_parser)]
     ws_api_key: String,
@@ -38,8 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Err(err) = client.get(cli.url.clone().try_into()?).await {
         if err.is_connect() {
-            println!("{:?}", err);
-            println!("Connection refused, retrying...");
+            eprintln!("{:?}", err);
+            eprintln!("Connection refused, retrying...");
             // sleep for 1 second
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
@@ -56,8 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .header("Content-Type", "application/json")
         .body(Body::from(body))?;
     let mut resp = client.request(request).await?;
-    println!("{:?}", resp);
-    println!(
+    eprintln!("{:?}", resp);
+    eprintln!(
         "{:?}",
         String::from_utf8(hyper::body::to_bytes(resp.into_body()).await?.to_vec())?
     );
@@ -65,7 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set mutable config
     let body = json!({
         "executor_gas_key": cli.executor_gas_key.clone(),
-        "secret_store_gas_key": cli.store_gas_key.clone(),
         "ws_api_key": cli.ws_api_key.clone(),
     })
     .to_string();
@@ -73,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .header("Content-Type", "application/json")
         .body(Body::from(body))?;
     resp = client.request(request).await?;
-    println!("{:?}", resp);
-    println!(
+    eprintln!("{:?}", resp);
+    eprintln!(
         "{:?}",
         String::from_utf8(hyper::body::to_bytes(resp.into_body()).await?.to_vec())?
     );
@@ -86,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let body_str = String::from_utf8(body_bytes.to_vec())?;
     let json: serde_json::Value = serde_json::from_str(&body_str)?;
-    println!("{:?}", json);
+    eprintln!("{:?}", json);
 
     // Start the executor
     resp = client
@@ -95,7 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let body_str = String::from_utf8(body_bytes.to_vec())?;
     let json: serde_json::Value = serde_json::from_str(&body_str)?;
-    println!("{:?}", json);
+    // print the signed registration message as json on stdout
+    println!("{}", json);
 
     Ok(())
 }
