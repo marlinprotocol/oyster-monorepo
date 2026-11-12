@@ -8,7 +8,6 @@
   tcp-proxy,
   attestation-server,
   executor,
-  secret-store,
   kernels,
   workerd,
 }: let
@@ -23,7 +22,6 @@
   attestationServer = "${attestation-server}/bin/oyster-attestation-server";
   keygenSecp256k1 = "${keygen}/bin/keygen-secp256k1";
   executor' = "${executor}/bin/oyster-serverless-executor";
-  secretStore' = "${secret-store}/bin/oyster-secret-store";
   kernel = kernels.kernel;
   kernelConfig = kernels.kernelConfig;
   nsmKo = kernels.nsmKo;
@@ -32,7 +30,6 @@
   supervisorConf = ./. + "/supervisord.conf";
   cgroupSetup = ./. + "/cgroupv2_setup.sh";
   execConf = ./. + "/oyster_serverless_executor_config.json";
-  secretStoreConf = ./. + "/oyster_secret_store_config.json";
   app = pkgs.runCommand "app" {nativeBuildInputs = [pkgs.gcc];} ''
     echo Preparing the app folder
     pwd
@@ -46,7 +43,6 @@
     cp ${dnsproxy'} $out/app/dnsproxy
     cp ${keygenSecp256k1} $out/app/keygen-secp256k1
     cp ${executor'} $out/app/oyster-serverless-executor
-    cp ${secretStore'} $out/app/oyster-secret-store
     cp ${setup} $out/app/setup.sh
     cp ${cgroupSetup} $out/app/cgroupv2_setup.sh
     cp ${workerd} $out/app/workerd
@@ -55,7 +51,6 @@
     patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" $out/app/workerd
     cp ${supervisorConf} $out/etc/supervisord.conf
     cp ${execConf} $out/etc/oyster_serverless_executor_config.json
-    cp ${secretStoreConf} $out/etc/oyster_secret_store_config.json
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
