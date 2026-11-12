@@ -1,5 +1,5 @@
 use crate::args::wallet::WalletArgs;
-use crate::configs::global::OYSTER_SERVERLESS_CODE_CONTRACT_ADDRESS;
+use crate::configs::global::code_contract_address;
 use crate::utils::provider::create_provider;
 use alloy::sol;
 use anyhow::{Context, Result};
@@ -81,7 +81,7 @@ pub async fn run_deploy(args: DeployArgs) -> Result<()> {
     // Get contract address (use default if not specified)
     let contract_address = match args.contract_address {
         Some(addr) => addr.parse()?,
-        None => OYSTER_SERVERLESS_CODE_CONTRACT_ADDRESS.parse()?,
+        None => code_contract_address().parse()?,
     };
     info!("Using contract address: {}", contract_address);
 
@@ -99,7 +99,7 @@ pub async fn run_deploy(args: DeployArgs) -> Result<()> {
     let receipt = tx.get_receipt().await?;
 
     info!(
-        "Transaction sent to arbitrum one: {:?}",
+        "Transaction sent: {:?}",
         receipt.transaction_hash
     );
 

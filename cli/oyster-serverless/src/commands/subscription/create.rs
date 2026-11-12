@@ -5,7 +5,7 @@ use crate::commands::subscription::utils::{
     get_periodic_gap, get_start_timestamp, get_termination_timestamp,
 };
 use crate::configs::global::{
-    RELAY_CONTRACT_ADDRESS, RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS, USDC_ADDRESS,
+    relay_contract_address, relay_subscriptions_contract_address, usdc_address,
 };
 use crate::utils::conversion::{to_eth, to_usdc};
 use crate::utils::provider::create_provider;
@@ -50,12 +50,12 @@ pub async fn create_subscription(args: CreateSubscriptionArgs) -> Result<()> {
     let callback_contract: Address = args.callback_contract_address.parse()?;
 
     // Parse addresses
-    let relay_subscription_contract_address = RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS
+    let relay_subscription_contract_address = relay_subscriptions_contract_address()
         .parse()
         .context("Failed to parse relay subscriptions contract address")?;
 
     // Parse addresses
-    let relay_contract_address = RELAY_CONTRACT_ADDRESS
+    let relay_contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
 
@@ -158,7 +158,7 @@ pub async fn create_subscription(args: CreateSubscriptionArgs) -> Result<()> {
     }
 
     // Check USDC balance
-    let usdc_contract = USDC::new(USDC_ADDRESS.parse()?, &provider);
+    let usdc_contract = USDC::new(usdc_address().parse()?, &provider);
     let usdc_balance = usdc_contract.balanceOf(signer_address).call().await?._0;
 
     let usdc_required =

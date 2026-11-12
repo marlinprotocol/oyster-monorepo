@@ -1,4 +1,4 @@
-use crate::configs::global::USDC_ADDRESS;
+use crate::configs::global::usdc_address;
 use alloy::{
     network::Ethereum,
     primitives::{Address, U256},
@@ -23,7 +23,7 @@ pub async fn approve_usdc(
     provider: impl Provider<Http<Client>, Ethereum> + WalletProvider,
     spender: Address,
 ) -> Result<()> {
-    let usdc_address: Address = USDC_ADDRESS
+    let usdc_address: Address = usdc_address()
         .parse()
         .context("Failed to parse USDC address")?;
 
