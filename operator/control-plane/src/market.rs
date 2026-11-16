@@ -753,9 +753,15 @@ impl<'a> JobState<'a> {
         if self.rate == U256::ZERO {
             Duration::from_secs(0)
         } else {
+            // while a rate revision is pending, rate is the requested rate and original_rate
+            // is the one the contract keeps charging till the revision is finalized
+            // use the higher of the two so a pending revision to a lower rate does not
+            // make the balance look like it lasts longer than it does
+            let rate = self.rate.max(self.original_rate);
+
             // solvent for balance / rate seconds from last_settled with 300s as margin
             Duration::from_secs(
-                (self.balance * U256::from(10).pow(U256::from(extra_decimals)) / self.rate)
+                (self.balance * U256::from(10).pow(U256::from(extra_decimals)) / rate)
                     .saturating_to::<u64>()
                     .saturating_sub(300),
             )
@@ -1099,6 +1105,25 @@ impl<'a> JobState<'a> {
                     return JobResult::Internal;
                 }
                 self.original_rate = event.new_rate;
+
+                // the new rate is what is paid from here on, bandwidth has to follow it
+                let bandwidth = compute_bandwidth(self.rate, self.min_rate, &self.region, gb_rates);
+                if bandwidth != self.bandwidth {
+                    info!(
+                        id = event.job_id,
+                        old = self.bandwidth,
+                        new = bandwidth,
+                        "Bandwidth changed with rate"
+                    );
+                    self.bandwidth = bandwidth;
+
+                    // apply on the running instance, a launch which is already scheduled
+                    // picks it up by itself
+                    if !self.infra_change_scheduled {
+                        self.schedule_launch(0);
+                    }
+                }
+
                 info!(
                     id = event.job_id,
                     self.original_rate = self.original_rate.to_string(),
@@ -1862,7 +1887,8 @@ mod tests {
                     region: "ap-south-1".into(),
                     req_mem: 4096,
                     req_vcpu: 2,
-                    bandwidth: 76,
+                    // from the rate finalized before the launch
+                    bandwidth: 153,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
                     init_params: [].into(),
@@ -2346,6 +2372,133 @@ mod tests {
                 }),
                 TestAwsOutcome::SpinDown(test::SpinDownOutcome {
                     time: start_time + Duration::from_secs(350),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // the bandwidth limit follows the rate once a revision is finalized
+    #[tokio::test(start_paused = true)]
+    async fn test_revise_rate_finalized_updates_bandwidth() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),32000000000000u64,31000u64,0)),
+            (350, Action::ReviseRateInitiated(31000000000000u64)),
+            (400, Action::ReviseRateFinalized(31000000000000u64)),
+            (450, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 153,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                // nothing changes while the revision is pending
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(450),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // the contract charges the old rate till a revision is finalized
+    #[tokio::test(start_paused = true)]
+    async fn test_pending_lower_rate_does_not_extend_solvency() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // funds last 1000s at the old rate, 1033s at the new one
+            (400, Action::ReviseRateInitiated(30000000000000u64)),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                // 1000s at the old rate, less the 300s margin
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(700),
                     job: job_id,
                     region: "ap-south-1".into(),
                 }),
