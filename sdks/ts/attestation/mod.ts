@@ -73,15 +73,21 @@ export async function verify(
   }
 
   // check age if exists
+  // the timestamp has to be within max age of the current timestamp on either side
+  // some room is needed for clocks that do not agree, a timestamp that is
+  // further ahead than that is not something to accept as fresh
   if (expectations.age) {
     const { maxAge, currentTimestamp } = expectations.age;
-    if (
-      result.timestamp <= currentTimestamp &&
-      currentTimestamp - result.timestamp > maxAge
-    ) {
+    if (currentTimestamp - result.timestamp > maxAge) {
       throw new AttestationError(
         "VerifyFailed",
         "too old",
+      );
+    }
+    if (result.timestamp - currentTimestamp > maxAge) {
+      throw new AttestationError(
+        "VerifyFailed",
+        "timestamp too far in the future",
       );
     }
   }

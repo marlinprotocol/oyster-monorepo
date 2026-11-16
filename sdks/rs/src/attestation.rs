@@ -82,9 +82,18 @@ pub fn verify(
     }
 
     // check age if exists
+    // the timestamp has to be within max age of the current timestamp on either side
+    // some room is needed for clocks that do not agree, a timestamp that is
+    // further ahead than that is not something to accept as fresh
     if let Some((max_age, current_ts)) = expectations.age_ms {
-        if result.timestamp_ms <= current_ts && current_ts - result.timestamp_ms > max_age {
-            return Err(AttestationError::VerifyFailed("too old".into()));
+        if result.timestamp_ms <= current_ts {
+            if current_ts - result.timestamp_ms > max_age {
+                return Err(AttestationError::VerifyFailed("too old".into()));
+            }
+        } else if result.timestamp_ms - current_ts > max_age {
+            return Err(AttestationError::VerifyFailed(
+                "timestamp too far in the future".into(),
+            ));
         }
     }
 
@@ -293,17 +302,17 @@ fn verify_cert_chain(
             .verify(&pubkey)
             .map_err(|e| AttestationError::ParseFailed(format!("signature {i}: {e}")))?
         {
-            return Err(AttestationError::VerifyFailed("signature {i}".into()));
+            return Err(AttestationError::VerifyFailed(format!("signature {i}")));
         }
         if certs[i + 1].issued(&certs[i]) != X509VerifyResult::OK {
-            return Err(AttestationError::VerifyFailed(
-                "issuer or subject {i}".into(),
-            ));
+            return Err(AttestationError::VerifyFailed(format!(
+                "issuer or subject {i}"
+            )));
         }
         let current_time = Asn1Time::from_unix(timestamp as i64 / 1000)
             .map_err(|e| AttestationError::ParseFailed(e.to_string()))?;
         if certs[i].not_after() < current_time || certs[i].not_before() > current_time {
-            return Err(AttestationError::VerifyFailed("timestamp {i}".into()));
+            return Err(AttestationError::VerifyFailed(format!("timestamp {i}")));
         }
     }
 
@@ -506,6 +515,44 @@ mod tests {
         assert_eq!(
             decoded.image_id,
             hex!("a6b0824d3c47f51542b3a18e6245c408490bef88ddc8d5e1bf8b95ec7eba1602")
+        );
+    }
+
+    #[test]
+    fn test_age() {
+        let attestation =
+            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws.bin")
+                .unwrap();
+        let timestamp = 0x00000193bef3f3b0u64;
+        let check = |max_age, current_ts| {
+            verify(
+                &attestation,
+                AttestationExpectations {
+                    age_ms: Some((max_age, current_ts)),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        };
+
+        // within max age on either side
+        assert_eq!(check(300000, timestamp), Ok(()));
+        assert_eq!(check(300000, timestamp + 300000), Ok(()));
+        assert_eq!(check(300000, timestamp - 300000), Ok(()));
+
+        assert_eq!(
+            check(300000, timestamp + 300001),
+            Err("failed to verify attestation: too old".into())
+        );
+        // used to pass, any timestamp ahead of the current one did
+        assert_eq!(
+            check(300000, timestamp - 300001),
+            Err("failed to verify attestation: timestamp too far in the future".into())
+        );
+        assert_eq!(
+            check(300000, 0),
+            Err("failed to verify attestation: timestamp too far in the future".into())
         );
     }
 
