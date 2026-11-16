@@ -57,6 +57,8 @@ pub type EvmProvider = FillProvider<
 >;
 
 pub struct EvmAdapter {
+    /// Chain the market of this deployment lives on
+    pub chain_id: u64,
     pub rpc_url: String,
     pub market_address: String,
     pub usdc_address: String,
@@ -107,6 +109,17 @@ impl EvmAdapter {
             }
         }
     }
+}
+
+/// Refuses an RPC that serves another chain than the one the deployment is on.
+pub fn check_chain_id(expected: u64, actual: u64) -> Result<()> {
+    if expected != actual {
+        bail!(
+            "The RPC serves chain ID {actual}, but the selected deployment is on chain ID {expected}. Check --rpc and --deployment"
+        );
+    }
+
+    Ok(())
 }
 
 /// Parses a hex encoded 32 byte private key, with or without `0x` prefix.
@@ -177,6 +190,13 @@ impl DeploymentAdapter for EvmAdapter {
             .fetch_chain_id()
             .wallet(wallet)
             .connect_http(self.rpc_url.parse().context("Failed to parse RPC URL")?);
+
+        // the market address means nothing on another chain, check before anything is sent
+        let rpc_chain_id = provider
+            .get_chain_id()
+            .await
+            .context("Failed to fetch the chain ID from the RPC")?;
+        check_chain_id(self.chain_id, rpc_chain_id)?;
 
         Ok(ChainProvider::Evm(provider))
     }
@@ -489,6 +509,13 @@ impl DeploymentAdapter for EvmAdapter {
 mod tests {
     use super::*;
     use alloy::primitives::b256;
+
+    #[test]
+    fn rpc_of_another_chain_is_refused() {
+        assert!(check_chain_id(42161, 42161).is_ok());
+        let err = check_chain_id(42161, 56).unwrap_err().to_string();
+        assert!(err.contains("chain ID 56") && err.contains("chain ID 42161"));
+    }
 
     #[test]
     fn private_key_parsing() {

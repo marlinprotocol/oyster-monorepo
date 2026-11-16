@@ -2,6 +2,9 @@
 pub const OYSTER_MARKET_ADDRESS: &str = "0xc1a7730fb170FAd054e4587665d7B2fd3ce299e8";
 pub const USDC_ADDRESS: &str = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d";
 
+// Chain ID of BNB Smart Chain
+pub const CHAIN_ID: u64 = 56;
+
 // RPC URLs
 pub const BSC_RPC_URL: &str = "https://bsc.drpc.org";
 

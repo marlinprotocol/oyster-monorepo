@@ -131,7 +131,7 @@ Required args:
 - `--duration-in-minutes`: Duration in minutes
 
 Optional args:
-- `--rpc`: RPC URL to interact wih the chain
+- `--rpc`: RPC URL to interact wih the chain. On Arbitrum One and BSC the command checks that the RPC serves the chain of the selected deployment and stops if it does not
 - `--auth-token`: Auth token value for provided Sui chain gRPC URL
 - `--usdc-coin`: USDC Coin ID for enclave payment on Sui chain
 - `--gas-coin`: Coin ID for gas payment on Sui chain
