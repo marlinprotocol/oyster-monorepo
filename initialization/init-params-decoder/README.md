@@ -34,10 +34,19 @@ Supported outputs:
 Usage: init-params-decoder [OPTIONS]
 
 Options:
-      --init-params-path <INIT_PARAMS_PATH>  Init params file [default: /app/init-params]
-      --derive-endpoint <DERIVE_ENDPOINT>    Derive server endpoint [default: http://127.0.0.1:1100]
-  -h, --help                                 Print help
+      --init-params-path <INIT_PARAMS_PATH>
+          Init params file [default: /app/init-params]
+      --derive-endpoint <DERIVE_ENDPOINT>
+          Derive server endpoint [default: http://127.0.0.1:1100]
+      --output-dir <OUTPUT_DIR>
+          Directory to write the decoded params into, the digest always uses /init-params [default: /init-params]
+      --key-fetch-timeout-secs <KEY_FETCH_TIMEOUT_SECS>
+          How long to keep retrying the derive server for the decryption key, only used if there are encrypted params [default: 600]
+  -h, --help
+          Print help
 ```
+
+The derive server is contacted only if at least one param has `should_decrypt` set. The request is retried with backoff till the timeout runs out, nothing is written if the key could not be fetched.
 
 ## Example
 
@@ -65,6 +74,12 @@ Given init params which looks something like this:
 The decoder will create the following files:
 - `/init-params/hello/hello` with `hello` as the content
 - `/init-params/Cargo.toml` with decrypted contents of the `Cargo.toml` file
+
+## Params that are not attested
+
+Only params with `should_attest` set are part of the digest, and hence of PCR16 and the image id. The init params come from the host, so anything that is not attested can be added, removed or replaced by whoever runs the host without the image id changing.
+
+To keep such params away from files that the enclave picks up by itself (the compose file and the `.env` next to it, files the compose file refers to, the kms contract config), the decoder only accepts them under `unattested/`, e.g. `unattested/app.env` ends up in `/init-params/unattested/app.env`. A param with `should_attest` unset and any other path is an error. Refer to these files explicitly, and treat their contents as coming from the host. Encrypting such a param does not change this, anybody can encrypt to the public key.
 
 ## License
 
