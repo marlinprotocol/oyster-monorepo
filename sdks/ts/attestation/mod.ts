@@ -43,12 +43,43 @@ export interface AttestationExpectations {
   pcrs?: Uint8Array[];
   publicKey?: Uint8Array;
   userData?: Uint8Array;
+  // root of the cert chain, verify expects AWS_ROOT_KEY if this is not set
   rootPublicKey?: Uint8Array;
 }
 
-export async function verify(
+/**
+ * Verifies an attestation document against the expectations.
+ *
+ * The cert chain has to end in the AWS Nitro root unless a different root is
+ * set through `rootPublicKey`. An attestation chained to any other root,
+ * like the one of the mock attestation servers, is rejected.
+ */
+export function verify(
   attestationDoc: Uint8Array,
   expectations: AttestationExpectations = {},
+): Promise<AttestationDecoded> {
+  return verifyInner(attestationDoc, expectations, true);
+}
+
+/**
+ * Same as verify, but accepts any root if `rootPublicKey` is not set
+ * and returns the one it found.
+ *
+ * The cert chain is only checked against itself in that case, anybody can
+ * produce an attestation that passes. Only meant for tests and for callers
+ * that check the returned root on their own.
+ */
+export function verifyAnyRoot(
+  attestationDoc: Uint8Array,
+  expectations: AttestationExpectations = {},
+): Promise<AttestationDecoded> {
+  return verifyInner(attestationDoc, expectations, false);
+}
+
+async function verifyInner(
+  attestationDoc: Uint8Array,
+  expectations: AttestationExpectations,
+  pinAwsRoot: boolean,
 ): Promise<AttestationDecoded> {
   const result: AttestationDecoded = {
     timestamp: 0,
@@ -114,10 +145,12 @@ export async function verify(
     result.timestamp,
   );
 
-  // check root public key if exists
+  // check root public key, defaults to the aws root unless the caller opted out
+  const expectedRootPublicKey = expectations.rootPublicKey ??
+    (pinAwsRoot ? AWS_ROOT_KEY : undefined);
   if (
-    expectations.rootPublicKey &&
-    result.rootPublicKey.toString() !== expectations.rootPublicKey.toString()
+    expectedRootPublicKey &&
+    result.rootPublicKey.toString() !== expectedRootPublicKey.toString()
   ) {
     throw new AttestationError("VerifyFailed", "root public key mismatch");
   }
