@@ -2,6 +2,9 @@
 pub const OYSTER_MARKET_ADDRESS: &str = "0x9d95D61eA056721E358BC49fE995caBF3B86A34B";
 pub const USDC_ADDRESS: &str = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 
+// Chain ID of Arbitrum One
+pub const CHAIN_ID: u64 = 42161;
+
 // RPC URLs
 pub const ARBITRUM_ONE_RPC_URL: &str = "https://arb1.arbitrum.io/rpc";
 
@@ -12,3 +15,5 @@ pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xe10fa12f580e660ecd593ea4119cebc905
 pub const INDEXER_URL: &str = "https://indexer.oyster.marlin.org/graphql";
 
 pub const USDC_DECIMALS: u8 = 6;
+// EXTRA_DECIMALS of the market: rates are divided by 10^EXTRA_DECIMALS to get token base units per second
+pub const MARKET_EXTRA_DECIMALS: u8 = 12;

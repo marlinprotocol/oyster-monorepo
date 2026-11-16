@@ -5,6 +5,11 @@ use sui_sdk_types::{ObjectReference, Transaction};
 
 use crate::deployment::{evm::EvmProvider, sui::SuiProvider};
 
+/// Marks errors raised after a transaction was sent, where it may still land.
+pub const TX_MAYBE_INCLUDED: &str = "transaction might still have been included";
+/// Marks the error raised when a job open transaction succeeded but its job ID could not be read.
+pub const JOB_ID_NOT_FOUND: &str = "Could not find JobOpened event";
+
 #[derive(Clone)]
 pub enum ChainProvider {
     Evm(EvmProvider),
@@ -29,6 +34,28 @@ pub struct JobData {
     pub balance: U256,
     pub rate: U256,
     pub last_settled: i64,
+}
+
+/// State of the rate revision lock of a job, as the market contract sees it.
+///
+/// `oyster-cvm stop` creates this lock with a new rate of 0 and may close the
+/// job only once it has matured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLock {
+    /// No rate revision has been requested.
+    None,
+    /// A rate revision was requested and its notice period is still running.
+    Pending {
+        /// Seconds left on the chain's clock, when the chain exposes the unlock time.
+        remaining_secs: Option<u64>,
+        /// Rate the job is being revised to, when the chain exposes it.
+        new_rate: Option<U256>,
+    },
+    /// The notice period is over, the job can be closed.
+    Matured {
+        /// Rate the job is being revised to, when the chain exposes it.
+        new_rate: Option<U256>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -69,11 +96,18 @@ pub trait DeploymentAdapter: Send + Sync {
 
     async fn get_operator_cp(&self, operator: &str, provider: &ChainProvider) -> Result<String>;
     async fn fetch_extra_decimals(&self, provider: &ChainProvider) -> Result<i64>;
+    /// Decimals of the token the market is paid in.
+    async fn fetch_token_decimals(&self, provider: &ChainProvider) -> Result<u32>;
     async fn get_job_data_if_exists(
         &self,
         job_id: String,
         provider: &ChainProvider,
     ) -> Result<Option<JobData>>;
+
+    /// Reads the rate revision lock of a job from the chain.
+    async fn get_rate_lock(&self, job_id: &str, provider: &ChainProvider) -> Result<RateLock>;
+    /// Notice period, in seconds, between a rate revision request and its finalization.
+    async fn get_rate_lock_wait_time(&self, provider: &ChainProvider) -> Result<u64>;
 
     async fn prepare_funds(
         &self,

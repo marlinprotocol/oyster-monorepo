@@ -11,6 +11,8 @@ use crate::args::pcr::{PcrArgs, preset_to_pcr_preset};
 use crate::configs::global::DEFAULT_ATTESTATION_PORT;
 use crate::types::Platform;
 
+const PCR16_HINT: &str = "No PCR16 was given, so it was expected to be all zeros. An enclave deployed with init params (e.g. a docker compose file on the blue image) has a PCR16 derived from them: pass --pcr16 (printed by `oyster-cvm compute-image-id`) or verify with --image-id instead";
+
 /// Verify Oyster Enclave Attestation
 ///
 /// For verifying a running enclave (among other flags):
@@ -38,7 +40,10 @@ pub struct VerifyArgs {
     #[command(flatten)]
     pcr: PcrArgs,
 
-    /// Optional PCR16, hex encoded
+    /// PCR16, hex encoded. PCR16 covers the init params of an enclave (e.g. its docker compose file)
+    /// and is printed by `compute-image-id`. It can also be given as "PCR16" in the --pcr-json file.
+    /// When PCRs are checked and no PCR16 is given, it is expected to be all zeros,
+    /// which only holds for an enclave without init params.
     #[arg(long)]
     pcr16: Option<String>,
 
@@ -76,8 +81,20 @@ pub struct VerifyArgs {
 }
 
 pub async fn verify(args: VerifyArgs) -> Result<()> {
-    let pcrs = get_pcrs(args.pcr, args.pcr16, args.preset, args.arch)
-        .context("Failed to load PCR data")?;
+    // PCR16 comes from --pcr16 or the --pcr-json file, presets cannot carry it
+    let pcr16 = match args.pcr16 {
+        Some(pcr16) => Some(pcr16),
+        None => args
+            .pcr
+            .pcr16_from_json()
+            .context("Failed to load PCR data")?,
+    };
+    let pcr16_given = pcr16.is_some();
+    let pcrs =
+        get_pcrs(args.pcr, pcr16, args.preset, args.arch).context("Failed to load PCR data")?;
+    if pcrs.is_some() && !pcr16_given {
+        info!("No PCR16 given, expecting it to be all zeros");
+    }
 
     // parse or fetch attestation
     let attestation = if let Some(attestation_hex) = args.attestation_hex {
@@ -141,7 +158,21 @@ pub async fn verify(args: VerifyArgs) -> Result<()> {
     };
 
     let decoded = oyster::attestation::verify(&attestation, attestation_expectations.clone())
+        .map_err(|err| {
+            let err = anyhow!(err);
+            if pcrs.is_some() && !pcr16_given {
+                err.context(PCR16_HINT)
+            } else {
+                err
+            }
+        })
         .context("Failed to verify attestation document")?;
+
+    if pcrs.is_none() && image_id.is_none() {
+        tracing::warn!(
+            "No PCRs and no image ID were given. Only the attestation's signature chain and age were checked, not which code the enclave runs."
+        );
+    }
 
     info!("Root public key: {}", hex::encode(decoded.root_public_key));
     info!("Enclave public key: {}", hex::encode(decoded.public_key));

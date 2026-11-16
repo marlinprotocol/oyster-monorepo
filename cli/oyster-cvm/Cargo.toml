@@ -28,6 +28,6 @@ lazy_static = "1.5.0"
 k256 = "0.13.4"
 async-trait = "0.1.89"
 bcs = "0.1.6"
-sui-rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk", package = "sui-rpc"}
-sui-sdk-types = { git = "https://github.com/mystenlabs/sui-rust-sdk", package = "sui-sdk-types"}
-sui-crypto = { git = "https://github.com/mystenlabs/sui-rust-sdk", package = "sui-crypto", features = ["ed25519", "secp256r1", "secp256k1"]}
+sui-rpc = { git = "https://github.com/mystenlabs/sui-rust-sdk", rev = "fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2", package = "sui-rpc"}
+sui-sdk-types = { git = "https://github.com/mystenlabs/sui-rust-sdk", rev = "fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2", package = "sui-sdk-types"}
+sui-crypto = { git = "https://github.com/mystenlabs/sui-rust-sdk", rev = "fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2", package = "sui-crypto", features = ["ed25519", "secp256r1", "secp256k1"]}

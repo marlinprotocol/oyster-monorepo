@@ -35,10 +35,7 @@ pub async fn get_bandwidth_rate_for_region(region_code: &str, cp_url: &str) -> R
                 rate.get("rate").and_then(|r| r.as_str()),
             ) && code == region_code
             {
-                // Parse hex rate string (removing "0x" prefix) to u256
-                let rate_u256 = U256::from_str_radix(&rate_str[2..], 16)
-                    .context("Failed to parse bandwidth rate")?;
-                return Ok(rate_u256);
+                return parse_hex_rate(rate_str);
             }
         }
     }
@@ -69,4 +66,37 @@ pub fn calculate_bandwidth_cost(
         .context("Failed to multiply duration and bandwidth rate")?
         .checked_div(unit_conversion_divisor)
         .context("Failed to divide by unit conversion divisor")
+}
+
+/// Parses a rate as published by a control plane, a hex string with or without `0x` prefix.
+pub fn parse_hex_rate(rate: &str) -> Result<U256> {
+    let digits = rate
+        .strip_prefix("0x")
+        .or_else(|| rate.strip_prefix("0X"))
+        .unwrap_or(rate);
+
+    if digits.is_empty() {
+        anyhow::bail!("Empty rate '{rate}' from the control plane");
+    }
+
+    U256::from_str_radix(digits, 16)
+        .with_context(|| format!("Failed to parse rate '{rate}' from the control plane"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_rate_parsing_does_not_panic_on_malformed_values() {
+        assert_eq!(parse_hex_rate("0x10").unwrap(), U256::from(16));
+        assert_eq!(parse_hex_rate("ff").unwrap(), U256::from(255));
+        // used to slice at byte 2 and panic
+        assert!(parse_hex_rate("").is_err());
+        assert!(parse_hex_rate("0").is_ok());
+        assert!(parse_hex_rate("é").is_err());
+        assert!(parse_hex_rate("0x").is_err());
+        assert!(parse_hex_rate("0xzz").is_err());
+        assert!(parse_hex_rate(&format!("0x{}", "f".repeat(65))).is_err());
+    }
 }

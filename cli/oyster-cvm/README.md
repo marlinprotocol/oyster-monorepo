@@ -111,10 +111,13 @@ Optional args:
 - `--pcr1` (-1): PCR1 value
 - `--pcr2` (-2): PCR2 value
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 OR
-- `--pcr-json`: Pass the path to json file containing pcr values
+- `--pcr-json`: Pass the path to json file containing pcr values. A `PCR16` key in the file is used as well
 
+- `--pcr16`: PCR16 value. PCR16 covers the init params of the enclave (e.g. the docker compose file) and is printed by `compute-image-id`. If PCRs are checked and no PCR16 is given it is expected to be all zeros, which only holds for an enclave without init params
+- `--image-id` (-i): Image ID to check instead of individual PCRs, as printed by `compute-image-id` and `deploy`
+- `--user-data` (-u): Expected user data, hex encoded
 - `--attestation-port` (-p): Attestation port (default: 1300)
 - `--max-age` (-a): Maximum age of attestation in milliseconds (default: 300000)
 - `--timestamp` (-t): Attestation timestamp in milliseconds (default: 0)
@@ -127,11 +130,11 @@ Deploys an Oyster CVM instance.
 
 Required args:
 - `--deployment`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
 - `--duration-in-minutes`: Duration in minutes
 
 Optional args:
-- `--rpc`: RPC URL to interact wih the chain
+- `--rpc`: RPC URL to interact wih the chain. On Arbitrum One and BSC the command checks that the RPC serves the chain of the selected deployment and stops if it does not
 - `--auth-token`: Auth token value for provided Sui chain gRPC URL
 - `--usdc-coin`: USDC Coin ID for enclave payment on Sui chain
 - `--gas-coin`: Coin ID for gas payment on Sui chain
@@ -147,11 +150,14 @@ Optional args:
 - `--no-stream`: Disable automatic log streaming in debug mode (requires --debug)
 - `--init-params-encoded`: Base64 encoded init params
 - `--init-params`: List of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`
-- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v3.kms.box:1101)
+- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v4.kms.box:1101). The KMS is contacted only when an init param is encrypted
 - `--kms-verification-key`: Kms response signature verification key
 - `--docker-compose`: Path to custom docker-compose.yml file
 - `--contract-address`: Enclave verifier contract address
 - `--chain-id`: Chain ID for KMS contract root server
+- `--max-cost`: Abort if the total cost of the job is above this many USDC (e.g. `1.5`)
+- `--max-rate`: Abort if the rate of the job is above this many USDC per hour (e.g. `0.1`)
+- `--yes` (-y): Do not ask for confirmation before paying for the job
 - `--simulate`: Simulate the oyster cvm enclave locally before deployment
 - `--simulate-expose-ports`: Application ports to expose out of the local oyster simulation
 \
@@ -161,10 +167,14 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
+
+The price of a job is read from the control plane of the operator. The command prints the total cost and the hourly rate and, when run from a terminal, asks for confirmation before it sends any transaction. `--yes` skips the question. When the command is not run from a terminal it continues without asking, so scripts should pass `--max-cost` and `--max-rate`: if the quoted price is above either of them the command stops before anything is paid.
+
+The job is opened and funded before the enclave starts. If the deployment fails after that (no IP address, the enclave is not reachable, or the command is interrupted), the job stays open and keeps billing. The command then prints the job ID and the `oyster-cvm stop` and `oyster-cvm withdraw` commands to get the balance back.
 
 #### `update`
 Updates an existing Oyster CVM job's metadata.
@@ -172,7 +182,7 @@ Updates an existing Oyster CVM job's metadata.
 Required args:
 - `--job-id`: ID of the job to update
 - `--deployment`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
 Optional args:
 - `--rpc`: RPC URL to interact wih the chain
@@ -199,23 +209,36 @@ Required args:
 - `--address` (-a): The wallet address to list jobs for
 - `--deployment`: Chain where the jobs are deployed (default: arb)
 
+Optional args:
+- `--count` (-c): Number of most recent jobs to display
+
 Sample output:
 ```
-+------------------+------------------+-------------+-----------+
-| ID               | RATE (USDC/hour) | BALANCE     | PROVIDER |
-+------------------+------------------+-------------+-----------+
-| 0x123...         | 0.50            | 100.00 USDC | AWS      |
-+------------------+------------------+-------------+-----------+
++----------+------------------+-------------+----------------+----------+
+| ID       | RATE (USDC/hour) | BALANCE     | TIME REMAINING | PROVIDER |
++----------+------------------+-------------+----------------+----------+
+| 0x123... | 0.05 USDC        | 1.20 USDC   | 23h 55m        | 0xe10... |
++----------+------------------+-------------+----------------+----------+
 ```
+
+Amounts are shown in the decimals of the payment token of each chain, as the market contract will charge them.
+
+Note on BSC: the market contract there divides rates by 10^12 like on Arbitrum One, but is paid in a token with 18 decimals instead of 6. Jobs on BSC are therefore charged 10^12 times less than the rate published by the operator. `deploy`, `deposit`, `withdraw` and `list` print a warning on BSC and show the amounts the contract actually moves.
 
 #### `deposit`
 Deposits additional USDC funds to an existing job.
 
 Required args:
 - `--job-id` (-j): The ID of the job to deposit funds to
-- `--amount` (-a): Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
+- `--amount` (-a): Amount to deposit in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
 - `--deployment`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+
+Optional args:
+- `--yes` (-y): Do not ask for confirmation before depositing
+- `--force`: Deposit even if the job has already run out of balance
+
+The market does not settle a job when funds are deposited. It charges a job for all the time since its last settlement, up to the balance, the next time the job is settled. If the balance of a job has already run out, a deposit first pays the operator for the time since then, although the enclave was not running. The command works this out from the job on chain, prints how much of the deposit would be lost this way and asks for confirmation. When it is not run from a terminal it stops with an error unless `--force` is passed.
 
 #### `stop`
 Stops an Oyster CVM instance.
@@ -223,7 +246,14 @@ Stops an Oyster CVM instance.
 Required args:
 - `--job-id` (-j): The ID of the job to stop
 - `--deployment`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+
+Optional args:
+- `--no-wait`: Send the stop request and exit without waiting for the notice period. Run the same command again later to close the job.
+
+The command sends a stop request (a rate revision to 0), waits for the notice period of the market (300 seconds on Arbitrum One and BSC) and then closes the job, which returns the unused balance. The job keeps billing until the close transaction lands.
+
+If the command is interrupted during the wait, run it again with the same arguments. It reads the pending stop request from the chain, waits only for the time that is left (or not at all if the notice period is over) and closes the job.
 
 #### `withdraw`
 Withdraws USDC funds from an existing job. The command will first attempt to settle the job and then ensure a buffer balance is maintained for future operations.
@@ -231,9 +261,9 @@ Withdraws USDC funds from an existing job. The command will first attempt to set
 Required args:
 - `--job-id` (-j): The ID of the job to withdraw funds from
 - `--deployment`: Chain through which to deploy the instance
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 - Either:
-  - `--amount` (-a): Amount to withdraw in USDC (minimum 0.000001 USDC)
+  - `--amount` (-a): Amount to withdraw in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
   - `--max`: Withdraw maximum available amount while maintaining required buffer
 
 Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensure smooth operation.
@@ -242,7 +272,7 @@ Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensu
 Registers an Oyster enclave on SUI chain.
 
 Required args:
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 OR Bech32 (with prefix 'suiprivkey') encoded 33-byte private key (flag || private_key) for Sui chain]
 - `--enclave-ip`: Oyster CVM instance IP, e.g. 100.26.111.45
 
 Optional args:
@@ -253,7 +283,7 @@ Optional args:
 - `--attestation-port`: Attestation port (default: 1301)
 
 #### `compute-image-id`
-Calculates the image ID based on the enclave image and input parameters. Intended to be used for applications using contract based KMS.
+Calculates the image ID based on the enclave image and input parameters, and prints it together with the PCR16 it is computed from. Intended to be used for applications using contract based KMS and for `verify`.
 
 Optional args:
 - `--preset`: Preset for parameters (e.g. blue, debug) [default: blue]
@@ -270,7 +300,7 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
@@ -297,13 +327,13 @@ OR
 Deploys a KMS verify contract
 
 Required args:
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key
 
 #### `kms-contract approve`
 Approve the image ID on KMS verify contract
 
 Required args:
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key
 - `--contract-address`: Address of KMS verification contract
 - `--image-id`: Image ID of the enclave
 
@@ -311,7 +341,7 @@ Required args:
 Revoke the image ID on KMS verify contract
 
 Required args:
-- `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing
+- `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key
 - `--contract-address`: Address of KMS verification contract
 - `--image-id`: Image ID of the enclave
 
@@ -354,7 +384,7 @@ Required args:
 # Deploy using base image (quickstart)
 ./oyster-cvm deploy \
   --deployment arb \
-  --wallet-private-key-file ./key.txt \
+  --wallet-file ./key.txt \
   --operator "0x..." \
   --duration-in-minutes 60 \
   --job-name "my-oyster-job"
@@ -363,7 +393,7 @@ Required args:
 ./oyster-cvm deploy \
   --deployment arb \
   --image-url "ipfs://Qm..." \
-  --wallet-private-key-file ./key.txt \
+  --wallet-file ./key.txt \
   --operator "0x..." \
   --instance-type "m5a.2xlarge" \
   --duration-in-minutes 60 \
@@ -409,7 +439,7 @@ Required args:
 ./oyster-cvm update \
   --deployment arb \
   --job-id "0x000...37a" \
-  --wallet-private-key-file ./key.txt \
+  --wallet-file ./key.txt \
   --image-url "ipfs://Qm..." \
   --debug true
 
@@ -546,19 +576,19 @@ oyster-cvm  kms-derive --contract-address D0D6fF1C2FD450aBcB050896EeE16AE10A1aD3
 [INFO] oyster_cvm::commands::derive: kms derived key key="f81003ebf81644344f688d62d4e42c7d4247afe5cba0a1220c159467dd7f1d44"
 
 # Deploy KMS verification contract
-oyster-cvm kms-contract deploy --wallet-private-key-file ./key.txt
+oyster-cvm kms-contract deploy --wallet-file ./key.txt
 
 # Sample output
 [INFO] oyster_cvm::commands::kms_contract: Contract deployed at: 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795
 
 # Approve image ID on KMS verification contract
-oyster-cvm kms-contract approve --wallet-private-key-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
+oyster-cvm kms-contract approve --wallet-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
 
 # Sample output
 [INFO] oyster_cvm::commands::kms_contract: Transaction hash: 0x75c7dd811e9b5316e042c40ceaa1dd8903ddfd4c5cf0638bb80b2fff611992cb
 
 # Revoke image ID on KMS verification contract
-oyster-cvm kms-contract revoke --wallet-private-key-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
+oyster-cvm kms-contract revoke --wallet-file ./key.txt --contract-address 0x206e0eEcac18a3Fb95a572f9c93F50eD34BB8795 --image-id b8e47c0bbee929d7e1d065e24aa6abefab3c509c2cf73d6d2ffe7e8093ca5796
 
 # Sample output
 [INFO] oyster_cvm::commands::kms_contract: Transaction hash: 0x38f5087e0edd21c95b3f2b8f81234d92003c7c8724b1b2449fcc7558744a212b

@@ -69,6 +69,7 @@ pub fn compute_image_id(args: ImageArgs) -> Result<()> {
 
     let hex_image_id = hex::encode(image_id);
 
+    info!("PCR16: {}", hex::encode(pcr16));
     info!("Image ID: {}", hex_image_id);
     Ok(())
 }
