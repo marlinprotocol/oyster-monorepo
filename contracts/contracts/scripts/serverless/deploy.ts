@@ -10,6 +10,11 @@
 //   USDC_TOKEN, STAKING_TOKEN                    optional, existing tokens; test tokens are deployed if unset
 //   HTTP_RPC_URL, WS_RPC_URL                     RPC urls of the chain, stored on chain for the gateways
 //   NUM_SELECTED_EXECUTORS                       optional, executors selected per job (default 3)
+//   MIN_EXECUTOR_STAKE                           optional, minimum stake of an executor in POND units
+//                                                (18 decimals, default 1 POND)
+//   SLASH_COMP_FOR_GATEWAY                       optional, POND units paid to the gateway when no executor
+//                                                responds to its job (default: what one executor at the minimum
+//                                                stake is slashed, 0.01% of MIN_EXECUTOR_STAKE)
 //   OUT_FILE                                     optional, where to write the addresses (default deployment.json)
 //
 // Run with: npx hardhat run scripts/serverless/deploy.ts --network <network>
@@ -24,6 +29,31 @@ function env(name: string, fallback?: string): string {
     return value;
 }
 
+// When no executor responds to a job, Jobs slashes every selected executor and calls
+// GatewayJobs.oysterFailureCall with the total. GatewayJobs pays slashCompForGateway to the gateway
+// and the rest to the job owner, so the call reverts if the total is less than slashCompForGateway.
+// Jobs ignores the revert, and the gateway's USDC deposit and the slashed POND stay in GatewayJobs.
+// The smallest total is with every selected executor at the minimum stake. slashCompForGateway is
+// kept within what one of them is slashed, which leaves room for executors whose stake went
+// below the minimum by being slashed for another job after they were selected.
+function checkSlashParams(
+    minExecutorStake: bigint,
+    slashPercentInBips: bigint,
+    slashMaxBips: bigint,
+    slashCompForGateway: bigint,
+) {
+    const minExecutorSlash = (minExecutorStake * slashPercentInBips) / slashMaxBips;
+    if (slashCompForGateway > minExecutorSlash) {
+        throw new Error(
+            `SLASH_COMP_FOR_GATEWAY (${slashCompForGateway}) is more than what an executor at the minimum stake is slashed ` +
+            `(${minExecutorSlash} = MIN_EXECUTOR_STAKE ${minExecutorStake} * slashPercentInBips ${slashPercentInBips} ` +
+            `/ slashMaxBips ${slashMaxBips}). GatewayJobs.oysterFailureCall would revert for failed jobs. ` +
+            `Lower SLASH_COMP_FOR_GATEWAY to at most ${minExecutorSlash}, or raise MIN_EXECUTOR_STAKE to at least ` +
+            `${(slashCompForGateway * slashMaxBips + slashPercentInBips - 1n) / slashPercentInBips}.`,
+        );
+    }
+}
+
 async function main() {
     const signers = await ethers.getSigners();
     const admin = await signers[0].getAddress();
@@ -31,6 +61,39 @@ async function main() {
     console.log(`Deploying on ${network.name} (chain id ${chainId}) from ${admin}`);
 
     const out: Record<string, any> = { chainId, admin };
+    const paymentPool = admin;
+
+    // Parameters
+    const execEnv = 1;
+    const executorFeePerMs = 1; // in USDC units (6 decimals)
+    const stakingRewardPerMs = 1;
+    const gatewayFee = 100;
+    const signMaxAge = 600;
+    const overallTimeout = 120;
+    const minUserDeadline = 1000;
+    const maxUserDeadline = 50000;
+    const fixedGas = 150000;
+    const callbackMeasureGas = 4530;
+    const epochInterval = 600;
+    const minExecutorStake = BigInt(env("MIN_EXECUTOR_STAKE", (10n ** 18n).toString()));
+    // share of the stake that is slashed, slashPercentInBips / slashMaxBips = 0.01%
+    const slashPercentInBips = 100n;
+    const slashMaxBips = 1000000n;
+    const executionBufferTime = 60;
+    const numSelectedExecutors = Number(env("NUM_SELECTED_EXECUTORS", "3"));
+    const relayBufferTime = 120;
+    // POND paid to the gateway out of the slashed amount when no executor responds to a job.
+    // By default it is what one executor at the minimum stake is slashed, see checkSlashParams.
+    const slashCompForGateway = BigInt(
+        env("SLASH_COMP_FOR_GATEWAY", ((minExecutorStake * slashPercentInBips) / slashMaxBips).toString()),
+    );
+    // POND paid to the reporting gateway out of what a gateway is slashed when its job is reassigned.
+    // A gateway needs a stake of at least reassignCompForReporterGateway * slashMaxBips / slashPercentInBips,
+    // 100 POND here, for this to be paid. The gateways only select gateways with a stake above
+    // MIN_GATEWAY_STAKE in serverless/gateway/src/constant.rs, which is 111.11 POND.
+    const reassignCompForReporterGateway = 10n ** 16n;
+
+    checkSlashParams(minExecutorStake, slashPercentInBips, slashMaxBips, slashCompForGateway);
 
     // Tokens
     let stakingToken = process.env.STAKING_TOKEN;
@@ -68,24 +131,6 @@ async function main() {
     }
     out.attestationVerifier = attestationVerifier;
 
-    // Parameters
-    const execEnv = 1;
-    const executorFeePerMs = 1; // in USDC units (6 decimals)
-    const stakingRewardPerMs = 1;
-    const gatewayFee = 100;
-    const signMaxAge = 600;
-    const overallTimeout = 120;
-    const minUserDeadline = 1000;
-    const maxUserDeadline = 50000;
-    const fixedGas = 150000;
-    const callbackMeasureGas = 4530;
-    const epochInterval = 600;
-    const minExecutorStake = 10n ** 18n;
-    const executionBufferTime = 60;
-    const numSelectedExecutors = Number(env("NUM_SELECTED_EXECUTORS", "3"));
-    const relayBufferTime = 120;
-    const paymentPool = admin;
-
     // Request chain
     const Relay = await ethers.getContractFactory("contracts/serverless-v2/Relay.sol:Relay");
     const relay = await upgrades.deployProxy(Relay, [admin, []], {
@@ -113,7 +158,10 @@ async function main() {
     const Gateways = await ethers.getContractFactory("contracts/serverless-v2/Gateways.sol:Gateways");
     const gateways = await upgrades.deployProxy(Gateways, [admin, []], {
         kind: "uups",
-        constructorArgs: [attestationVerifier, signMaxAge, stakingToken, epochInterval + overallTimeout, 100, 1000000],
+        constructorArgs: [
+            attestationVerifier, signMaxAge, stakingToken, epochInterval + overallTimeout,
+            slashPercentInBips, slashMaxBips,
+        ],
     });
     await gateways.waitForDeployment();
     out.gateways = gateways.target;
@@ -122,7 +170,10 @@ async function main() {
     const Executors = await ethers.getContractFactory("contracts/serverless-v2/Executors.sol:Executors");
     const executors = await upgrades.deployProxy(Executors, [admin, []], {
         kind: "uups",
-        constructorArgs: [attestationVerifier, signMaxAge, stakingToken, minExecutorStake, 100, 1000000],
+        constructorArgs: [
+            attestationVerifier, signMaxAge, stakingToken, minExecutorStake,
+            slashPercentInBips, slashMaxBips,
+        ],
     });
     await executors.waitForDeployment();
     out.executors = executors.target;
@@ -147,7 +198,8 @@ async function main() {
     const gatewayJobs = await upgrades.deployProxy(GatewayJobs, [admin], {
         kind: "uups",
         constructorArgs: [
-            stakingToken, usdcToken, signMaxAge, relayBufferTime, 10n ** 16n, 10n ** 16n,
+            stakingToken, usdcToken, signMaxAge, relayBufferTime,
+            slashCompForGateway, reassignCompForReporterGateway,
             jobs.target, gateways.target, paymentPool,
         ],
     });
