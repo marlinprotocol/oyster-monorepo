@@ -19,6 +19,9 @@ use whoami::username;
 
 use crate::market::{validate_image_url, InfraProvider, JobId};
 
+// smallest bandwidth limit applied on job hosts, in kbit/s
+const MIN_BANDWIDTH_KBIT: u64 = 1;
+
 #[derive(Clone)]
 pub struct Aws {
     clients: HashMap<String, aws_sdk_ec2::Client>,
@@ -450,17 +453,25 @@ impl Aws {
             }
         }
 
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            // interpolation is safe since values are integers
-            &format!("sudo tc qdisc add dev ens5 root tbf rate {bandwidth}kbit burst 4000Mb latency 100ms"),
-        )?;
+        let (_, stderr) = Self::ssh_exec(sess, &Self::bandwidth_command(bandwidth))?;
 
         if !stderr.is_empty() {
             return Err(anyhow!(stderr)).context("Error setting up bandwidth limit");
         }
 
         Ok(())
+    }
+
+    // tc refuses a rate of zero, which is what a job paying exactly the minimum rate
+    // (or one in a region without a bandwidth rate) ends up with
+    // such jobs are accepted by the market, so give them the smallest rate tc takes
+    // instead of failing the launch on every attempt
+    fn bandwidth_command(bandwidth: u64) -> String {
+        // interpolation is safe since values are integers
+        format!(
+            "sudo tc qdisc add dev ens5 root tbf rate {}kbit burst 4000Mb latency 100ms",
+            bandwidth.max(MIN_BANDWIDTH_KBIT),
+        )
     }
 
     // Goal: set up iptables rules for salmon
@@ -1641,6 +1652,19 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         (String::from_utf8(out.stdout).unwrap(), files)
+    }
+
+    #[test]
+    fn test_bandwidth_command() {
+        // zero is not a valid tc rate
+        assert_eq!(
+            Aws::bandwidth_command(0),
+            "sudo tc qdisc add dev ens5 root tbf rate 1kbit burst 4000Mb latency 100ms"
+        );
+        assert_eq!(
+            Aws::bandwidth_command(76),
+            "sudo tc qdisc add dev ens5 root tbf rate 76kbit burst 4000Mb latency 100ms"
+        );
     }
 
     #[test]

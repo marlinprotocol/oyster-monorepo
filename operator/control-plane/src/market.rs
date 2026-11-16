@@ -628,6 +628,29 @@ pub fn validate_image_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+// bandwidth in kbit/s bought by the part of the rate above the instance min rate
+// zero if nothing is left over or the region has no usable bandwidth rate,
+// the infra provider applies its own floor in that case
+fn compute_bandwidth(rate: U256, min_rate: U256, region: &str, gb_rates: &[GBRateCard]) -> u64 {
+    let Some(gb_cost) = gb_rates
+        .iter()
+        .find(|entry| entry.region_code == region)
+        .map(|entry| entry.rate)
+    else {
+        return 0;
+    };
+
+    if gb_cost.is_zero() {
+        return 0;
+    }
+
+    (rate
+        .saturating_sub(min_rate)
+        .saturating_mul(U256::from(1024 * 1024 * 8))
+        / gb_cost)
+        .saturating_to::<u64>()
+}
+
 fn whitelist_blacklist_check(
     owner: String,
     address_whitelist: &[String],
@@ -931,18 +954,8 @@ impl<'a> JobState<'a> {
 
                 // launch only if rate is more than min
                 if self.rate >= self.min_rate {
-                    for entry in gb_rates {
-                        if entry.region_code == self.region {
-                            let gb_cost = entry.rate;
-                            let bandwidth_rate = self.rate - self.min_rate;
-
-                            self.bandwidth = (bandwidth_rate
-                                .saturating_mul(U256::from(1024 * 1024 * 8))
-                                / gb_cost)
-                                .saturating_to::<u64>();
-                            break;
-                        }
-                    }
+                    self.bandwidth =
+                        compute_bandwidth(self.rate, self.min_rate, &self.region, gb_rates);
                     self.schedule_launch(self.launch_delay);
                     JobResult::Success
                 } else {
@@ -2068,6 +2081,31 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_bandwidth() {
+        let gb_rates = test::get_gb_rates();
+        let min_rate = U256::from(29997916666666u64);
+
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "ap-south-1", &gb_rates),
+            76
+        );
+        // exactly the min rate
+        assert_eq!(market::compute_bandwidth(min_rate, min_rate, "ap-south-1", &gb_rates), 0);
+        // region without a bandwidth rate
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "us-east-1", &gb_rates),
+            0
+        );
+        // zero bandwidth rate in the rates file
+        let mut free = test::get_gb_rates();
+        free[0].rate = U256::ZERO;
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "ap-south-1", &free),
+            0
+        );
+    }
+
+    #[test]
     fn test_validate_image_url() {
         for url in [
             "https://example.com/enclave.eif",
@@ -2136,6 +2174,59 @@ mod tests {
                 job: job_id,
                 region: "ap-south-1".into(),
             })],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // a job paying exactly the min rate is accepted, with no bandwidth on top
+    #[tokio::test(start_paused = true)]
+    async fn test_exact_min_rate() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),29997916666666u64,31000u64,0)),
+            (301, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 0,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(301),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
         };
 
         run_test(start_time, logs, job_manager_params, test_results).await;
