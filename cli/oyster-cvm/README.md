@@ -111,10 +111,13 @@ Optional args:
 - `--pcr1` (-1): PCR1 value
 - `--pcr2` (-2): PCR2 value
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 OR
-- `--pcr-json`: Pass the path to json file containing pcr values
+- `--pcr-json`: Pass the path to json file containing pcr values. A `PCR16` key in the file is used as well
 
+- `--pcr16`: PCR16 value. PCR16 covers the init params of the enclave (e.g. the docker compose file) and is printed by `compute-image-id`. If PCRs are checked and no PCR16 is given it is expected to be all zeros, which only holds for an enclave without init params
+- `--image-id` (-i): Image ID to check instead of individual PCRs, as printed by `compute-image-id` and `deploy`
+- `--user-data` (-u): Expected user data, hex encoded
 - `--attestation-port` (-p): Attestation port (default: 1300)
 - `--max-age` (-a): Maximum age of attestation in milliseconds (default: 300000)
 - `--timestamp` (-t): Attestation timestamp in milliseconds (default: 0)
@@ -164,7 +167,7 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
@@ -283,7 +286,7 @@ Optional args:
 - `--attestation-port`: Attestation port (default: 1301)
 
 #### `compute-image-id`
-Calculates the image ID based on the enclave image and input parameters. Intended to be used for applications using contract based KMS.
+Calculates the image ID based on the enclave image and input parameters, and prints it together with the PCR16 it is computed from. Intended to be used for applications using contract based KMS and for `verify`.
 
 Optional args:
 - `--preset`: Preset for parameters (e.g. blue, debug) [default: blue]
@@ -300,7 +303,7 @@ Optional args:
 - `--pcr2` (-2): PCR2 value
 <br>
 OR
-- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
+- `--pcr-preset`: Use predefined PCR values for known images. Possible values: ["base/blue/v3.0.0/amd64", "base/blue/v3.0.0/arm64", "base/blue/v2.0.0/amd64", "base/blue/v2.0.0/arm64", "base/blue/v1.0.0/amd64", "base/blue/v1.0.0/arm64", "debug"]
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
