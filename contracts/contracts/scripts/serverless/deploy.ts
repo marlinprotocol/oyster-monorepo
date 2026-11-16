@@ -7,7 +7,9 @@
 //   VERIFIER_PUBKEY                              secp256k1 public key of the attestation verifier enclave
 //                                                (64 bytes, hex, without the 04 prefix)
 //   ATTESTATION_VERIFIER                         optional, existing AttestationVerifier, skips the two above
-//   USDC_TOKEN, STAKING_TOKEN                    optional, existing tokens; test tokens are deployed if unset
+//   USDC_TOKEN, STAKING_TOKEN                    existing USDC and POND tokens. Required, except on the local
+//                                                hardhat and localhost networks or with DEPLOY_TEST_TOKENS=1
+//   DEPLOY_TEST_TOKENS                           optional, set to 1 to deploy test tokens for the ones not given
 //   HTTP_RPC_URL, WS_RPC_URL                     RPC urls of the chain, stored on chain for the gateways
 //   NUM_SELECTED_EXECUTORS                       optional, executors selected per job. Only 3 is accepted,
 //                                                which is also the default, see checkNumSelectedExecutors
@@ -70,13 +72,28 @@ function checkNumSelectedExecutors(numSelectedExecutors: number) {
     }
 }
 
+// The tokens are immutable in the contracts. Test tokens are only deployed on a local network
+// or when asked for, so a missing variable does not give a deployment that is tied to them.
+function checkTokens(chainId: number) {
+    const missing = ["STAKING_TOKEN", "USDC_TOKEN"].filter((name) => process.env[name] === undefined);
+    if (missing.length === 0) return;
+
+    const isLocalNetwork = network.name === "hardhat" || network.name === "localhost" || chainId === 31337;
+    if (isLocalNetwork || process.env.DEPLOY_TEST_TOKENS === "1") return;
+
+    throw new Error(
+        `${missing.join(" and ")} not set on ${network.name} (chain id ${chainId}). ` +
+        "Give the addresses of the existing tokens, or set DEPLOY_TEST_TOKENS=1 to deploy test tokens in their place.",
+    );
+}
+
 async function main() {
     const signers = await ethers.getSigners();
     const admin = await signers[0].getAddress();
     const chainId = Number((await ethers.provider.getNetwork()).chainId);
     console.log(`Deploying on ${network.name} (chain id ${chainId}) from ${admin}`);
 
-    const out: Record<string, any> = { chainId, admin };
+    const out: Record<string, any> = { chainId, admin, paymentPool: admin };
     const paymentPool = admin;
 
     // Parameters
@@ -111,14 +128,17 @@ async function main() {
     const reassignCompForReporterGateway = 10n ** 16n;
 
     checkSlashParams(minExecutorStake, slashPercentInBips, slashMaxBips, slashCompForGateway);
+    checkTokens(chainId);
 
-    // Tokens
+    // Tokens, checkTokens has made sure test tokens are allowed when one is not set
+    let testTokens = false;
     let stakingToken = process.env.STAKING_TOKEN;
     if (stakingToken === undefined) {
         const Pond = await ethers.getContractFactory("Pond");
         const pond = await upgrades.deployProxy(Pond, ["Marlin", "POND"], { kind: "uups" });
         await pond.waitForDeployment();
         stakingToken = pond.target as string;
+        testTokens = true;
         console.log("Test POND:", stakingToken);
     }
     let usdcToken = process.env.USDC_TOKEN;
@@ -127,12 +147,14 @@ async function main() {
         const usdc = await upgrades.deployProxy(USDCoin, [admin], { kind: "uups" });
         await usdc.waitForDeployment();
         usdcToken = usdc.target as string;
+        testTokens = true;
         console.log("Test USDC:", usdcToken);
     }
     out.stakingToken = stakingToken;
     out.usdcToken = usdcToken;
 
     // Attestation verifier
+    let attestationVerifierDeployed = false;
     let attestationVerifier = process.env.ATTESTATION_VERIFIER;
     if (attestationVerifier === undefined) {
         const verifierImageId = getBytes(env("VERIFIER_IMAGE_ID"));
@@ -144,6 +166,7 @@ async function main() {
         });
         await av.waitForDeployment();
         attestationVerifier = av.target as string;
+        attestationVerifierDeployed = true;
         console.log("AttestationVerifier:", attestationVerifier);
     }
     out.attestationVerifier = attestationVerifier;
@@ -241,6 +264,19 @@ async function main() {
     const outFile = env("OUT_FILE", "deployment.json");
     writeFileSync(outFile, JSON.stringify(out, null, 2) + "\n");
     console.log(`Addresses written to ${outFile}`);
+
+    console.log(`
+The deployer ${admin} holds:
+- DEFAULT_ADMIN_ROLE on ${attestationVerifierDeployed ? "AttestationVerifier, " : ""}Relay, RelaySubscriptions, Gateways, Executors, Jobs and GatewayJobs.
+  It can upgrade them, whitelist enclave images and verifier keys, and manage chains and envs.
+- the payment pools: the staking and USDC payment pools of Jobs and the staking payment pool of GatewayJobs,
+  which receive the staking rewards and the slashed POND.
+Move these off the deployer before the deployment is used with real funds. Grant DEFAULT_ADMIN_ROLE to the
+address that should administer the contracts (a multisig) and renounce it from the deployer.
+The payment pools are immutable, changing them needs an upgrade of Jobs and GatewayJobs.`);
+    if (testTokens) {
+        console.log("\nThis deployment uses test tokens deployed by this script, it cannot be used with the real POND and USDC.");
+    }
 }
 
 main()
