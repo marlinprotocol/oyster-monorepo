@@ -183,10 +183,7 @@ async fn execute_job(
     // clean up resources in case the timeout exceeds
     defer! {
         // Kill the worker
-        child
-            .lock()
-            .unwrap()
-            .kill()
+        workerd::terminate(&mut child.lock().unwrap())
             .context("CRITICAL: Failed to kill worker {cgroup}")
             .unwrap_or_else(|err| println!("{err:?}"));
     }

@@ -238,7 +238,7 @@ pub async fn job_subscription_manager(
                         "Job No longer active for Subscription - Subscription ID: {}",
                         subscription_job_instance.subscription_id
                     );
-                    return;
+                    continue;
                 }
 
                 tokio::spawn(async move {
@@ -319,6 +319,14 @@ pub fn add_subscription_job(
     // Scope for write lock on subscription_jobs
     {
         let mut subscription_jobs = contracts_client.subscription_jobs.write().unwrap();
+        // The same log can come from both the historic logs and the events stream
+        if subscription_jobs.contains_key(&subscription_job.subscription_id) {
+            info!(
+                "Subscription Job is already added - Subscription ID: {}",
+                subscription_job.subscription_id
+            );
+            return Ok(U256::from(0));
+        }
         subscription_jobs.insert(subscription_job.subscription_id, subscription_job.clone());
     }
 
@@ -1009,6 +1017,78 @@ mod job_subscription_management_tests {
             assert!(active_job.is_some());
             assert_eq!(active_job.unwrap(), &expected_job);
         }
+    }
+
+    #[tokio::test]
+    async fn test_add_subscription_job_already_added() {
+        let contracts_client = generate_contracts_client().await;
+        add_gateway_epoch_state(contracts_client.clone(), None, None, None).await;
+        let (req_chain_tx, _com_chain_rx) = tokio::sync::mpsc::channel::<Job>(100);
+
+        let res = add_subscription_job(
+            &contracts_client,
+            generate_job_subscription_started_log(None, None),
+            CHAIN_ID,
+            req_chain_tx.clone(),
+            false,
+        );
+        assert_eq!(res.unwrap(), U256::from(1));
+
+        // Same log received again
+        let res = add_subscription_job(
+            &contracts_client,
+            generate_job_subscription_started_log(None, None),
+            CHAIN_ID,
+            req_chain_tx,
+            false,
+        );
+        assert_eq!(res.unwrap(), U256::from(0));
+
+        // Sleep for 1s to allow all async tasks to complete
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert_eq!(contracts_client.subscription_jobs.read().unwrap().len(), 1);
+        assert_eq!(
+            contracts_client
+                .subscription_job_instance_heap
+                .read()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_job_subscription_manager_stale_heap_entry() {
+        let contracts_client = generate_contracts_client().await;
+        let (req_chain_tx, _com_chain_rx) = tokio::sync::mpsc::channel::<Job>(100);
+        let (_job_sub_tx, job_sub_rx) =
+            tokio::sync::mpsc::channel::<JobSubscriptionChannelType>(100);
+
+        // Heap entry of a subscription that is no longer present
+        contracts_client
+            .subscription_job_instance_heap
+            .write()
+            .unwrap()
+            .push(SubscriptionJobInstanceHeap {
+                subscription_id: U256::from(1),
+                next_trigger_time: 0,
+            });
+
+        let manager = tokio::spawn(job_subscription_manager(
+            contracts_client.clone(),
+            job_sub_rx,
+            req_chain_tx,
+        ));
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert!(contracts_client
+            .subscription_job_instance_heap
+            .read()
+            .unwrap()
+            .is_empty());
+        assert!(!manager.is_finished());
     }
 
     #[tokio::test]
