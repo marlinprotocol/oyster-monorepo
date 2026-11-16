@@ -1526,9 +1526,7 @@ EOF
             .context("failed to get job instance")?;
 
         if instances.is_empty() {
-            // instance does not really exist anyway, we are done
             info!("Instance does not exist or is already terminated");
-            return Ok(());
         }
 
         // terminate every instance of the job, there should be only one
@@ -1538,6 +1536,13 @@ EOF
                 .await
                 .context("failed to terminate instance")?;
         }
+
+        // always check for elastic ips, even without an instance
+        // an earlier attempt might have terminated the instance and failed before the
+        // release, the ip would stay allocated and count against the quota forever
+        self.release_job_elastic_ips(job, region)
+            .await
+            .context("failed to release elastic ip")?;
 
         Ok(())
     }
@@ -1560,15 +1565,56 @@ EOF
         self.terminate_instance(instance_id, region)
             .await
             .context("could not terminate instance")?;
-        let (exist, alloc_id, _) = self
-            .get_job_elastic_ip(job, region)
+        self.release_job_elastic_ips(job, region)
             .await
-            .context("could not get elastic ip of job")?;
-        if exist {
-            self.release_address(alloc_id.as_str(), region)
+            .context("could not release elastic ip of job")?;
+
+        Ok(())
+    }
+
+    // release every elastic ip allocated for the job
+    async fn release_job_elastic_ips(&self, job: &JobId, region: &str) -> Result<()> {
+        let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
+        let operator_filter = Filter::builder()
+            .name("tag:operator")
+            .values(&job.operator)
+            .build();
+        let chain_filter = Filter::builder()
+            .name("tag:chainID")
+            .values(&job.chain)
+            .build();
+        let contract_filter = Filter::builder()
+            .name("tag:contractAddress")
+            .values(&job.contract)
+            .build();
+
+        let res = self
+            .client(region)?
+            .describe_addresses()
+            .filters(job_filter)
+            .filters(operator_filter)
+            .filters(contract_filter)
+            .filters(chain_filter)
+            .send()
+            .await
+            .context("could not describe elastic ips")?;
+
+        for address in res.addresses() {
+            let alloc_id = address
+                .allocation_id()
+                .ok_or(anyhow!("could not parse allocation id"))?;
+
+            // an ip which is still attached cannot be released
+            if let Some(association_id) = address.association_id() {
+                self.disassociate_address(association_id, region)
+                    .await
+                    .context("could not disassociate address")?;
+            }
+
+            self.release_address(alloc_id, region)
                 .await
                 .context("could not release address")?;
-            info!("Elastic IP released");
+            info!(alloc_id, "Elastic IP released");
         }
 
         Ok(())
