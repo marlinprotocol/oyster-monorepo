@@ -9,7 +9,7 @@ use alloy::{
     hex::FromHex,
     signers::k256::sha2::{Digest, Sha256},
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Args;
 use k256::sha2::Sha384;
@@ -112,7 +112,7 @@ impl InitParamsArgs {
             .iter()
             .map(|param| {
                 // extract components
-                let param_components = param.splitn(5, ":").collect::<Vec<_>>();
+                let param_components = split_param(param)?;
                 let should_attest = param_components[1] == "1";
 
                 // everything should be normal components, no root or current or parent dirs
@@ -162,49 +162,73 @@ impl InitParamsArgs {
 
         info!(digest = hex::encode(digest), "Computed digest");
 
+        // the KMS is only needed to encrypt, do not depend on it otherwise
+        let encrypts = needs_encryption_key(&init_params)?;
+        if encrypts && debug {
+            // attempting to use encrypted init params in debug mode
+            // error out since it is not safe
+            bail!(
+                "Refused to allow encrypted init params in debug mode enclaves. It is not safe to use encrypted init params in debug mode since it can then be decrypted and exported by other debug enclaves."
+            );
+        }
+
         // load pcrs
         // use pcrs of the blue base image by default
         // if debug flag is true, uses zero pcrs
         let pcrs = self
             .pcrs
-            .load_required(preset_to_pcr_preset(&preset, &arch, debug))
+            .load(preset_to_pcr_preset(&preset, &arch, debug))
             .context("Failed to load PCRs")?;
 
-        // calculate pcr16 by extending the digest onto zero pcrs
-        let mut pcr_hasher = Sha384::new();
-        pcr_hasher.update([0u8; 48]);
-        pcr_hasher.update(digest);
-        let pcr16: [u8; 48] = pcr_hasher.finalize().into();
+        let image_id = match pcrs {
+            Some(pcrs) => {
+                // calculate pcr16 by extending the digest onto zero pcrs
+                let mut pcr_hasher = Sha384::new();
+                pcr_hasher.update([0u8; 48]);
+                pcr_hasher.update(digest);
+                let pcr16: [u8; 48] = pcr_hasher.finalize().into();
 
-        // calculate the image id
-        let mut hasher = Sha256::new();
-        // bitflags denoting what pcrs are part of the computation
-        // this one has 0, 1, 2 and 16
-        hasher.update(((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
-        hasher.update(hex::decode(pcrs.0).context("failed to decode PCR")?);
-        hasher.update(hex::decode(pcrs.1).context("failed to decode PCR")?);
-        hasher.update(hex::decode(pcrs.2).context("failed to decode PCR")?);
-        hasher.update(pcr16);
-        let image_id: [u8; 32] = hasher.finalize().into();
-        info!(image_id = hex::encode(image_id), "Computed image id");
-        // fetch key
-        let pk = fetch_encryption_key_with_pcr(
-            self.kms_endpoint
-                .as_ref()
-                .unwrap_or(&"http://image-v4.kms.box:1101".into()),
-            self.kms_verification_key
-                .as_ref()
-                .unwrap_or(&"14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276".into()),
-            &hex::encode(image_id),
-        )
-        .context("failed to fetch key")?;
+                // calculate the image id
+                let mut hasher = Sha256::new();
+                // bitflags denoting what pcrs are part of the computation
+                // this one has 0, 1, 2 and 16
+                hasher.update(((1u32 << 0) | (1 << 1) | (1 << 2) | (1 << 16)).to_be_bytes());
+                hasher.update(hex::decode(pcrs.0).context("failed to decode PCR")?);
+                hasher.update(hex::decode(pcrs.1).context("failed to decode PCR")?);
+                hasher.update(hex::decode(pcrs.2).context("failed to decode PCR")?);
+                hasher.update(pcr16);
+                let image_id: [u8; 32] = hasher.finalize().into();
+                info!(image_id = hex::encode(image_id), "Computed image id");
+
+                Some(image_id)
+            }
+            None => None,
+        };
+
+        // fetch key, only if something has to be encrypted
+        let pk = if encrypts {
+            let image_id =
+                image_id.context("Pcrs parameter is required to encrypt init params.")?;
+            Some(
+                fetch_encryption_key_with_pcr(
+                    self.kms_endpoint.as_deref().unwrap_or(DEFAULT_KMS_ENDPOINT),
+                    self.kms_verification_key
+                        .as_deref()
+                        .unwrap_or(DEFAULT_KMS_VERIFICATION_KEY),
+                    &hex::encode(image_id),
+                )
+                .context("failed to fetch key")?,
+            )
+        } else {
+            None
+        };
 
         // prepare init params
         let params = init_params
             .iter()
             .map(|param| {
                 // extract components
-                let param_components = param.splitn(5, ":").collect::<Vec<_>>();
+                let param_components = split_param(param)?;
                 let should_attest = param_components[1] == "1";
                 let should_encrypt = param_components[2] == "1";
                 let contents = match param_components[3] {
@@ -220,13 +244,7 @@ impl InitParamsArgs {
 
                 // encrypt if needed
                 let final_contents = if should_encrypt {
-                    if debug {
-                        // attempting to use encrypted init params in debug mode
-                        // error out since it is not safe
-                        return Err(anyhow!(
-                            "Refused to allow encrypted init params in debug mode enclaves. It is not safe to use encrypted init params in debug mode since it can then be decrypted and exported by other debug enclaves."
-                        ));
-                    }
+                    let pk = pk.context("encryption key was not fetched")?;
 
                     let mut final_contents =
                         vec![0u8; contents.len() + crypto_box_SEALBYTES as usize];
@@ -284,6 +302,58 @@ pub struct InitParamsList {
     params: Vec<InitParam>,
 }
 
+const DEFAULT_KMS_ENDPOINT: &str = "http://image-v4.kms.box:1101";
+const DEFAULT_KMS_VERIFICATION_KEY: &str = "14eadecaec620fac17b084dcd423b0a75ed2c248b0f73be1bb9b408476567ffc221f420612dd995555650dc19dbe972e7277cb6bfe5ce26650ec907be759b276";
+
+/// Splits an init param of the form
+/// `<enclave path>:<should attest>:<should encrypt>:<utf8|file>:<value>`.
+fn split_param(param: &str) -> Result<Vec<&str>> {
+    let components = param.splitn(5, ":").collect::<Vec<_>>();
+    if components.len() != 5 {
+        bail!(
+            "invalid init param '{param}', expected <enclave path>:<should attest, 0 or 1>:<should encrypt, 0 or 1>:<utf8 or file>:<value>"
+        );
+    }
+
+    Ok(components)
+}
+
+/// True if any init param has to be encrypted, which needs a key from the KMS.
+fn needs_encryption_key(init_params: &[String]) -> Result<bool> {
+    for param in init_params {
+        if split_param(param)?[2] == "1" {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Recovers the uncompressed secp256k1 public key (hex, without the 04 prefix) that signed
+/// a KMS root server response, from the `x-marlin-kms-signature` header bytes.
+pub fn recover_kms_signer(digest: &[u8; 32], signature_bytes: &[u8]) -> Result<String> {
+    if signature_bytes.len() != 65 {
+        bail!(
+            "unexpected signature length from kms root server: {} bytes, expected 65",
+            signature_bytes.len()
+        );
+    }
+
+    let signature = k256::ecdsa::Signature::from_slice(&signature_bytes[0..64])
+        .context("failed to parse signature for encryption key from kms root server")?;
+    let recovery_id = signature_bytes[64]
+        .checked_sub(27)
+        .and_then(k256::ecdsa::RecoveryId::from_byte)
+        .context("failed to parse recovery id from kms root server signature")?;
+    let verifying_key =
+        k256::ecdsa::VerifyingKey::recover_from_prehash(digest, &signature, recovery_id)
+            .context("failed to recover pubkey from kms root server signature")?;
+
+    Ok(hex::encode(
+        &verifying_key.to_encoded_point(false).as_bytes()[1..],
+    ))
+}
+
 fn fetch_encryption_key_with_pcr(
     endpoint: &str,
     kms_verification_key: &str,
@@ -319,14 +389,7 @@ fn fetch_encryption_key_with_pcr(
     hasher.update(&body_bytes);
     let digest: [u8; 32] = hasher.finalize().into();
 
-    let signature = k256::ecdsa::Signature::from_slice(&signature_bytes[0..64])
-        .context("failed to parse signature for encryption key from kms root server")?;
-    let recovery_id = k256::ecdsa::RecoveryId::from_byte(signature_bytes[64] - 27)
-        .context("failed to parse recovery id from kms root server signature")?;
-    let verifying_key =
-        k256::ecdsa::VerifyingKey::recover_from_prehash(&digest, &signature, recovery_id)
-            .context("failed to recover pubkey from kms root server signature")?;
-    let pubkey = hex::encode(&verifying_key.to_encoded_point(false).as_bytes()[1..]);
+    let pubkey = recover_kms_signer(&digest, &signature_bytes)?;
 
     if pubkey != kms_verification_key.to_lowercase() {
         bail!("signature verifaction failed: unexpected signer");
@@ -351,4 +414,114 @@ lazy_static! {
         );
         root_servers
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // nothing listens here, any attempt to reach the KMS fails
+    const DEAD_KMS: &str = "http://127.0.0.1:9";
+
+    fn args(init_params: Vec<&str>) -> InitParamsArgs {
+        InitParamsArgs {
+            init_params_encoded: None,
+            init_params: Some(init_params.into_iter().map(str::to_owned).collect()),
+            kms_endpoint: Some(DEAD_KMS.into()),
+            kms_verification_key: None,
+            pcrs: PcrArgs {
+                pcr_preset: None,
+                pcr_json: None,
+                pcr0: None,
+                pcr1: None,
+                pcr2: None,
+            },
+            contract_address: None,
+            chain_id: None,
+            docker_compose: None,
+        }
+    }
+
+    fn decode(encoded: &str) -> serde_json::Value {
+        serde_json::from_slice(&BASE64_STANDARD.decode(encoded).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn unencrypted_params_do_not_need_the_kms() {
+        let encoded = args(vec!["a.txt:1:0:utf8:hello", "b.txt:0:0:utf8:world"])
+            .load("blue".into(), Platform::ARM64, false)
+            .unwrap()
+            .unwrap();
+
+        let json = decode(&encoded);
+        assert_eq!(json["params"][0]["path"], "a.txt");
+        assert_eq!(json["params"][0]["should_decrypt"], false);
+        assert_eq!(
+            json["params"][0]["contents"],
+            BASE64_STANDARD.encode("hello")
+        );
+        assert_eq!(json["params"][1]["should_attest"], false);
+    }
+
+    #[test]
+    fn unencrypted_params_do_not_need_pcrs_either() {
+        // no preset PCRs for an unknown preset, they are only needed for the KMS request
+        assert!(
+            args(vec!["a.txt:1:0:utf8:hello"])
+                .load("custom".into(), Platform::ARM64, false)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn encrypted_params_still_need_the_kms() {
+        let err = args(vec!["a.txt:1:0:utf8:hello", "secret:1:1:utf8:world"])
+            .load("blue".into(), Platform::ARM64, false)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("failed to fetch key"));
+
+        let err = args(vec!["secret:1:1:utf8:world"])
+            .load("custom".into(), Platform::ARM64, false)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Pcrs parameter is required"));
+    }
+
+    #[test]
+    fn encrypted_params_are_refused_in_debug_mode_before_reaching_the_kms() {
+        let err = args(vec!["secret:1:1:utf8:world"])
+            .load("blue".into(), Platform::ARM64, true)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("debug mode"));
+    }
+
+    #[test]
+    fn malformed_params_are_errors_not_panics() {
+        for param in ["a.txt", "a.txt:1", "a.txt:1:0", "a.txt:1:0:utf8"] {
+            let err = args(vec![param])
+                .load("blue".into(), Platform::ARM64, false)
+                .unwrap_err();
+            assert!(format!("{err:#}").contains("invalid init param"), "{param}");
+        }
+        // the value may contain colons
+        assert!(
+            args(vec!["a.txt:1:0:utf8:x:y:z"])
+                .load("blue".into(), Platform::ARM64, false)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn malformed_kms_signatures_are_errors_not_panics() {
+        let digest = [7u8; 32];
+        assert!(recover_kms_signer(&digest, &[]).is_err());
+        assert!(recover_kms_signer(&digest, &[1u8; 64]).is_err());
+        assert!(recover_kms_signer(&digest, &[1u8; 66]).is_err());
+        // recovery byte below 27 used to underflow
+        let mut signature = [1u8; 65];
+        signature[64] = 0;
+        assert!(recover_kms_signer(&digest, &signature).is_err());
+        signature[64] = 99;
+        assert!(recover_kms_signer(&digest, &signature).is_err());
+    }
 }

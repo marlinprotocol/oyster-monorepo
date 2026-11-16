@@ -147,7 +147,7 @@ Optional args:
 - `--no-stream`: Disable automatic log streaming in debug mode (requires --debug)
 - `--init-params-encoded`: Base64 encoded init params
 - `--init-params`: List of init params in format `<path>:<attest>:<encrypt>:<type>:<value>`
-- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v3.kms.box:1101)
+- `--kms-endpoint`: Kms key gen endpoint (default: http://image-v4.kms.box:1101). The KMS is contacted only when an init param is encrypted
 - `--kms-verification-key`: Kms response signature verification key
 - `--docker-compose`: Path to custom docker-compose.yml file
 - `--contract-address`: Enclave verifier contract address
