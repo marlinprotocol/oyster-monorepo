@@ -1,10 +1,12 @@
 use std::str::FromStr;
 
 use crate::args::wallet::WalletArgs;
-use crate::configs::global::MIN_DEPOSIT_AMOUNT;
 use crate::deployment::adapter::JobTransactionKind;
 use crate::deployment::{Deployment, get_deployment_adapter};
-use crate::utils::{ask_yes_no, deposit_impact, format_duration, format_usdc, is_interactive};
+use crate::utils::{
+    ask_yes_no, deposit_impact, format_duration, format_token_amount, is_interactive,
+    mispricing_warning, resolve_amount,
+};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -26,9 +28,14 @@ pub struct DepositArgs {
     #[arg(short, long, required = true)]
     job_id: String,
 
-    /// Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
-    #[arg(short, long, required = true)]
-    amount: u64,
+    /// Amount to deposit in base units of the payment token
+    /// (e.g. 1000000 = 1 USDC on Arbitrum One and Sui where USDC has 6 decimals, the token on BSC has 18)
+    #[arg(short, long, required_unless_present = "amount_usdc")]
+    amount: Option<U256>,
+
+    /// Amount to deposit in USDC, as a decimal number (e.g. 1.5)
+    #[arg(long, conflicts_with = "amount")]
+    amount_usdc: Option<String>,
 
     #[command(flatten)]
     wallet: WalletArgs,
@@ -69,17 +76,6 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     let wallet_private_key = &args.wallet.load_required()?;
     let job_id = args.job_id;
 
-    // Input validation
-    if amount < MIN_DEPOSIT_AMOUNT {
-        return Err(anyhow!(
-            "Amount must be at least {} (0.000001 USDC)",
-            MIN_DEPOSIT_AMOUNT
-        ));
-    }
-
-    // Convert amount to U256 with 6 decimals (USDC has 6 decimals)
-    let amount_u256 = U256::from(amount);
-
     let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
         args.rpc,
@@ -107,9 +103,20 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     };
 
     let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
+    let token_decimals = deployment_adapter.fetch_token_decimals(&provider).await?;
+    if let Some(warning) = mispricing_warning(token_decimals, extra_decimals) {
+        warn!("{warning}");
+    }
+
+    let amount_u256 = resolve_amount(amount, args.amount_usdc.as_deref(), token_decimals)?
+        .ok_or_else(|| anyhow!("Amount must be specified"))?;
+    if amount_u256.is_zero() {
+        return Err(anyhow!("Amount must be greater than 0"));
+    }
+
     info!(
-        "Depositing: {:.6} USDC",
-        format_usdc(amount_u256, extra_decimals)
+        "Depositing: {} USDC",
+        format_token_amount(amount_u256, token_decimals)
     );
 
     // The market does not settle a job on deposit. Work out from the job state on chain
@@ -139,14 +146,14 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
         );
         if impact.usable.is_zero() {
             warn!(
-                "The whole deposit of {:.6} USDC would go to the operator for time that has already passed. Nothing would be left to run the job.",
-                format_usdc(amount_u256, extra_decimals)
+                "The whole deposit of {} USDC would go to the operator for time that has already passed. Nothing would be left to run the job.",
+                format_token_amount(amount_u256, token_decimals)
             );
         } else {
             warn!(
-                "{:.6} USDC of this deposit would go to the operator for time that has already passed, {:.6} USDC would be left to run the job ({}).",
-                format_usdc(impact.to_gap, extra_decimals),
-                format_usdc(impact.usable, extra_decimals),
+                "{} USDC of this deposit would go to the operator for time that has already passed, {} USDC would be left to run the job ({}).",
+                format_token_amount(impact.to_gap, token_decimals),
+                format_token_amount(impact.usable, token_decimals),
                 impact
                     .secs_after_deposit
                     .map(format_duration)
@@ -172,8 +179,8 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
         }
     } else {
         info!(
-            "Current balance: {:.6} USDC",
-            format_usdc(impact.current_balance, extra_decimals)
+            "Current balance: {} USDC",
+            format_token_amount(impact.current_balance, token_decimals)
         );
         if let Some(secs) = impact.secs_after_deposit {
             info!(
@@ -209,8 +216,8 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
     if !confirmed
         && is_interactive()
         && !ask_yes_no(&format!(
-            "Deposit {:.6} USDC into job {}?",
-            format_usdc(amount_u256, extra_decimals),
+            "Deposit {} USDC into job {}?",
+            format_token_amount(amount_u256, token_decimals),
             job_id
         ))?
     {

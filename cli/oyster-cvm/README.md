@@ -206,21 +206,30 @@ Required args:
 - `--address` (-a): The wallet address to list jobs for
 - `--deployment`: Chain where the jobs are deployed (default: arb)
 
+Optional args:
+- `--count` (-c): Number of most recent jobs to display
+
 Sample output:
 ```
-+------------------+------------------+-------------+-----------+
-| ID               | RATE (USDC/hour) | BALANCE     | PROVIDER |
-+------------------+------------------+-------------+-----------+
-| 0x123...         | 0.50            | 100.00 USDC | AWS      |
-+------------------+------------------+-------------+-----------+
++----------+------------------+-------------+----------------+----------+
+| ID       | RATE (USDC/hour) | BALANCE     | TIME REMAINING | PROVIDER |
++----------+------------------+-------------+----------------+----------+
+| 0x123... | 0.05 USDC        | 1.20 USDC   | 23h 55m        | 0xe10... |
++----------+------------------+-------------+----------------+----------+
 ```
+
+Amounts are shown in the decimals of the payment token of each chain, as the market contract will charge them.
+
+Note on BSC: the market contract there divides rates by 10^12 like on Arbitrum One, but is paid in a token with 18 decimals instead of 6. Jobs on BSC are therefore charged 10^12 times less than the rate published by the operator. `deploy`, `deposit`, `withdraw` and `list` print a warning on BSC and show the amounts the contract actually moves.
 
 #### `deposit`
 Deposits additional USDC funds to an existing job.
 
 Required args:
 - `--job-id` (-j): The ID of the job to deposit funds to
-- `--amount` (-a): Amount to deposit in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
+- `--amount` (-a): Amount to deposit in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
+OR
+- `--amount-usdc`: Amount to deposit in USDC as a decimal number (e.g. 1.5), converted with the decimals of the token on the chosen chain
 - `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
@@ -253,7 +262,8 @@ Required args:
 - `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 - Either:
-  - `--amount` (-a): Amount to withdraw in USDC (minimum 0.000001 USDC)
+  - `--amount` (-a): Amount to withdraw in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
+  - `--amount-usdc`: Amount to withdraw in USDC as a decimal number (e.g. 1.5)
   - `--max`: Withdraw maximum available amount while maintaining required buffer
 
 Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensure smooth operation.

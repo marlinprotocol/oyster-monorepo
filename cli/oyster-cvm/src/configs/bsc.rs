@@ -12,3 +12,5 @@ pub const DEFAULT_OPERATOR_ADDRESS: &str = "0xD379eAb71eC709B20A85e953EbD3d395E0
 pub const INDEXER_URL: &str = "https://bsc.indexer.oyster.marlin.org/graphql";
 
 pub const USDC_DECIMALS: u8 = 18;
+// EXTRA_DECIMALS of the market: rates are divided by 10^EXTRA_DECIMALS to get token base units per second
+pub const MARKET_EXTRA_DECIMALS: u8 = 12;

@@ -5,10 +5,7 @@ use std::io::{IsTerminal, Write};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, bail};
 
-/// Formats a U256 value as USDC with 6 decimal places
-pub fn format_usdc(value: U256, extra_decimals: i64) -> f64 {
-    value.to::<u128>() as f64 / 10f64.powi(18 - extra_decimals as i32)
-}
+use crate::configs::global::RATE_DECIMALS;
 
 /// Parses a decimal token amount such as `1.5` into base units of a token with `decimals` decimals.
 pub fn parse_token_amount(amount: &str, decimals: u32) -> Result<U256> {
@@ -37,6 +34,63 @@ pub fn format_token_amount(value: U256, decimals: u32) -> String {
     let fraction = fraction.trim_end_matches('0');
 
     format!("{whole}.{fraction:0<2}")
+}
+
+/// Like `format_token_amount`, shortened for display: six decimal places,
+/// or six significant digits for amounts below one that would otherwise show as zero.
+pub fn format_token_display(value: U256, decimals: u32) -> String {
+    let exact = format_token_amount(value, decimals);
+    let (whole, fraction) = exact.split_once('.').unwrap_or((&exact, ""));
+
+    let leading_zeros = fraction.chars().take_while(|c| *c == '0').count();
+    let keep = if whole == "0" && leading_zeros < fraction.len() {
+        (leading_zeros + 6).max(6)
+    } else {
+        6
+    };
+    if fraction.len() <= keep {
+        return exact;
+    }
+
+    format!("{whole}.{:0<2}", fraction[..keep].trim_end_matches('0'))
+}
+
+/// Resolves the amount of a deposit or withdrawal, given either in base units of the token
+/// (`--amount`) or as a decimal number of tokens (`--amount-usdc`), to base units.
+pub fn resolve_amount(
+    base_units: Option<U256>,
+    tokens: Option<&str>,
+    decimals: u32,
+) -> Result<Option<U256>> {
+    match (base_units, tokens) {
+        (Some(_), Some(_)) => bail!("Specify only one of --amount and --amount-usdc"),
+        (Some(amount), None) => Ok(Some(amount)),
+        (None, Some(amount)) => Ok(Some(
+            parse_token_amount(amount, decimals).context("Failed to parse --amount-usdc")?,
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
+/// The market charges `rate / 10^extra_decimals` token base units per second, while operators
+/// publish rates in USD per second with `RATE_DECIMALS` decimals. The two only agree when
+/// `token_decimals + extra_decimals == RATE_DECIMALS`. Returns a warning when they do not,
+/// as on BSC (18 decimal token, EXTRA_DECIMALS 12).
+pub fn mispricing_warning(token_decimals: u32, extra_decimals: i64) -> Option<String> {
+    let charged_decimals = token_decimals as i64 + extra_decimals;
+    let off_by = charged_decimals - RATE_DECIMALS as i64;
+    if off_by == 0 {
+        return None;
+    }
+
+    Some(format!(
+        "The market contract of this deployment misprices jobs: operators publish rates with {RATE_DECIMALS} decimals, \
+         the contract divides them by 10^{extra_decimals} and charges the result in base units of a token with {token_decimals} decimals. \
+         Jobs are charged 10^{} times {} than the published price. \
+         The amounts shown here are what the contract actually moves. Operators may not serve jobs at this price.",
+        off_by.abs(),
+        if off_by > 0 { "less" } else { "more" },
+    ))
 }
 
 /// True when the command can ask the user a question.
@@ -279,6 +333,77 @@ mod tests {
         assert_eq!(format_token_amount(u(42), 0), "42.00");
         // does not panic on values beyond u128
         assert!(format_token_amount(U256::MAX, 18).len() > 60);
+    }
+
+    #[test]
+    fn token_display_formatting() {
+        // exact on a 6 decimal token
+        assert_eq!(format_token_display(u(50_000), 6), "0.05");
+        assert_eq!(format_token_display(u(1), 6), "0.000001");
+        // hourly rate of 13888888888889 per second with 18 decimals
+        assert_eq!(
+            format_token_display(u(13_888_888_888_889 * 3600), 18),
+            "0.05"
+        );
+        assert_eq!(
+            format_token_display(U256::from(1_234_567_890_123_456_789u128), 18),
+            "1.234567"
+        );
+        // too small for six places: six significant digits instead of zero
+        assert_eq!(format_token_display(u(12803), 18), "0.000000000000012803");
+        assert_eq!(
+            format_token_display(u(51_212_517_700_194_000), 30),
+            "0.0000000000000512125"
+        );
+        assert_eq!(format_token_display(u(1_000_000_000_001), 18), "0.000001");
+        assert_eq!(format_token_display(u(1_999_999), 6), "1.999999");
+        assert_eq!(format_token_display(u(0), 18), "0.00");
+    }
+
+    #[test]
+    fn amount_in_base_units_or_tokens() {
+        assert_eq!(
+            resolve_amount(Some(u(1_000_000)), None, 6).unwrap(),
+            Some(u(1_000_000))
+        );
+        assert_eq!(
+            resolve_amount(None, Some("1"), 6).unwrap(),
+            Some(u(1_000_000))
+        );
+        assert_eq!(resolve_amount(None, None, 6).unwrap(), None);
+        assert!(resolve_amount(Some(u(1)), Some("1"), 6).is_err());
+        assert!(resolve_amount(None, Some("1.0000001"), 6).is_err());
+
+        // 20 tokens with 18 decimals do not fit in a u64 of base units
+        let twenty = resolve_amount(None, Some("20"), 18).unwrap().unwrap();
+        assert!(twenty > U256::from(u64::MAX));
+        assert_eq!(format_token_amount(twenty, 18), "20.00");
+    }
+
+    #[test]
+    fn mispricing_is_flagged_only_where_decimals_do_not_add_up() {
+        // Arbitrum One and Sui: 6 decimal USDC, EXTRA_DECIMALS 12
+        assert_eq!(mispricing_warning(6, 12), None);
+        // BSC: 18 decimal token, EXTRA_DECIMALS 12
+        let warning = mispricing_warning(18, 12).unwrap();
+        assert!(warning.contains("10^12 times less"), "{warning}");
+        assert!(
+            mispricing_warning(6, 0)
+                .unwrap()
+                .contains("10^12 times more")
+        );
+    }
+
+    #[test]
+    fn bsc_job_from_the_review_is_not_expired() {
+        // BSC job 0: rate 14225699361165, balance 12803 base units for 15 minutes.
+        // Without the EXTRA_DECIMALS scaling it looks used up after one second.
+        let rate = u(14_225_699_361_165);
+        let balance = u(12803);
+        let after_10_min = accrued_since_settlement(rate, T0, T0 as u64 + 600, 12);
+        assert_eq!(after_10_min, u(8536));
+        assert!(after_10_min < balance);
+        assert!(accrued_since_settlement(rate, T0, T0 as u64 + 900, 12) >= balance);
     }
 
     #[test]

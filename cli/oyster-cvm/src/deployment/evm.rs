@@ -197,6 +197,25 @@ impl DeploymentAdapter for EvmAdapter {
         Ok(extra_decimals.saturating_to::<i64>())
     }
 
+    async fn fetch_token_decimals(&self, provider: &ChainProvider) -> Result<u32> {
+        let ChainProvider::Evm(provider) = provider else {
+            return Err(anyhow!("Internal error"));
+        };
+
+        let usdc_address: Address = self
+            .usdc_address
+            .parse()
+            .context("Failed to parse USDC address")?;
+
+        let decimals = USDC::new(usdc_address, provider)
+            .decimals()
+            .call()
+            .await
+            .context("Failed to fetch token decimals")?;
+
+        Ok(decimals as u32)
+    }
+
     async fn get_job_data_if_exists(
         &self,
         job_id: String,

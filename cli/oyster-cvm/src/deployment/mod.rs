@@ -111,6 +111,52 @@ mod live_tests {
         );
     }
 
+    // the list command has no RPC and relies on the decimals in the configs
+    #[tokio::test]
+    #[ignore = "reads Arbitrum One, BSC and Sui mainnet"]
+    async fn live_decimals_match_configs() {
+        use crate::configs::{arb, bsc, sui};
+
+        for (deployment, rpc, key, token_decimals, extra_decimals) in [
+            (
+                Deployment::Arbitrum,
+                None,
+                EVM_DUMMY_KEY,
+                arb::USDC_DECIMALS,
+                arb::MARKET_EXTRA_DECIMALS,
+            ),
+            (
+                Deployment::Bsc,
+                Some("https://bsc-dataseed.bnbchain.org".to_owned()),
+                EVM_DUMMY_KEY,
+                bsc::USDC_DECIMALS,
+                bsc::MARKET_EXTRA_DECIMALS,
+            ),
+            (
+                Deployment::Sui,
+                None,
+                SUI_DUMMY_KEY,
+                sui::USDC_DECIMALS,
+                sui::MARKET_EXTRA_DECIMALS,
+            ),
+        ] {
+            let name = deployment.as_str();
+            let mut adapter = get_deployment_adapter(deployment, rpc, None, None, None);
+            let provider = adapter.create_provider_with_wallet(key).await.unwrap();
+
+            assert_eq!(
+                adapter.fetch_token_decimals(&provider).await.unwrap(),
+                token_decimals as u32,
+                "{name}"
+            );
+            assert_eq!(
+                adapter.fetch_extra_decimals(&provider).await.unwrap(),
+                extra_decimals as i64,
+                "{name}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "reads Sui mainnet"]
     async fn live_sui_rate_lock() {

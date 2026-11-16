@@ -1,15 +1,14 @@
 use crate::args::wallet::WalletArgs;
-use crate::configs::global::MIN_WITHDRAW_AMOUNT;
 use crate::deployment::adapter::JobTransactionKind;
 use crate::deployment::{Deployment, get_deployment_adapter};
-use crate::utils::format_usdc;
+use crate::utils::{format_token_amount, mispricing_warning, resolve_amount};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sui_sdk_types::Address;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // Withdrawal Settings
 const BUFFER_MINUTES: u64 = 7; // Required buffer time in minutes
@@ -25,9 +24,14 @@ pub struct WithdrawArgs {
     #[arg(short, long, required = true)]
     job_id: String,
 
-    /// Amount to withdraw in USDC (e.g. 1000000 = 1 USDC since USDC has 6 decimal places)
-    #[arg(short, long, required_unless_present = "max")]
-    amount: Option<u64>,
+    /// Amount to withdraw in base units of the payment token
+    /// (e.g. 1000000 = 1 USDC on Arbitrum One and Sui where USDC has 6 decimals, the token on BSC has 18)
+    #[arg(short, long, required_unless_present_any = ["max", "amount_usdc"])]
+    amount: Option<U256>,
+
+    /// Amount to withdraw in USDC, as a decimal number (e.g. 1.5)
+    #[arg(long, conflicts_with_all = ["amount", "max"])]
+    amount_usdc: Option<String>,
 
     /// Withdraw all remaining balance
     #[arg(long, conflicts_with = "amount")]
@@ -91,6 +95,11 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     }
 
     let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
+    let token_decimals = deployment_adapter.fetch_token_decimals(&provider).await?;
+    if let Some(warning) = mispricing_warning(token_decimals, extra_decimals) {
+        warn!("{warning}");
+    }
+    let amount = resolve_amount(amount, args.amount_usdc.as_deref(), token_decimals)?;
 
     // Scale down rate by extra_decimals
     let scaled_rate = job_data
@@ -114,9 +123,9 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     }
 
     info!(
-        "Current balance: {:.6} USDC, Required buffer: {:.6} USDC",
-        format_usdc(current_balance, extra_decimals),
-        format_usdc(buffer_balance, extra_decimals)
+        "Current balance: {} USDC, Required buffer: {} USDC",
+        format_token_amount(current_balance, token_decimals),
+        format_token_amount(buffer_balance, token_decimals)
     );
 
     // Calculate maximum withdrawable amount (in USDC with 6 decimals)
@@ -126,9 +135,9 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
             .ok_or_else(|| anyhow!("Failed to calculate withdrawable amount"))?
     } else {
         return Err(anyhow!(
-            "Cannot withdraw: current balance ({:.6} USDC) is less than required buffer ({:.6} USDC)",
-            format_usdc(current_balance, extra_decimals),
-            format_usdc(buffer_balance, extra_decimals)
+            "Cannot withdraw: current balance ({} USDC) is less than required buffer ({} USDC)",
+            format_token_amount(current_balance, token_decimals),
+            format_token_amount(buffer_balance, token_decimals)
         ));
     };
 
@@ -139,27 +148,24 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     } else {
         let amount =
             amount.ok_or_else(|| anyhow!("Amount must be specified when not using --max"))?;
-        if amount < MIN_WITHDRAW_AMOUNT {
-            return Err(anyhow!(
-                "Amount must be at least {} (0.000001 USDC)",
-                MIN_WITHDRAW_AMOUNT
-            ));
+        if amount.is_zero() {
+            return Err(anyhow!("Amount must be greater than 0"));
         }
-        let amount_u256 = U256::from(amount);
+        let amount_u256 = amount;
         if amount_u256 > max_withdrawable {
             return Err(anyhow!(
-                "Cannot withdraw {:.6} USDC: maximum withdrawable amount is {:.6} USDC (need to maintain {:.6} USDC buffer)",
-                format_usdc(amount_u256, extra_decimals),
-                format_usdc(max_withdrawable, extra_decimals),
-                format_usdc(buffer_balance, extra_decimals)
+                "Cannot withdraw {} USDC: maximum withdrawable amount is {} USDC (need to maintain {} USDC buffer)",
+                format_token_amount(amount_u256, token_decimals),
+                format_token_amount(max_withdrawable, token_decimals),
+                format_token_amount(buffer_balance, token_decimals)
             ));
         }
         amount_u256
     };
 
     info!(
-        "Initiating withdrawal of {:.6} USDC",
-        format_usdc(amount_u256, extra_decimals)
+        "Initiating withdrawal of {} USDC",
+        format_token_amount(amount_u256, token_decimals)
     );
 
     // Call jobWithdraw function with amount in USDC

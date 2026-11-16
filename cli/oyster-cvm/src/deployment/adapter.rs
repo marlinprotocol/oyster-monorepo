@@ -96,6 +96,8 @@ pub trait DeploymentAdapter: Send + Sync {
 
     async fn get_operator_cp(&self, operator: &str, provider: &ChainProvider) -> Result<String>;
     async fn fetch_extra_decimals(&self, provider: &ChainProvider) -> Result<i64>;
+    /// Decimals of the token the market is paid in.
+    async fn fetch_token_decimals(&self, provider: &ChainProvider) -> Result<u32>;
     async fn get_job_data_if_exists(
         &self,
         job_id: String,

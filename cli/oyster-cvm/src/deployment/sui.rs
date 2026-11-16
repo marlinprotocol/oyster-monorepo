@@ -216,6 +216,11 @@ impl DeploymentAdapter for SuiAdapter {
         Ok(extra_decimals as i64)
     }
 
+    async fn fetch_token_decimals(&self, _provider: &ChainProvider) -> Result<u32> {
+        // the market is tied to the USDC coin type
+        Ok(crate::configs::sui::USDC_DECIMALS as u32)
+    }
+
     async fn get_job_data_if_exists(
         &self,
         job_id: String,
@@ -665,7 +670,7 @@ impl DeploymentAdapter for SuiAdapter {
                     inputs: vec![
                         Input::ImmutableOrOwned(usdc_fund),
                         Input::Pure {
-                            value: bcs::to_bytes(&balance.saturating_to::<u64>())
+                            value: bcs::to_bytes(&to_u64(balance)?)
                                 .context("Failed to bcs encode usdc coin amount")?,
                         },
                         Input::Shared {
@@ -685,7 +690,7 @@ impl DeploymentAdapter for SuiAdapter {
                             .context("Failed to bcs encode job operator")?,
                         },
                         Input::Pure {
-                            value: bcs::to_bytes(&rate.saturating_to::<u64>())
+                            value: bcs::to_bytes(&to_u64(rate)?)
                                 .context("Failed to bcs encode job rate")?,
                         },
                         Input::Shared {
@@ -721,7 +726,7 @@ impl DeploymentAdapter for SuiAdapter {
                     inputs: vec![
                         Input::ImmutableOrOwned(usdc_fund),
                         Input::Pure {
-                            value: bcs::to_bytes(&amount.saturating_to::<u64>())
+                            value: bcs::to_bytes(&to_u64(amount)?)
                                 .context("Failed to bcs encode usdc coin amount")?,
                         },
                         Input::Shared {
@@ -769,7 +774,7 @@ impl DeploymentAdapter for SuiAdapter {
                                 .context("Failed to bcs encode job ID")?,
                         },
                         Input::Pure {
-                            value: bcs::to_bytes(&rate.saturating_to::<u64>())
+                            value: bcs::to_bytes(&to_u64(rate)?)
                                 .context("Failed to bcs encode job new rate")?,
                         },
                         Input::Shared {
@@ -880,7 +885,7 @@ impl DeploymentAdapter for SuiAdapter {
                                 .context("Failed to bcs encode job ID")?,
                         },
                         Input::Pure {
-                            value: bcs::to_bytes(&amount.saturating_to::<u64>())
+                            value: bcs::to_bytes(&to_u64(amount)?)
                                 .context("Failed to bcs encode job withdraw amount")?,
                         },
                         Input::Shared {
@@ -1044,6 +1049,11 @@ impl SuiAdapter {
             .map(|value| value.value().value().to_vec())
             .collect())
     }
+}
+
+/// Amounts and rates are u64 in the Sui market, refuse what does not fit instead of clamping it.
+fn to_u64(value: U256) -> Result<u64> {
+    u64::try_from(value).map_err(|_| anyhow!("Value {value} is too large for the Sui market"))
 }
 
 /// Selector and key under which the market keeps the rate lock of a job:

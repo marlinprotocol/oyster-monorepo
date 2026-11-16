@@ -11,7 +11,8 @@ use crate::{
     utils::{
         ask_yes_no,
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region, parse_hex_rate},
-        format_token_amount, is_interactive, parse_token_amount,
+        format_token_amount, format_token_display, is_interactive, mispricing_warning,
+        parse_token_amount,
     },
 };
 
@@ -248,10 +249,15 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
 
-    // Token amounts have 18 - EXTRA_DECIMALS decimals, rates are per second with 18 decimals
-    let token_decimals = u32::try_from(18 - extra_decimals)
-        .map_err(|_| anyhow!("Unexpected EXTRA_DECIMALS value {extra_decimals}"))?;
-    let rate_decimals = 18;
+    // Amounts are shown in the token's own decimals. The market charges
+    // rate / 10^EXTRA_DECIMALS base units per second, so a rate has this many decimals in tokens:
+    let token_decimals = deployment_adapter.fetch_token_decimals(&provider).await?;
+    let rate_decimals = token_decimals
+        + u32::try_from(extra_decimals)
+            .map_err(|_| anyhow!("Unexpected EXTRA_DECIMALS value {extra_decimals}"))?;
+    if let Some(warning) = mispricing_warning(token_decimals, extra_decimals) {
+        warn!("{warning}");
+    }
 
     // Calculate costs
     // SAFETY: will be some value if simulation is not opted
@@ -288,7 +294,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     );
     info!(
         "Total rate: {} USDC/hour",
-        format_token_amount(hourly_rate, rate_decimals)
+        format_token_display(hourly_rate, rate_decimals)
     );
 
     // The price is whatever the operator's control plane answered, check it against the caps
@@ -310,6 +316,7 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         max_cost,
         max_hourly_rate,
         token_decimals,
+        rate_decimals,
     )
     .map_err(|err| {
         anyhow!(
@@ -596,7 +603,7 @@ async fn calculate_total_cost(
     )
 }
 
-/// Total cost in token base units and total rate (per second, 18 decimals) of a job.
+/// Total cost in token base units and total rate of a job, as passed to the market.
 fn compute_total_cost(
     instance_secondly_rate_usdc: U256,
     bandwidth_rate_region: U256,
@@ -637,13 +644,14 @@ fn compute_total_cost(
 }
 
 /// Refuses a price above what the user is willing to pay.
-/// Amounts are in token base units, rates in USDC per hour with 18 decimals.
+/// Amounts are in token base units, rates in tokens per hour with `rate_decimals` decimals.
 fn check_price_caps(
     total_cost: U256,
     hourly_rate: U256,
     max_cost: Option<U256>,
     max_hourly_rate: Option<U256>,
     token_decimals: u32,
+    rate_decimals: u32,
 ) -> Result<()> {
     if let Some(max_cost) = max_cost
         && total_cost > max_cost
@@ -659,8 +667,8 @@ fn check_price_caps(
     {
         return Err(anyhow!(
             "Rate {} USDC/hour is above --max-rate {} USDC/hour",
-            format_token_amount(hourly_rate, 18),
-            format_token_amount(max_hourly_rate, 18)
+            format_token_display(hourly_rate, rate_decimals),
+            format_token_display(max_hourly_rate, rate_decimals)
         ));
     }
 
@@ -853,7 +861,7 @@ mod tests {
         let huge = U256::from(u128::MAX) * U256::from(4);
         let (cost, rate) = compute_total_cost(huge, U256::ZERO, 10, 60, 12).unwrap();
         let hourly = rate.saturating_mul(U256::from(3600));
-        assert!(check_price_caps(cost, hourly, Some(U256::from(10_000_000)), None, 6).is_err());
+        assert!(check_price_caps(cost, hourly, Some(U256::from(10_000_000)), None, 6, 18).is_err());
         assert!(!format_token_amount(hourly, 18).is_empty());
     }
 
@@ -863,18 +871,31 @@ mod tests {
         let hourly = U256::from(RATE) * U256::from(3600);
         let cap = |x: &str, decimals| Some(parse_token_amount(x, decimals).unwrap());
 
-        assert!(check_price_caps(cost, hourly, None, None, 6).is_ok());
-        assert!(check_price_caps(cost, hourly, cap("0.05", 6), cap("0.06", 18), 6).is_ok());
+        assert!(check_price_caps(cost, hourly, None, None, 6, 18).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), cap("0.06", 18), 6, 18).is_ok());
         // a cap equal to the price passes
-        assert!(check_price_caps(cost, hourly, cap("0.05", 6), None, 6).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), None, 6, 18).is_ok());
         assert_eq!(
-            check_price_caps(cost, hourly, cap("0.049999", 6), None, 6)
+            check_price_caps(cost, hourly, cap("0.049999", 6), None, 6, 18)
                 .unwrap_err()
                 .to_string(),
             "Total cost 0.05 USDC is above --max-cost 0.049999 USDC"
         );
-        assert!(check_price_caps(cost, hourly, None, cap("0.05", 18), 6).is_err());
-        assert!(check_price_caps(cost, hourly, cap("1", 6), cap("0.01", 18), 6).is_err());
+        assert!(check_price_caps(cost, hourly, None, cap("0.05", 18), 6, 18).is_err());
+        assert!(check_price_caps(cost, hourly, cap("1", 6), cap("0.01", 18), 6, 18).is_err());
+    }
+
+    #[test]
+    fn caps_are_in_real_tokens_on_an_18_decimal_token() {
+        // BSC: same rate card, EXTRA_DECIMALS 12, 18 decimal token
+        let (cost, rate) = compute_total_cost(U256::from(RATE), U256::ZERO, 10, 3600, 12).unwrap();
+        let hourly = rate * U256::from(3600);
+        // the contract moves 50000 base units, 5e-14 tokens
+        assert_eq!(format_token_amount(cost, 18), "0.00000000000005");
+        assert_eq!(format_token_display(hourly, 18 + 12), "0.00000000000005");
+        let cap = |x: &str, decimals| Some(parse_token_amount(x, decimals).unwrap());
+        assert!(check_price_caps(cost, hourly, cap("0.01", 18), cap("0.01", 30), 18, 30).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.00000000000004", 18), None, 18, 30).is_err());
     }
 
     #[test]
