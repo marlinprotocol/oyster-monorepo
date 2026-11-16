@@ -451,9 +451,15 @@ impl TxnManager {
                 continue;
             };
 
-            let mut transaction = {
-                let transactions = self.transactions.read().unwrap();
-                transactions.get(&transaction_id).unwrap().clone()
+            // Skip the transaction if it is no longer tracked
+            let Some(mut transaction) = self
+                .transactions
+                .read()
+                .unwrap()
+                .get(&transaction_id)
+                .cloned()
+            else {
+                continue;
             };
 
             // Calculate the time to wait before resending the transaction
@@ -949,14 +955,103 @@ impl TxnManager {
         loop {
             sleep(Duration::from_secs(self.garbage_collect_interval_sec)).await;
 
-            let mut transactions_guard = self.transactions.write().unwrap();
-            let now = Instant::now();
-
-            transactions_guard.retain(|_, transaction| {
-                // Keep transaction if less than 10 minutes old
-                now.duration_since(transaction.last_monitored)
-                    < Duration::from_secs(self.garbage_removal_duration_sec)
-            });
+            self._remove_old_transactions();
         }
+    }
+
+    /// Removes the transactions that have not been monitored for the garbage removal duration.
+    ///
+    /// Transactions that are still in the queue are kept, they are yet to be monitored.
+    fn _remove_old_transactions(self: &Arc<Self>) {
+        let mut transactions_guard = self.transactions.write().unwrap();
+        let transactions_queue_guard = self.transaction_ids_queue.read().unwrap();
+        let now = Instant::now();
+
+        transactions_guard.retain(|transaction_id, transaction| {
+            // Keep transaction if less than 10 minutes old
+            now.duration_since(transaction.last_monitored)
+                < Duration::from_secs(self.garbage_removal_duration_sec)
+                || transactions_queue_guard.contains(transaction_id)
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_txn_manager(garbage_removal_duration_sec: u64) -> Arc<TxnManager> {
+        TxnManager::new(
+            "http://127.0.0.1:1".to_string(),
+            1,
+            PrivateKeySigner::random().to_bytes().to_string(),
+            None,
+            None,
+            None,
+            Some(garbage_removal_duration_sec),
+        )
+        .unwrap()
+    }
+
+    fn add_transaction(txn_manager: &Arc<TxnManager>, id: &str) {
+        let transaction = Transaction {
+            id: id.to_string(),
+            contract_address: Address::ZERO,
+            transaction_data: Bytes::new(),
+            timeout: Instant::now(),
+            private_signer: txn_manager.get_private_signer(),
+            nonce: Some(0),
+            txn_hash: None,
+            status: TxnStatus::Pending,
+            gas_price: 1,
+            estimated_gas: 1,
+            last_monitored: Instant::now(),
+        };
+
+        txn_manager
+            .transactions
+            .write()
+            .unwrap()
+            .insert(transaction.id.clone(), transaction);
+    }
+
+    #[tokio::test]
+    async fn garbage_collection_keeps_queued_transactions() {
+        let txn_manager = new_txn_manager(0);
+
+        add_transaction(&txn_manager, "queued");
+        add_transaction(&txn_manager, "monitored");
+        txn_manager
+            .transaction_ids_queue
+            .write()
+            .unwrap()
+            .push_back("queued".to_string());
+
+        txn_manager._remove_old_transactions();
+
+        let transactions = txn_manager.transactions.read().unwrap();
+        assert!(transactions.contains_key("queued"));
+        assert!(!transactions.contains_key("monitored"));
+    }
+
+    #[tokio::test]
+    async fn queued_transaction_missing_from_map_is_skipped() {
+        let txn_manager = new_txn_manager(600);
+
+        txn_manager
+            .transaction_ids_queue
+            .write()
+            .unwrap()
+            .push_back("removed".to_string());
+
+        // The processing loop never returns, it should still be running after the timeout
+        let res = tokio::time::timeout(
+            Duration::from_millis(500),
+            txn_manager._process_transaction(),
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert!(txn_manager.transaction_ids_queue.read().unwrap().is_empty());
     }
 }
