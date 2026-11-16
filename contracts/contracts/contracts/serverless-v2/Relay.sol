@@ -98,7 +98,7 @@ contract Relay is
      * @param _admin The address to be granted the DEFAULT_ADMIN_ROLE.
      * @param _images The initial enclave images to be whitelisted.
      */
-    function initialize(address _admin, EnclaveImage[] memory _images) public initializer {
+    function initialize(address _admin, bytes32[] memory _images) public initializer {
         if (_admin == address(0)) revert RelayZeroAddressAdmin();
 
         __Context_init_unchained();
@@ -148,17 +148,11 @@ contract Relay is
 
     /**
      * @notice Whitelist an enclave image for use by gateways.
-     * @param PCR0 The first PCR value of the enclave image.
-     * @param PCR1 The second PCR value of the enclave image.
-     * @param PCR2 The third PCR value of the enclave image.
-     * @return Computed image id and true if the image was freshly whitelisted, false otherwise.
+     * @param imageId The id of the enclave image, as computed by the attestation verifier enclave.
+     * @return true if the image was freshly whitelisted, false otherwise.
      */
-    function whitelistEnclaveImage(
-        bytes calldata PCR0,
-        bytes calldata PCR1,
-        bytes calldata PCR2
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bytes32, bool) {
-        return _whitelistEnclaveImage(EnclaveImage(PCR0, PCR1, PCR2));
+    function whitelistEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        return _whitelistEnclaveImage(imageId);
     }
 
     /**
@@ -302,7 +296,7 @@ contract Relay is
         // attestation verification
         _verifyEnclaveKey(_attestationSignature, _attestation);
 
-        address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
+        address enclaveAddress = _pubKeyToAddress(_attestation.publicKey);
 
         // signature verification
         _verifyRegisterSign(_owner, _signTimestamp, _signature, enclaveAddress);

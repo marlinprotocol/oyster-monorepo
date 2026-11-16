@@ -16,12 +16,9 @@ const envConfig: EnvConfig = {
 };
 
 async function main() {
-    //Create Enclave Image object
-    const img = {
-        PCR0: getBytes("0xcfa7554f87ba13620037695d62a381a2d876b74c2e1b435584fe5c02c53393ac1c5cd5a8b6f92e866f9a65af751e0462"),
-        PCR1: getBytes("0xbcdf05fefccaa8e55bf2c8d6dee9e79bbff31e34bf28a99aa19e6b29c37ee80b214a414b7607236edf26fcb78654e63f"),
-        PCR2: getBytes("0x20caae8a6a69d9b1aecdf01a0b9c5f3eafd1f06cb51892bf47cef476935bfe77b5b75714b68a69146d650683a217c5b3"),
-    };
+    // Enclave image id. Real image ids are computed by the attestation verifier enclave and cannot be
+    // derived on chain, an arbitrary id is enough here since the dev wallet below acts as the verifier enclave.
+    const img = ethers.id("oyster-dev-image");
 
     let wallet = walletForIndex(0);
     console.log("Attestation Verifer Enclave Private Key: ", wallet.signingKey.privateKey);

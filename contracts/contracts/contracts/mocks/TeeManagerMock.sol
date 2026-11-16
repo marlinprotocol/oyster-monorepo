@@ -55,7 +55,7 @@ contract TeeManagerMock is Context, AttestationAuther {
         bytes memory _signature,
         uint256 _stakeAmount
     ) external {
-        address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
+        address enclaveAddress = _pubKeyToAddress(_attestation.publicKey);
         teeNodes[enclaveAddress].env = _env;
         teeNodes[enclaveAddress].owner = _msgSender();
         teeNodes[enclaveAddress].stakeAmount = _stakeAmount;

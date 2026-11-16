@@ -48,7 +48,7 @@ contract AttestationAutherSampleUpgradeable is
     error AttestationAutherSampleNoImageProvided();
     error AttestationAutherSampleInvalidAdmin();
 
-    function initialize(EnclaveImage[] memory images, address _admin) external initializer {
+    function initialize(bytes32[] memory images, address _admin) external initializer {
         if (!(images.length != 0)) revert AttestationAutherSampleNoImageProvided();
         if (!(_admin != address(0))) revert AttestationAutherSampleInvalidAdmin();
 
@@ -62,7 +62,7 @@ contract AttestationAutherSampleUpgradeable is
     }
 
     function initializeWithFamilies(
-        EnclaveImage[] memory images,
+        bytes32[] memory images,
         bytes32[] memory families,
         address _admin
     ) external initializer {
@@ -82,12 +82,8 @@ contract AttestationAutherSampleUpgradeable is
 
     //-------------------------------- Admin methods start --------------------------------//
 
-    function whitelistEnclaveImage(
-        bytes memory PCR0,
-        bytes memory PCR1,
-        bytes memory PCR2
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bytes32, bool) {
-        return _whitelistEnclaveImage(EnclaveImage(PCR0, PCR1, PCR2));
+    function whitelistEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        return _whitelistEnclaveImage(imageId);
     }
 
     function revokeEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {

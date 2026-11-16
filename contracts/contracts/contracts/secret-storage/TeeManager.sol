@@ -96,7 +96,7 @@ contract TeeManager is
      * @param _admin The address of the admin.
      * @param _images Array of enclave images to initialize.
      */
-    function initialize(address _admin, EnclaveImage[] memory _images) public initializer {
+    function initialize(address _admin, bytes32[] memory _images) public initializer {
         if (_admin == address(0)) revert TeeManagerZeroAddressAdmin();
 
         __Context_init_unchained();
@@ -243,18 +243,11 @@ contract TeeManager is
 
     /**
      * @notice Whitelists an enclave image for use by storage enclaves.
-     * @param PCR0 The first PCR value.
-     * @param PCR1 The second PCR value.
-     * @param PCR2 The third PCR value.
-     * @return imageId The ID of the whitelisted image.
-     * @return success Boolean indicating whether the image was successfully whitelisted.
+     * @param imageId The id of the enclave image, as computed by the attestation verifier enclave.
+     * @return true if the image was freshly whitelisted, false otherwise.
      */
-    function whitelistEnclaveImage(
-        bytes memory PCR0,
-        bytes memory PCR1,
-        bytes memory PCR2
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bytes32, bool) {
-        return _whitelistEnclaveImage(EnclaveImage(PCR0, PCR1, PCR2));
+    function whitelistEnclaveImage(bytes32 imageId) external onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        return _whitelistEnclaveImage(imageId);
     }
 
     /**
@@ -281,7 +274,7 @@ contract TeeManager is
         uint256 _stakeAmount,
         address _owner
     ) internal {
-        address enclaveAddress = _pubKeyToAddress(_attestation.enclavePubKey);
+        address enclaveAddress = _pubKeyToAddress(_attestation.publicKey);
         if (teeNodes[enclaveAddress].owner != address(0)) 
             revert TeeManagerEnclaveAlreadyExists();
 

@@ -6,27 +6,9 @@ import { AttestationAutherUpgradeable, AttestationVerifier, GatewayJobs, Gateway
 import { takeSnapshotBeforeAndAfterEveryTest } from "../../utils/testSuite";
 import { testERC165 } from '../helpers/erc165';
 
-const image1: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48))
-};
-
-const image2: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48))
-};
-
-const image3: AttestationAutherUpgradeable.EnclaveImageStruct = {
-    PCR0: ethers.hexlify(ethers.randomBytes(48)),
-    PCR1: ethers.hexlify(ethers.randomBytes(48)),
-    PCR2: ethers.hexlify(ethers.randomBytes(48))
-};
-
-function getImageId(image: AttestationAutherUpgradeable.EnclaveImageStruct): string {
-    return keccak256(solidityPacked(["bytes", "bytes", "bytes"], [image.PCR0, image.PCR1, image.PCR2]));
-}
+const image1: string = ethers.hexlify(ethers.randomBytes(32));
+const image2: string = ethers.hexlify(ethers.randomBytes(32));
+const image3: string = ethers.hexlify(ethers.randomBytes(32));
 
 describe("Gateways - Init", function () {
     let signers: Signer[];
@@ -107,8 +89,7 @@ describe("Gateways - Init", function () {
 
         expect(await gateways.hasRole(await gateways.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
         {
-            const { PCR0, PCR1, PCR2 } = await gateways.getWhitelistedImage(getImageId(image1));
-            expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+            expect(await gateways.isImageWhitelisted(image1)).to.be.true;
         }
     });
 
@@ -181,16 +162,13 @@ describe("Gateways - Init", function () {
 
         expect(await gateways.hasRole(await gateways.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
         {
-            const { PCR0, PCR1, PCR2 } = await gateways.getWhitelistedImage(getImageId(image1));
-            expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+            expect(await gateways.isImageWhitelisted(image1)).to.be.true;
         }
         {
-            const { PCR0, PCR1, PCR2 } = await gateways.getWhitelistedImage(getImageId(image2));
-            expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image2);
+            expect(await gateways.isImageWhitelisted(image2)).to.be.true;
         }
         {
-            const { PCR0, PCR1, PCR2 } = await gateways.getWhitelistedImage(getImageId(image3));
-            expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+            expect(await gateways.isImageWhitelisted(image3)).to.be.true;
         }
     });
 
@@ -293,28 +271,26 @@ describe("Gateways - Whitelist/Revoke enclave", function () {
     takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
     it("can whitelist enclave image with admin account", async function () {
-        await expect(gateways.connect(signers[0]).whitelistEnclaveImage(image1.PCR0, image1.PCR1, image1.PCR2))
-            .to.emit(gateways, "EnclaveImageWhitelisted").withArgs(getImageId(image1), image1.PCR0, image1.PCR1, image1.PCR2);
+        await expect(gateways.connect(signers[0]).whitelistEnclaveImage(image1))
+            .to.emit(gateways, "EnclaveImageWhitelisted").withArgs(image1);
 
-        const { PCR0, PCR1, PCR2 } = await gateways.getWhitelistedImage(getImageId(image1));
-        expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+        expect(await gateways.isImageWhitelisted(image1)).to.be.true;
     });
 
     it("cannot whitelist enclave image without admin account", async function () {
-        await expect(gateways.connect(signers[1]).whitelistEnclaveImage(image1.PCR0, image1.PCR1, image1.PCR2))
+        await expect(gateways.connect(signers[1]).whitelistEnclaveImage(image1))
             .to.be.revertedWithCustomError(gateways, "AccessControlUnauthorizedAccount");
     });
 
     it("can revoke enclave image with admin account", async function () {
-        await expect(gateways.connect(signers[0]).revokeEnclaveImage(getImageId(image2)))
-            .to.emit(gateways, "EnclaveImageRevoked").withArgs(getImageId(image2));
+        await expect(gateways.connect(signers[0]).revokeEnclaveImage(image2))
+            .to.emit(gateways, "EnclaveImageRevoked").withArgs(image2);
 
-        const { PCR0 } = await gateways.getWhitelistedImage(getImageId(image2));
-        expect(PCR0).to.equal("0x");
+        expect(await gateways.isImageWhitelisted(image2)).to.be.false;
     });
 
     it("cannot revoke enclave image without admin account", async function () {
-        await expect(gateways.connect(signers[1]).revokeEnclaveImage(getImageId(image2)))
+        await expect(gateways.connect(signers[1]).revokeEnclaveImage(image2))
             .to.be.revertedWithCustomError(gateways, "AccessControlUnauthorizedAccount");
     });
 });
@@ -368,8 +344,8 @@ describe("Gateways - Verify", function () {
         let [signature, attestation] = await createAttestation(pubkeys[15], image3, wallets[14], timestamp - 540000);
 
         await expect(gateways.connect(signers[1]).verifyEnclaveKey(signature, attestation))
-            .to.emit(gateways, "EnclaveKeyVerified").withArgs(addrs[15], getImageId(image3), pubkeys[15]);
-        expect(await gateways.getVerifiedKey(addrs[15])).to.equal(getImageId(image3));
+            .to.emit(gateways, "EnclaveKeyVerified").withArgs(addrs[15], image3, pubkeys[15]);
+        expect(await gateways.getVerifiedKey(addrs[15])).to.equal(image3);
     });
 });
 
@@ -894,8 +870,8 @@ describe("Gateways - Register gateway", function () {
         let signedDigest = await createGatewaySignature(addrs[1], chainIds, signTimestamp, wallets[15]);
 
         await expect(gateways.connect(signers[1]).registerGateway(signature, attestation, [1], signedDigest, 0, signTimestamp))
-            .to.emit(gateways, "EnclaveKeyVerified").withArgs(addrs[15], getImageId(image2), pubkeys[15]);
-        expect(await gateways.getVerifiedKey(addrs[15])).to.equal(getImageId(image2));
+            .to.emit(gateways, "EnclaveKeyVerified").withArgs(addrs[15], image2, pubkeys[15]);
+        expect(await gateways.getVerifiedKey(addrs[15])).to.equal(image2);
 
     });
 
@@ -1314,18 +1290,18 @@ function normalize(key: string): string {
 }
 
 type Attestation = {
-    enclavePubKey: string,
-    PCR0: BytesLike,
-    PCR1: BytesLike,
-    PCR2: BytesLike,
-    timestampInMilliseconds: number,
+    imageId: BytesLike,
+    timestampMs: number,
+    publicKey: string,
+    userData: BytesLike,
 }
 
 async function createAttestation(
     enclaveKey: string,
-    image: AttestationVerifier.EnclaveImageStruct,
+    image: string,
     sourceEnclaveKey: Wallet,
     timestamp: number,
+    userData: BytesLike = "0x",
 ): Promise<[string, Attestation]> {
     const domain = {
         name: 'marlin.oyster.AttestationVerifier',
@@ -1334,28 +1310,21 @@ async function createAttestation(
 
     const types = {
         Attestation: [
-            { name: 'enclavePubKey', type: 'bytes' },
-            { name: 'PCR0', type: 'bytes' },
-            { name: 'PCR1', type: 'bytes' },
-            { name: 'PCR2', type: 'bytes' },
-            { name: 'timestampInMilliseconds', type: 'uint256' },
+            { name: 'imageId', type: 'bytes32' },
+            { name: 'timestampMs', type: 'uint64' },
+            { name: 'publicKey', type: 'bytes' },
+            { name: 'userData', type: 'bytes' },
         ]
     }
 
-    const sign = await sourceEnclaveKey.signTypedData(domain, types, {
-        enclavePubKey: enclaveKey,
-        PCR0: image.PCR0,
-        PCR1: image.PCR1,
-        PCR2: image.PCR2,
-        timestampInMilliseconds: timestamp,
-    });
-    return [ethers.Signature.from(sign).serialized, {
-        enclavePubKey: enclaveKey,
-        PCR0: image.PCR0,
-        PCR1: image.PCR1,
-        PCR2: image.PCR2,
-        timestampInMilliseconds: timestamp,
-    }];
+    const attestation: Attestation = {
+        imageId: image,
+        timestampMs: timestamp,
+        publicKey: enclaveKey,
+        userData: userData,
+    };
+    const sign = await sourceEnclaveKey.signTypedData(domain, types, attestation);
+    return [ethers.Signature.from(sign).serialized, attestation];
 }
 
 async function createGatewaySignature(
