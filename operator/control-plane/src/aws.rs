@@ -565,13 +565,13 @@ impl Aws {
 
         let rules: Vec<&str> = stdout.trim().split('\n').map(|s| s.trim()).collect();
 
-        for i in 0..2 {
+        for (i, expected) in iptables_rules.iter().enumerate().take(2) {
             let rule = rules.get(i).copied().unwrap_or("");
-            if rule != iptables_rules[i] {
+            if rule != *expected {
                 return Err(anyhow!(
                     "Failed to match rule: got '{}' expected '{}'",
                     rule,
-                    iptables_rules[i],
+                    expected,
                 ));
             }
         }
