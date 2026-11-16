@@ -7,8 +7,9 @@ use anyhow::Context;
 use args::Args;
 use clap::Parser;
 use enclave_monitor::monitor_and_capture_logs;
-use logging::{clear_log_file, log_message};
+use logging::{clear_log_file, log_message, remove_log_file, rotated_path};
 use std::sync::{atomic::AtomicU64, Arc};
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,6 +23,11 @@ async fn main() -> anyhow::Result<()> {
             .with_context(|| format!("failed to clear log file: {}", path))?;
     }
 
+    // log ids start from 1 again, older logs do not belong to this run
+    remove_log_file(&rotated_path(&args.enclave_log_file_path))
+        .await
+        .context("failed to remove rotated log file")?;
+
     log_message(&args.script_log_file_path, "Starting script...").await?;
 
     // Spawn log monitoring task
@@ -30,15 +36,27 @@ async fn main() -> anyhow::Result<()> {
         let enclave_log = args.enclave_log_file_path.clone();
         let counter = Arc::clone(&log_counter);
 
+        let max_log_file_size = args.max_log_file_size_mb.saturating_mul(1024 * 1024);
+
         async move {
-            if let Err(e) =
-                monitor_and_capture_logs(&enclave_log, &script_log, args.target_cid, counter).await
-            {
-                let _ = log_message(
+            // capture should never stop for good, the http server keeps running regardless
+            loop {
+                if let Err(e) = monitor_and_capture_logs(
+                    &enclave_log,
                     &script_log,
-                    &format!("Error in monitor_and_capture_logs: {}. Retrying...", e),
+                    args.target_cid,
+                    counter.clone(),
+                    max_log_file_size,
                 )
-                .await;
+                .await
+                {
+                    let _ = log_message(
+                        &script_log,
+                        &format!("Error in monitor_and_capture_logs: {:?}. Retrying...", e),
+                    )
+                    .await;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     });
