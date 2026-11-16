@@ -17,7 +17,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 use whoami::username;
 
-use crate::market::{InfraProvider, JobId};
+use crate::market::{validate_image_url, InfraProvider, JobId};
 
 #[derive(Clone)]
 pub struct Aws {
@@ -363,9 +363,13 @@ impl Aws {
 
     // Goal: make enclave.eif match the provided image url
     // uses image_url.txt file to track state instead of redownloading every time
+    // image_url.txt only exists while enclave.eif is a fully downloaded and allowed image
+    // from that url
     // WARN: the enclave image at the url might have changed, we would have to
     // redownload the image every time to verify it, simply ignore for now
     fn run_fragment_download_and_check_image(&self, sess: &Session, image_url: &str) -> Result<()> {
+        validate_image_url(image_url).context("Image url not usable")?;
+
         let (stdout, stderr) =
             Self::ssh_exec(sess, "cat image_url.txt").context("Failed to read image_url.txt")?;
 
@@ -376,14 +380,12 @@ impl Aws {
             return Ok(());
         }
 
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "curl -sL -o enclave.eif --max-filesize 4000000000 --max-time 120 '{}'",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to download enclave image")?;
+        // curl prints only errors with -sS, and -f makes http errors count
+        let (_, stderr) = Self::ssh_exec(sess, &Self::download_image_command(image_url))
+            .context("Failed to download enclave image")?;
+        if !stderr.is_empty() {
+            return Err(anyhow!(stderr)).context("Error downloading enclave image");
+        }
 
         let is_eif_allowed = self
             .check_eif_blacklist_whitelist(sess)
@@ -394,16 +396,34 @@ impl Aws {
         }
 
         // store eif_url only when the image is allowed
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "echo \"{}\" > image_url.txt",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to write EIF URL to txt file.")?;
+        let (_, stderr) = Self::ssh_exec(sess, &Self::store_image_url_command(image_url))
+            .context("Failed to write EIF URL to txt file.")?;
+        if !stderr.is_empty() {
+            return Err(anyhow!(stderr)).context("Error writing EIF URL to txt file");
+        }
 
         Ok(())
+    }
+
+    // IMPORTANT: the url comes from job metadata, it has to be quoted exactly once
+    // shell_escape already returns a quoted word, do not wrap it in more quotes
+    fn shell_quote(s: &str) -> String {
+        shell_escape::unix::escape(s.into()).into_owned()
+    }
+
+    // forgets the previous url first so a failure midway cannot leave image_url.txt
+    // pointing at an image which is not the one on disk
+    // downloads to a temporary file so a failed download does not replace the image
+    fn download_image_command(image_url: &str) -> String {
+        format!(
+            "rm -f image_url.txt && curl -fsSL --globoff -o enclave.eif.tmp --max-filesize 4000000000 --max-time 120 -- {} && mv enclave.eif.tmp enclave.eif",
+            Self::shell_quote(image_url),
+        )
+    }
+
+    // no trailing newline, the file is compared as is
+    fn store_image_url_command(image_url: &str) -> String {
+        format!("printf %s {} > image_url.txt", Self::shell_quote(image_url))
     }
 
     // Goal: set bandwidth rate
@@ -1578,5 +1598,88 @@ impl InfraProvider for Aws {
             .context("could not get current enclace state")?;
         // There can be 2 states - RUNNING or TERMINATING
         Ok(res == "RUNNING")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::Aws;
+
+    const NASTY: [&str; 8] = [
+        "https://example.com/enclave.eif",
+        "https://example.com/$(touch pwned)",
+        "https://example.com/`touch pwned`",
+        "https://example.com/a;touch pwned",
+        "https://example.com/a' ; touch pwned ; 'b",
+        "https://example.com/a\" ; touch pwned ; \"b",
+        "https://example.com/a\nb\\c!d*e",
+        "-o /etc/passwd",
+    ];
+
+    // run the given script in a real shell inside an empty directory
+    // returns stdout and the files which exist afterwards
+    fn run_sh(script: &str, tag: &str) -> (String, Vec<String>) {
+        let dir = std::env::temp_dir().join(format!("cp-quote-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{script}: {out:?}");
+
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        files.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        (String::from_utf8(out.stdout).unwrap(), files)
+    }
+
+    #[test]
+    fn test_shell_quote_is_one_word() {
+        for (i, url) in NASTY.iter().enumerate() {
+            // the shell must see exactly one argument, equal to the input
+            let script = format!("printf '%s|' {}", Aws::shell_quote(url));
+            let (stdout, files) = run_sh(&script, &format!("word{i}"));
+            assert_eq!(stdout, format!("{url}|"));
+            assert!(files.is_empty(), "{files:?}");
+        }
+    }
+
+    #[test]
+    fn test_store_image_url_command() {
+        for (i, url) in NASTY.iter().enumerate() {
+            let script = format!("{} && cat image_url.txt", Aws::store_image_url_command(url));
+            let (stdout, files) = run_sh(&script, &format!("store{i}"));
+            // compared against the url as is on the next launch
+            assert_eq!(&stdout, url);
+            assert_eq!(files, ["image_url.txt"]);
+        }
+    }
+
+    #[test]
+    fn test_download_image_command() {
+        for (i, url) in NASTY.iter().enumerate() {
+            // stand in for curl: record the arguments, create the output file
+            let script = format!(
+                "curl() {{ printf '%s|' \"$@\"; : > enclave.eif.tmp; }}; echo old > image_url.txt; {}",
+                Aws::download_image_command(url)
+            );
+            let (stdout, files) = run_sh(&script, &format!("dl{i}"));
+            assert_eq!(
+                stdout,
+                format!("-fsSL|--globoff|-o|enclave.eif.tmp|--max-filesize|4000000000|--max-time|120|--|{url}|")
+            );
+            // downloaded image in place, old url forgotten, nothing else created
+            assert_eq!(files, ["enclave.eif"]);
+        }
     }
 }
