@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -13,7 +13,7 @@ use serde_json::Value;
 use ssh2::Session;
 use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tracing::{error, info};
 use whoami::username;
 
@@ -21,6 +21,17 @@ use crate::market::{validate_image_url, InfraProvider, JobId};
 
 // states in which an instance still exists, i.e. everything but shutting-down and terminated
 const LIVE_INSTANCE_STATES: [&str; 4] = ["pending", "running", "stopping", "stopped"];
+
+// limit for the tcp connect, ssh handshake and auth with a job host
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+// limit for a single blocking ssh call while setting up an enclave
+// has to cover the image download which is given 120s on the host, and the enclave start
+const SSH_DEPLOY_IO_TIMEOUT: Duration = Duration::from_secs(300);
+// limit for the whole enclave setup
+const SSH_DEPLOY_TIMEOUT: Duration = Duration::from_secs(900);
+// same limits for the heartbeat, which runs one quick command
+const SSH_HEARTBEAT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+const SSH_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // smallest bandwidth limit applied on job hosts, in kbit/s
 const MIN_BANDWIDTH_KBIT: u64 = 1;
@@ -173,14 +184,30 @@ impl Aws {
 
     /* SSH UTILITY */
 
-    pub async fn ssh_connect(&self, ip_address: &str) -> Result<Session> {
-        let tcp = TcpStream::connect(ip_address)?;
+    // IMPORTANT: everything done over ssh is blocking, never call it directly from async
+    // code, it would hold up a runtime thread for as long as the host takes to answer
+    // go through spawn_blocking like run_enclave_impl and get_enclave_state
+    //
+    // connect_timeout bounds the tcp connect, the ssh handshake and the auth
+    // io_timeout bounds every later blocking call on the session, e.g. waiting for the
+    // output of a command, a host which stops answering results in an error instead of
+    // a thread stuck forever
+    fn ssh_connect(
+        &self,
+        ip_address: &str,
+        connect_timeout: Duration,
+        io_timeout: Duration,
+    ) -> Result<Session> {
+        let addr: SocketAddr = ip_address.parse().context("failed to parse host address")?;
+        let tcp = TcpStream::connect_timeout(&addr, connect_timeout)?;
 
         let mut sess = Session::new()?;
 
+        sess.set_timeout(connect_timeout.as_millis().try_into().unwrap_or(u32::MAX));
         sess.set_tcp_stream(tcp);
         sess.handshake()?;
         sess.userauth_pubkey_file("ubuntu", None, Path::new(&self.key_location), None)?;
+        sess.set_timeout(io_timeout.as_millis().try_into().unwrap_or(u32::MAX));
         info!(ip_address, "SSH connection established");
         Ok(sess)
     }
@@ -275,14 +302,54 @@ impl Aws {
             return Err(anyhow!("unsupported image family"));
         }
 
-        // make a ssh session
         let public_ip_address = self
             .get_instance_ip(instance_id, region)
             .await
             .context("could not fetch instance ip")?;
+
+        // the ssh part is blocking, keep it off the async runtime
+        let this = self.clone();
+        let job_id = job_id.to_owned();
+        let family = family.to_owned();
+        let image_url = image_url.to_owned();
+        let init_params = init_params.to_vec();
+        let task = tokio::task::spawn_blocking(move || {
+            this.run_enclave_blocking(
+                &(public_ip_address + ":22"),
+                &job_id,
+                &family,
+                &image_url,
+                req_vcpu,
+                req_mem,
+                bandwidth,
+                debug,
+                &init_params,
+            )
+        });
+
+        // NOTE: on timeout the blocking thread is not cancelled, it ends when its current
+        // ssh call returns or hits the session timeout
+        match timeout(SSH_DEPLOY_TIMEOUT, task).await {
+            Ok(res) => res.context("enclave setup task failed")?,
+            Err(_) => Err(anyhow!("timed out setting up the enclave over ssh")),
+        }
+    }
+
+    fn run_enclave_blocking(
+        &self,
+        host_address: &str,
+        job_id: &str,
+        family: &str,
+        image_url: &str,
+        req_vcpu: i32,
+        req_mem: i64,
+        bandwidth: u64,
+        debug: bool,
+        init_params: &[u8],
+    ) -> Result<()> {
+        // make a ssh session
         let sess = &self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
+            .ssh_connect(host_address, SSH_CONNECT_TIMEOUT, SSH_DEPLOY_IO_TIMEOUT)
             .context("error establishing ssh connection")?;
 
         // set up ephemeral ports for the host
@@ -1161,9 +1228,22 @@ EOF
             .get_instance_ip(instance_id, region)
             .await
             .context("could not fetch instance ip")?;
+
+        // the ssh part is blocking, keep it off the async runtime
+        let this = self.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            this.get_enclave_state_blocking(&(public_ip_address + ":22"))
+        });
+
+        match timeout(SSH_HEARTBEAT_TIMEOUT, task).await {
+            Ok(res) => res.context("enclave state task failed")?,
+            Err(_) => Err(anyhow!("timed out fetching the enclave state over ssh")),
+        }
+    }
+
+    fn get_enclave_state_blocking(&self, host_address: &str) -> Result<String> {
         let sess = self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
+            .ssh_connect(host_address, SSH_CONNECT_TIMEOUT, SSH_HEARTBEAT_IO_TIMEOUT)
             .context("error establishing ssh connection")?;
 
         let (stdout, stderr) = Self::ssh_exec(&sess, "nitro-cli describe-enclaves")
@@ -1707,9 +1787,53 @@ impl InfraProvider for Aws {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::net::TcpListener;
     use std::process::Command;
+    use std::time::{Duration, Instant};
 
     use super::Aws;
+
+    fn test_aws() -> Aws {
+        Aws {
+            clients: HashMap::new(),
+            key_name: "test".into(),
+            key_location: "/nonexistent/test.pem".into(),
+            pub_key_location: "/nonexistent/test.pub".into(),
+            whitelist: None,
+            blacklist: None,
+        }
+    }
+
+    // a host which accepts the connection and then never says anything
+    #[test]
+    fn test_ssh_connect_gives_up_on_silent_host() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+
+        let start = Instant::now();
+        let res = test_aws().ssh_connect(
+            &addr,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        assert!(res.is_err());
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+
+        // the connection was accepted by the os, the listener is only dropped now
+        drop(listener);
+    }
+
+    #[test]
+    fn test_ssh_connect_rejects_bad_address() {
+        let res = test_aws().ssh_connect(
+            "not an address",
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        assert!(res.is_err());
+    }
 
     const NASTY: [&str; 8] = [
         "https://example.com/enclave.eif",
