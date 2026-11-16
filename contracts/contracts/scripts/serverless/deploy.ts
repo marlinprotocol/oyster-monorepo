@@ -9,7 +9,8 @@
 //   ATTESTATION_VERIFIER                         optional, existing AttestationVerifier, skips the two above
 //   USDC_TOKEN, STAKING_TOKEN                    optional, existing tokens; test tokens are deployed if unset
 //   HTTP_RPC_URL, WS_RPC_URL                     RPC urls of the chain, stored on chain for the gateways
-//   NUM_SELECTED_EXECUTORS                       optional, executors selected per job (default 3)
+//   NUM_SELECTED_EXECUTORS                       optional, executors selected per job. Only 3 is accepted,
+//                                                which is also the default, see checkNumSelectedExecutors
 //   MIN_EXECUTOR_STAKE                           optional, minimum stake of an executor in POND units
 //                                                (18 decimals, default 1 POND)
 //   SLASH_COMP_FOR_GATEWAY                       optional, POND units paid to the gateway when no executor
@@ -54,6 +55,21 @@ function checkSlashParams(
     }
 }
 
+// Jobs takes the number of executors per job as a constructor argument, but its payout is written
+// for 3: the first output gets 4/9 of the executors fee, the second 3/9, and any later one gets
+// the rest and deletes the job. With fewer than 3 the rest of the fee stays in Jobs and the job is
+// never deleted. With more than 3 the job is deleted on the third output, so the other executors
+// cannot submit, are never released and cannot deregister or withdraw their stake.
+function checkNumSelectedExecutors(numSelectedExecutors: number) {
+    if (numSelectedExecutors !== 3) {
+        throw new Error(
+            `NUM_SELECTED_EXECUTORS is ${process.env.NUM_SELECTED_EXECUTORS}, only 3 is supported. ` +
+            "The Jobs contract splits the executors fee between 3 outputs and cleans up the job on the third one, " +
+            "any other number leaves fees or executor stakes locked.",
+        );
+    }
+}
+
 async function main() {
     const signers = await ethers.getSigners();
     const admin = await signers[0].getAddress();
@@ -81,6 +97,7 @@ async function main() {
     const slashMaxBips = 1000000n;
     const executionBufferTime = 60;
     const numSelectedExecutors = Number(env("NUM_SELECTED_EXECUTORS", "3"));
+    checkNumSelectedExecutors(numSelectedExecutors);
     const relayBufferTime = 120;
     // POND paid to the gateway out of the slashed amount when no executor responds to a job.
     // By default it is what one executor at the minimum stake is slashed, see checkSlashParams.
