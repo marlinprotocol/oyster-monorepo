@@ -42,7 +42,12 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
     let config_manager = ConfigManager::new(&args.config_file);
-    let mut config = config_manager.load_config().unwrap();
+    let mut config = config_manager.load_config().with_context(|| {
+        format!(
+            "Failed to load the config file {}, check that the contract addresses are set in it",
+            args.config_file
+        )
+    })?;
 
     // Initialize the 'cgroups' available inside the enclave to execute user code
     let cgroups = Cgroups::new().context("Failed to retrieve cgroups")?;
