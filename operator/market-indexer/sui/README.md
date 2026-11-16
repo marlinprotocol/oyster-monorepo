@@ -47,7 +47,7 @@ Options:
       --grpc-password <GRPC_PASSWORD>                  gRPC URL auth password
       --grpc-token <GRPC_TOKEN>                        gRPC URL auth token
   -r, --remote-checkpoint-url <REMOTE_CHECKPOINT_URL>  Remote checkpoint url
-  -p, --package-id <PACKAGE_ID>                        Market program package ID
+  -p, --package-id <PACKAGE_ID>                        Original market program package ID, as in the event types
       --provider <PROVIDER>                            Provider address
   -s, --start-block <START_BLOCK>                      Start block for log parsing
       --range-size <RANGE_SIZE>                        Size of block range for fetching logs [default: 500]

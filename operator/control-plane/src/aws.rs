@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -13,11 +13,37 @@ use serde_json::Value;
 use ssh2::Session;
 use ssh_key::sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tracing::{error, info};
 use whoami::username;
 
-use crate::market::{InfraProvider, JobId};
+use crate::market::{validate_image_url, InfraProvider, JobId};
+
+// states in which an instance still exists, i.e. everything but shutting-down and terminated
+const LIVE_INSTANCE_STATES: [&str; 4] = ["pending", "running", "stopping", "stopped"];
+
+// limit for the tcp connect, ssh handshake and auth with a job host
+const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+// limit for a single blocking ssh call while setting up an enclave
+// has to cover the image download which is given 120s on the host, and the enclave start
+const SSH_DEPLOY_IO_TIMEOUT: Duration = Duration::from_secs(300);
+// limit for the whole enclave setup
+const SSH_DEPLOY_TIMEOUT: Duration = Duration::from_secs(900);
+// same limits for the heartbeat, which runs one quick command
+const SSH_HEARTBEAT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+const SSH_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
+
+// smallest bandwidth limit applied on job hosts, in kbit/s
+const MIN_BANDWIDTH_KBIT: u64 = 1;
+
+// debug mode logger, downloaded and run on the job host
+// the hashes are for exactly this version, update them together with the url
+const LOGGER_URL_PREFIX: &str =
+    "https://artifacts.marlin.org/oyster/binaries/nitro-logger_v1.0.0_linux_";
+const LOGGER_SHA256_AMD64: &str =
+    "0bcb4eed988c3eafed4f065bd2888f2c4518217305b603b3ac9a7bb7805cdce8";
+const LOGGER_SHA256_ARM64: &str =
+    "37ef3a4635dbc742e1067341550f3c99bd4cfb26bf9a62c181195dfaae88519e";
 
 #[derive(Clone)]
 pub struct Aws {
@@ -63,8 +89,10 @@ impl Aws {
         }
     }
 
-    async fn client(&self, region: &str) -> &aws_sdk_ec2::Client {
-        &self.clients[region]
+    fn client(&self, region: &str) -> Result<&aws_sdk_ec2::Client> {
+        self.clients
+            .get(region)
+            .ok_or_else(|| anyhow!("region {region} is not configured"))
     }
 
     pub async fn generate_key_pair(&self) -> Result<()> {
@@ -135,8 +163,7 @@ impl Aws {
             .read_to_end(&mut buffer)
             .context("Failed to read pub key file")?;
 
-        self.client(region)
-            .await
+        self.client(region)?
             .import_key_pair()
             .key_name(&self.key_name)
             .public_key_material(aws_sdk_ec2::primitives::Blob::new(buffer))
@@ -149,8 +176,7 @@ impl Aws {
 
     async fn check_key_pair(&self, region: &str) -> Result<bool> {
         Ok(!self
-            .client(region)
-            .await
+            .client(region)?
             .describe_key_pairs()
             .filters(
                 Filter::builder()
@@ -167,14 +193,30 @@ impl Aws {
 
     /* SSH UTILITY */
 
-    pub async fn ssh_connect(&self, ip_address: &str) -> Result<Session> {
-        let tcp = TcpStream::connect(ip_address)?;
+    // IMPORTANT: everything done over ssh is blocking, never call it directly from async
+    // code, it would hold up a runtime thread for as long as the host takes to answer
+    // go through spawn_blocking like run_enclave_impl and get_enclave_state
+    //
+    // connect_timeout bounds the tcp connect, the ssh handshake and the auth
+    // io_timeout bounds every later blocking call on the session, e.g. waiting for the
+    // output of a command, a host which stops answering results in an error instead of
+    // a thread stuck forever
+    fn ssh_connect(
+        &self,
+        ip_address: &str,
+        connect_timeout: Duration,
+        io_timeout: Duration,
+    ) -> Result<Session> {
+        let addr: SocketAddr = ip_address.parse().context("failed to parse host address")?;
+        let tcp = TcpStream::connect_timeout(&addr, connect_timeout)?;
 
         let mut sess = Session::new()?;
 
+        sess.set_timeout(connect_timeout.as_millis().try_into().unwrap_or(u32::MAX));
         sess.set_tcp_stream(tcp);
         sess.handshake()?;
         sess.userauth_pubkey_file("ubuntu", None, Path::new(&self.key_location), None)?;
+        sess.set_timeout(io_timeout.as_millis().try_into().unwrap_or(u32::MAX));
         info!(ip_address, "SSH connection established");
         Ok(sess)
     }
@@ -269,14 +311,54 @@ impl Aws {
             return Err(anyhow!("unsupported image family"));
         }
 
-        // make a ssh session
         let public_ip_address = self
             .get_instance_ip(instance_id, region)
             .await
             .context("could not fetch instance ip")?;
+
+        // the ssh part is blocking, keep it off the async runtime
+        let this = self.clone();
+        let job_id = job_id.to_owned();
+        let family = family.to_owned();
+        let image_url = image_url.to_owned();
+        let init_params = init_params.to_vec();
+        let task = tokio::task::spawn_blocking(move || {
+            this.run_enclave_blocking(
+                &(public_ip_address + ":22"),
+                &job_id,
+                &family,
+                &image_url,
+                req_vcpu,
+                req_mem,
+                bandwidth,
+                debug,
+                &init_params,
+            )
+        });
+
+        // NOTE: on timeout the blocking thread is not cancelled, it ends when its current
+        // ssh call returns or hits the session timeout
+        match timeout(SSH_DEPLOY_TIMEOUT, task).await {
+            Ok(res) => res.context("enclave setup task failed")?,
+            Err(_) => Err(anyhow!("timed out setting up the enclave over ssh")),
+        }
+    }
+
+    fn run_enclave_blocking(
+        &self,
+        host_address: &str,
+        job_id: &str,
+        family: &str,
+        image_url: &str,
+        req_vcpu: i32,
+        req_mem: i64,
+        bandwidth: u64,
+        debug: bool,
+        init_params: &[u8],
+    ) -> Result<()> {
+        // make a ssh session
         let sess = &self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
+            .ssh_connect(host_address, SSH_CONNECT_TIMEOUT, SSH_DEPLOY_IO_TIMEOUT)
             .context("error establishing ssh connection")?;
 
         // set up ephemeral ports for the host
@@ -363,9 +445,13 @@ impl Aws {
 
     // Goal: make enclave.eif match the provided image url
     // uses image_url.txt file to track state instead of redownloading every time
+    // image_url.txt only exists while enclave.eif is a fully downloaded and allowed image
+    // from that url
     // WARN: the enclave image at the url might have changed, we would have to
     // redownload the image every time to verify it, simply ignore for now
     fn run_fragment_download_and_check_image(&self, sess: &Session, image_url: &str) -> Result<()> {
+        validate_image_url(image_url).context("Image url not usable")?;
+
         let (stdout, stderr) =
             Self::ssh_exec(sess, "cat image_url.txt").context("Failed to read image_url.txt")?;
 
@@ -376,14 +462,12 @@ impl Aws {
             return Ok(());
         }
 
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "curl -sL -o enclave.eif --max-filesize 4000000000 --max-time 120 '{}'",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to download enclave image")?;
+        // curl prints only errors with -sS, and -f makes http errors count
+        let (_, stderr) = Self::ssh_exec(sess, &Self::download_image_command(image_url))
+            .context("Failed to download enclave image")?;
+        if !stderr.is_empty() {
+            return Err(anyhow!(stderr)).context("Error downloading enclave image");
+        }
 
         let is_eif_allowed = self
             .check_eif_blacklist_whitelist(sess)
@@ -394,16 +478,34 @@ impl Aws {
         }
 
         // store eif_url only when the image is allowed
-        Self::ssh_exec(
-            sess,
-            &format!(
-                "echo \"{}\" > image_url.txt",
-                shell_escape::escape(image_url.into()),
-            ),
-        )
-        .context("Failed to write EIF URL to txt file.")?;
+        let (_, stderr) = Self::ssh_exec(sess, &Self::store_image_url_command(image_url))
+            .context("Failed to write EIF URL to txt file.")?;
+        if !stderr.is_empty() {
+            return Err(anyhow!(stderr)).context("Error writing EIF URL to txt file");
+        }
 
         Ok(())
+    }
+
+    // IMPORTANT: the url comes from job metadata, it has to be quoted exactly once
+    // shell_escape already returns a quoted word, do not wrap it in more quotes
+    fn shell_quote(s: &str) -> String {
+        shell_escape::unix::escape(s.into()).into_owned()
+    }
+
+    // forgets the previous url first so a failure midway cannot leave image_url.txt
+    // pointing at an image which is not the one on disk
+    // downloads to a temporary file so a failed download does not replace the image
+    fn download_image_command(image_url: &str) -> String {
+        format!(
+            "rm -f image_url.txt && curl -fsSL --globoff -o enclave.eif.tmp --max-filesize 4000000000 --max-time 120 -- {} && mv enclave.eif.tmp enclave.eif",
+            Self::shell_quote(image_url),
+        )
+    }
+
+    // no trailing newline, the file is compared as is
+    fn store_image_url_command(image_url: &str) -> String {
+        format!("printf %s {} > image_url.txt", Self::shell_quote(image_url))
     }
 
     // Goal: set bandwidth rate
@@ -430,17 +532,25 @@ impl Aws {
             }
         }
 
-        let (_, stderr) = Self::ssh_exec(
-            sess,
-            // interpolation is safe since values are integers
-            &format!("sudo tc qdisc add dev ens5 root tbf rate {bandwidth}kbit burst 4000Mb latency 100ms"),
-        )?;
+        let (_, stderr) = Self::ssh_exec(sess, &Self::bandwidth_command(bandwidth))?;
 
         if !stderr.is_empty() {
             return Err(anyhow!(stderr)).context("Error setting up bandwidth limit");
         }
 
         Ok(())
+    }
+
+    // tc refuses a rate of zero, which is what a job paying exactly the minimum rate
+    // (or one in a region without a bandwidth rate) ends up with
+    // such jobs are accepted by the market, so give them the smallest rate tc takes
+    // instead of failing the launch on every attempt
+    fn bandwidth_command(bandwidth: u64) -> String {
+        // interpolation is safe since values are integers
+        format!(
+            "sudo tc qdisc add dev ens5 root tbf rate {}kbit burst 4000Mb latency 100ms",
+            bandwidth.max(MIN_BANDWIDTH_KBIT),
+        )
     }
 
     // Goal: set up iptables rules for salmon
@@ -464,12 +574,13 @@ impl Aws {
 
         let rules: Vec<&str> = stdout.trim().split('\n').map(|s| s.trim()).collect();
 
-        for i in 0..2 {
-            if rules[i] != iptables_rules[i] {
+        for (i, expected) in iptables_rules.iter().enumerate().take(2) {
+            let rule = rules.get(i).copied().unwrap_or("");
+            if rule != *expected {
                 return Err(anyhow!(
                     "Failed to match rule: got '{}' expected '{}'",
-                    rules[i],
-                    iptables_rules[i],
+                    rule,
+                    expected,
                 ));
             }
         }
@@ -635,6 +746,30 @@ impl Aws {
         Ok(())
     }
 
+    // IMPORTANT: the logger is run on the host, it has to match the pinned hash
+    // before it is made executable or moved to the path supervisor runs
+    // removes the previous binary first so a failure midway leaves nothing to run
+    // runs in the home directory like the image download, the hashes are our own
+    // constants and are not quoted
+    fn download_logger_command(amd64_sha256: &str, arm64_sha256: &str) -> String {
+        format!(
+            "rm -f nitro-logger nitro-logger.tmp; \
+case \"$(uname -m)\" in \
+x86_64) arch=amd64 sum={amd64_sha256} ;; \
+aarch64) arch=arm64 sum={arm64_sha256} ;; \
+*) echo \"nitro-logger: unsupported architecture $(uname -m)\" >&2; exit 1 ;; \
+esac; \
+curl -fsS --max-time 120 -o nitro-logger.tmp \"{LOGGER_URL_PREFIX}$arch\" || exit 1; \
+actual=\"$(sha256sum < nitro-logger.tmp | cut -d ' ' -f 1)\"; \
+if [ \"$actual\" != \"$sum\" ]; then \
+rm -f nitro-logger.tmp; \
+echo \"nitro-logger: sha256 mismatch for $arch, expected $sum, got $actual\" >&2; \
+exit 1; \
+fi; \
+chmod +x nitro-logger.tmp && mv nitro-logger.tmp nitro-logger"
+        )
+    }
+
     // Goal: set up or tear down debug logger
     // if debug is set, downloads logger and set it up, does not care about previous setup
     // if debug is false, stops the logger if it is running
@@ -660,8 +795,12 @@ impl Aws {
             }
 
             // set up logger if debug flag is set
-            let (_, stderr) = Self::ssh_exec(sess, "curl -fsS https://artifacts.marlin.org/oyster/binaries/nitro-logger_v1.0.0_linux_`uname -m | sed 's/x86_64/amd64/g; s/aarch64/arm64/g'` -o /home/ubuntu/nitro-logger && chmod +x /home/ubuntu/nitro-logger")
-                .context("Failed to download logger")?;
+            // any error, including a hash mismatch, is reported on stderr
+            let (_, stderr) = Self::ssh_exec(
+                sess,
+                &Self::download_logger_command(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64),
+            )
+            .context("Failed to download logger")?;
             if !stderr.is_empty() {
                 return Err(anyhow!(stderr)).context("Failed to download logger");
             }
@@ -741,8 +880,10 @@ EOF
             serde_json::from_str(&stdout).context("could not parse enclave description")?;
 
         if let Some(item) = enclave_data.first() {
-            if item["Measurements"] == eif_data["Measurements"]
-                && item["Flags"] == (if debug { "DEBUG_MODE" } else { "NONE" })
+            let flags = if debug { "DEBUG_MODE" } else { "NONE" };
+            if item.get("Measurements").is_some()
+                && item.get("Measurements") == eif_data.get("Measurements")
+                && item.get("Flags").and_then(Value::as_str) == Some(flags)
             {
                 // same enclave, correct debug mode, just return
                 return Ok(());
@@ -793,8 +934,7 @@ EOF
 
     pub async fn get_instance_ip(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(
                 Filter::builder()
@@ -867,8 +1007,7 @@ EOF
             .context("could not get subnet")?;
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .run_instances()
             .image_id(instance_ami)
             .instance_type(instance_type)
@@ -894,8 +1033,7 @@ EOF
 
     async fn terminate_instance(&self, instance_id: &str, region: &str) -> Result<()> {
         let _ = self
-            .client(region)
-            .await
+            .client(region)?
             .terminate_instances()
             .instance_ids(instance_id)
             .send()
@@ -916,8 +1054,7 @@ EOF
             .build();
 
         let own_ami = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_images()
             .owners("self")
             .filters(project_filter)
@@ -954,8 +1091,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_images()
             .owners(owner)
             .filters(name_filter)
@@ -979,8 +1115,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_security_groups()
             .filters(filter)
             .send()
@@ -1002,8 +1137,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_subnets()
             .filters(filter)
             .send()
@@ -1018,11 +1152,10 @@ EOF
             .to_string())
     }
 
-    pub async fn get_job_instance_id(
-        &self,
-        job: &JobId,
-        region: &str,
-    ) -> Result<(bool, String, String)> {
+    // all instances of the job which still exist, as (instance id, state)
+    // terminated instances stay visible in the api with their tags for a while, they and
+    // the ones shutting down are left out so they cannot be mistaken for the job instance
+    async fn get_job_instances(&self, job: &JobId, region: &str) -> Result<Vec<(String, String)>> {
         let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
         let operator_filter = Filter::builder()
             .name("tag:operator")
@@ -1036,48 +1169,72 @@ EOF
             .name("tag:contractAddress")
             .values(&job.contract)
             .build();
+        let state_filter = Filter::builder()
+            .name("instance-state-name")
+            .set_values(Some(
+                LIVE_INSTANCE_STATES.iter().map(|s| s.to_string()).collect(),
+            ))
+            .build();
         let res = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(job_filter)
             .filters(operator_filter)
             .filters(contract_filter)
             .filters(chain_filter)
+            .filters(state_filter)
             .send()
             .await
             .context("could not describe instances")?;
-        // response parsing from here
-        let reservations = res.reservations();
 
-        if reservations.is_empty() {
-            Ok((false, "".to_owned(), "".to_owned()))
-        } else {
-            let instance = reservations[0]
-                .instances()
-                .first()
-                .ok_or(anyhow!("instance not found"))?;
-            Ok((
-                true,
-                instance
-                    .instance_id()
-                    .ok_or(anyhow!("could not parse ip address"))?
-                    .to_string(),
-                instance
-                    .state()
-                    .ok_or(anyhow!("could not parse instance state"))?
-                    .name()
-                    .ok_or(anyhow!("could not parse instance state name"))?
-                    .as_str()
-                    .to_owned(),
-            ))
+        // response parsing from here
+        let mut instances = Vec::new();
+        for reservation in res.reservations() {
+            for instance in reservation.instances() {
+                instances.push((
+                    instance
+                        .instance_id()
+                        .ok_or(anyhow!("could not parse instance id"))?
+                        .to_string(),
+                    instance
+                        .state()
+                        .ok_or(anyhow!("could not parse instance state"))?
+                        .name()
+                        .ok_or(anyhow!("could not parse instance state name"))?
+                        .as_str()
+                        .to_owned(),
+                ));
+            }
         }
+
+        Ok(instances)
+    }
+
+    // the instance to treat as the job instance out of the ones which exist
+    // one that is running or about to, if any
+    fn pick_job_instance(instances: &[(String, String)]) -> Option<&(String, String)> {
+        instances
+            .iter()
+            .find(|(_, state)| state == "pending" || state == "running")
+            .or(instances.first())
+    }
+
+    pub async fn get_job_instance_id(
+        &self,
+        job: &JobId,
+        region: &str,
+    ) -> Result<(bool, String, String)> {
+        let instances = self.get_job_instances(job, region).await?;
+
+        Ok(match Self::pick_job_instance(&instances) {
+            Some((instance, state)) => (true, instance.clone(), state.clone()),
+            None => (false, "".to_owned(), "".to_owned()),
+        })
     }
 
     pub async fn get_instance_state(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(
                 Filter::builder()
@@ -1108,9 +1265,22 @@ EOF
             .get_instance_ip(instance_id, region)
             .await
             .context("could not fetch instance ip")?;
+
+        // the ssh part is blocking, keep it off the async runtime
+        let this = self.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            this.get_enclave_state_blocking(&(public_ip_address + ":22"))
+        });
+
+        match timeout(SSH_HEARTBEAT_TIMEOUT, task).await {
+            Ok(res) => res.context("enclave state task failed")?,
+            Err(_) => Err(anyhow!("timed out fetching the enclave state over ssh")),
+        }
+    }
+
+    fn get_enclave_state_blocking(&self, host_address: &str) -> Result<String> {
         let sess = self
-            .ssh_connect(&(public_ip_address + ":22"))
-            .await
+            .ssh_connect(host_address, SSH_CONNECT_TIMEOUT, SSH_HEARTBEAT_IO_TIMEOUT)
             .context("error establishing ssh connection")?;
 
         let (stdout, stderr) = Self::ssh_exec(&sess, "nitro-cli describe-enclaves")
@@ -1160,8 +1330,7 @@ EOF
             .build();
 
         let resp = self
-            .client(region)
-            .await
+            .client(region)?
             .allocate_address()
             .domain(DomainType::Vpc)
             .tag_specifications(tags)
@@ -1200,8 +1369,7 @@ EOF
 
         Ok(
             match self
-                .client(region)
-                .await
+                .client(region)?
                 .describe_addresses()
                 .filters(job_filter)
                 .filters(operator_filter)
@@ -1242,8 +1410,7 @@ EOF
 
         Ok(
             match self
-                .client(region)
-                .await
+                .client(region)?
                 .describe_addresses()
                 .filters(instance_id_filter)
                 .send()
@@ -1275,8 +1442,7 @@ EOF
         alloc_id: &str,
         region: &str,
     ) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .associate_address()
             .allocation_id(alloc_id)
             .instance_id(instance_id)
@@ -1287,8 +1453,7 @@ EOF
     }
 
     async fn disassociate_address(&self, association_id: &str, region: &str) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .disassociate_address()
             .association_id(association_id)
             .send()
@@ -1298,8 +1463,7 @@ EOF
     }
 
     async fn release_address(&self, alloc_id: &str, region: &str) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .release_address()
             .allocation_id(alloc_id)
             .send()
@@ -1321,16 +1485,37 @@ EOF
         debug: bool,
         init_params: &[u8],
     ) -> Result<()> {
-        let (mut exist, mut instance, state) = self
-            .get_job_instance_id(job, region)
+        let instances = self
+            .get_job_instances(job, region)
             .await
             .context("failed to get job instance")?;
+        let (mut exist, mut instance, state) = match Self::pick_job_instance(&instances) {
+            Some((instance, state)) => (true, instance.clone(), state.clone()),
+            None => (false, String::new(), String::new()),
+        };
+
+        // a job has one instance, anything else is a leftover which nothing keeps track of
+        let mut extras_terminated = false;
+        for (extra, state) in instances.iter().filter(|(id, _)| *id != instance) {
+            info!(instance = extra, state, "Terminating extra instance");
+            self.terminate_instance(extra, region)
+                .await
+                .context("failed to terminate extra instance")?;
+            extras_terminated = true;
+        }
 
         if exist {
             // instance exists already
             if state == "pending" || state == "running" {
                 // instance exists and is already running, we are done
                 info!(instance, "Found existing healthy instance");
+
+                if extras_terminated {
+                    // the elastic ip might have been on one of the extras
+                    self.post_spin_up(job, &instance, region)
+                        .await
+                        .context("failed to move elastic ip to the job instance")?;
+                }
             } else if state == "stopping" || state == "stopped" {
                 // instance unhealthy, terminate
                 info!(instance, "Found existing unhealthy instance");
@@ -1338,10 +1523,6 @@ EOF
                     .await
                     .context("failed to terminate instance")?;
 
-                // set to false so new one can be provisioned
-                exist = false;
-            } else {
-                // state is shutting-down or terminated
                 // set to false so new one can be provisioned
                 exist = false;
             }
@@ -1383,8 +1564,7 @@ EOF
         let instance_type =
             InstanceType::from_str(instance_type).context("cannot parse instance type")?;
         let resp = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instance_types()
             .instance_types(instance_type.clone())
             .send()
@@ -1457,22 +1637,29 @@ EOF
     }
 
     async fn spin_down_impl(&self, job: &JobId, region: &str) -> Result<()> {
-        let (exist, instance, state) = self
-            .get_job_instance_id(job, region)
+        let instances = self
+            .get_job_instances(job, region)
             .await
             .context("failed to get job instance")?;
 
-        if !exist || state == "shutting-down" || state == "terminated" {
-            // instance does not really exist anyway, we are done
+        if instances.is_empty() {
             info!("Instance does not exist or is already terminated");
-            return Ok(());
         }
 
-        // terminate instance
-        info!(instance, "Terminating existing instance");
-        self.spin_down_instance(&instance, job, region)
+        // terminate every instance of the job, there should be only one
+        for (instance, _) in instances {
+            info!(instance, "Terminating existing instance");
+            self.spin_down_instance(&instance, job, region)
+                .await
+                .context("failed to terminate instance")?;
+        }
+
+        // always check for elastic ips, even without an instance
+        // an earlier attempt might have terminated the instance and failed before the
+        // release, the ip would stay allocated and count against the quota forever
+        self.release_job_elastic_ips(job, region)
             .await
-            .context("failed to terminate instance")?;
+            .context("failed to release elastic ip")?;
 
         Ok(())
     }
@@ -1495,15 +1682,56 @@ EOF
         self.terminate_instance(instance_id, region)
             .await
             .context("could not terminate instance")?;
-        let (exist, alloc_id, _) = self
-            .get_job_elastic_ip(job, region)
+        self.release_job_elastic_ips(job, region)
             .await
-            .context("could not get elastic ip of job")?;
-        if exist {
-            self.release_address(alloc_id.as_str(), region)
+            .context("could not release elastic ip of job")?;
+
+        Ok(())
+    }
+
+    // release every elastic ip allocated for the job
+    async fn release_job_elastic_ips(&self, job: &JobId, region: &str) -> Result<()> {
+        let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
+        let operator_filter = Filter::builder()
+            .name("tag:operator")
+            .values(&job.operator)
+            .build();
+        let chain_filter = Filter::builder()
+            .name("tag:chainID")
+            .values(&job.chain)
+            .build();
+        let contract_filter = Filter::builder()
+            .name("tag:contractAddress")
+            .values(&job.contract)
+            .build();
+
+        let res = self
+            .client(region)?
+            .describe_addresses()
+            .filters(job_filter)
+            .filters(operator_filter)
+            .filters(contract_filter)
+            .filters(chain_filter)
+            .send()
+            .await
+            .context("could not describe elastic ips")?;
+
+        for address in res.addresses() {
+            let alloc_id = address
+                .allocation_id()
+                .ok_or(anyhow!("could not parse allocation id"))?;
+
+            // an ip which is still attached cannot be released
+            if let Some(association_id) = address.association_id() {
+                self.disassociate_address(association_id, region)
+                    .await
+                    .context("could not disassociate address")?;
+            }
+
+            self.release_address(alloc_id, region)
                 .await
                 .context("could not release address")?;
-            info!("Elastic IP released");
+            info!(alloc_id, "Elastic IP released");
         }
 
         Ok(())
@@ -1591,5 +1819,282 @@ impl InfraProvider for Aws {
             .context("could not get current enclace state")?;
         // There can be 2 states - RUNNING or TERMINATING
         Ok(res == "RUNNING")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::net::TcpListener;
+    use std::process::{Command, Output};
+    use std::time::{Duration, Instant};
+
+    use super::{Aws, LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64, LOGGER_URL_PREFIX};
+
+    fn test_aws() -> Aws {
+        Aws {
+            clients: HashMap::new(),
+            key_name: "test".into(),
+            key_location: "/nonexistent/test.pem".into(),
+            pub_key_location: "/nonexistent/test.pub".into(),
+            whitelist: None,
+            blacklist: None,
+        }
+    }
+
+    // a host which accepts the connection and then never says anything
+    #[test]
+    fn test_ssh_connect_gives_up_on_silent_host() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+
+        let start = Instant::now();
+        let res = test_aws().ssh_connect(
+            &addr,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        assert!(res.is_err());
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+
+        // the connection was accepted by the os, the listener is only dropped now
+        drop(listener);
+    }
+
+    #[test]
+    fn test_ssh_connect_rejects_bad_address() {
+        let res = test_aws().ssh_connect(
+            "not an address",
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        assert!(res.is_err());
+    }
+
+    const NASTY: [&str; 8] = [
+        "https://example.com/enclave.eif",
+        "https://example.com/$(touch pwned)",
+        "https://example.com/`touch pwned`",
+        "https://example.com/a;touch pwned",
+        "https://example.com/a' ; touch pwned ; 'b",
+        "https://example.com/a\" ; touch pwned ; \"b",
+        "https://example.com/a\nb\\c!d*e",
+        "-o /etc/passwd",
+    ];
+
+    // run the given script in a real shell inside an empty directory
+    // returns stdout and the files which exist afterwards
+    fn run_sh(script: &str, tag: &str) -> (String, Vec<String>) {
+        let (out, files) = run_sh_output(script, tag, "");
+        assert!(out.status.success(), "{script}: {out:?}");
+
+        (String::from_utf8(out.stdout).unwrap(), files)
+    }
+
+    // same, for scripts which are allowed to fail
+    // runs check in the directory before it is removed, appended to stdout
+    fn run_sh_output(script: &str, tag: &str, check: &str) -> (Output, Vec<String>) {
+        let dir = std::env::temp_dir().join(format!("cp-quote-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let sh = |script: &str| {
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+        };
+        let mut out = sh(script);
+        if !check.is_empty() {
+            out.stdout.extend(sh(check).stdout);
+        }
+
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        files.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        (out, files)
+    }
+
+    #[test]
+    fn test_pick_job_instance() {
+        let i = |id: &str, state: &str| (id.to_owned(), state.to_owned());
+
+        assert_eq!(Aws::pick_job_instance(&[]), None);
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "running")]),
+            Some(&i("a", "running"))
+        );
+        // a healthy instance wins over an unhealthy one wherever it is in the response
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "stopped"), i("b", "pending"), i("c", "running")]),
+            Some(&i("b", "pending"))
+        );
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "stopping"), i("b", "stopped")]),
+            Some(&i("a", "stopping"))
+        );
+    }
+
+    #[test]
+    fn test_bandwidth_command() {
+        // zero is not a valid tc rate
+        assert_eq!(
+            Aws::bandwidth_command(0),
+            "sudo tc qdisc add dev ens5 root tbf rate 1kbit burst 4000Mb latency 100ms"
+        );
+        assert_eq!(
+            Aws::bandwidth_command(76),
+            "sudo tc qdisc add dev ens5 root tbf rate 76kbit burst 4000Mb latency 100ms"
+        );
+    }
+
+    #[test]
+    fn test_shell_quote_is_one_word() {
+        for (i, url) in NASTY.iter().enumerate() {
+            // the shell must see exactly one argument, equal to the input
+            let script = format!("printf '%s|' {}", Aws::shell_quote(url));
+            let (stdout, files) = run_sh(&script, &format!("word{i}"));
+            assert_eq!(stdout, format!("{url}|"));
+            assert!(files.is_empty(), "{files:?}");
+        }
+    }
+
+    #[test]
+    fn test_store_image_url_command() {
+        for (i, url) in NASTY.iter().enumerate() {
+            let script = format!("{} && cat image_url.txt", Aws::store_image_url_command(url));
+            let (stdout, files) = run_sh(&script, &format!("store{i}"));
+            // compared against the url as is on the next launch
+            assert_eq!(&stdout, url);
+            assert_eq!(files, ["image_url.txt"]);
+        }
+    }
+
+    #[test]
+    fn test_download_image_command() {
+        for (i, url) in NASTY.iter().enumerate() {
+            // stand in for curl: record the arguments, create the output file
+            let script = format!(
+                "curl() {{ printf '%s|' \"$@\"; : > enclave.eif.tmp; }}; echo old > image_url.txt; {}",
+                Aws::download_image_command(url)
+            );
+            let (stdout, files) = run_sh(&script, &format!("dl{i}"));
+            assert_eq!(
+                stdout,
+                format!("-fsSL|--globoff|-o|enclave.eif.tmp|--max-filesize|4000000000|--max-time|120|--|{url}|")
+            );
+            // downloaded image in place, old url forgotten, nothing else created
+            assert_eq!(files, ["enclave.eif"]);
+        }
+    }
+
+    // sha256 of "good logger\n" and what the stand in for curl below downloads
+    const GOOD_SHA256: &str = "072fb8c4a49f9b5ccf06055b6cde53047b989fae6aa5368d231e33f198c1f81f";
+    const OTHER_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    // stand ins for uname and curl: record the curl arguments on stdout, download the
+    // given content, an older logger is already in place
+    fn logger_script(machine: &str, content: &str, command: &str) -> String {
+        format!(
+            "uname() {{ echo {machine}; }}; \
+             curl() {{ printf '%s|' \"$@\"; echo {content} > nitro-logger.tmp; }}; \
+             echo old > nitro-logger; chmod +x nitro-logger; {command}"
+        )
+    }
+
+    #[test]
+    fn test_logger_hashes_are_pinned() {
+        for sum in [LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64] {
+            assert_eq!(sum.len(), 64);
+            assert!(sum.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        }
+        assert_ne!(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64);
+    }
+
+    #[test]
+    fn test_download_logger_command_accepts_pinned_hash() {
+        let amd64 = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+        let arm64 = Aws::download_logger_command(OTHER_SHA256, GOOD_SHA256);
+
+        for (machine, arch, command) in [("x86_64", "amd64", amd64), ("aarch64", "arm64", arm64)] {
+            let (out, files) = run_sh_output(
+                &logger_script(machine, "'good logger'", &command),
+                &format!("logger-ok-{arch}"),
+                "test -x nitro-logger && cat nitro-logger",
+            );
+            assert!(out.status.success(), "{out:?}");
+            assert!(out.stderr.is_empty(), "{out:?}");
+            assert_eq!(
+                String::from_utf8(out.stdout).unwrap(),
+                format!("-fsS|--max-time|120|-o|nitro-logger.tmp|{LOGGER_URL_PREFIX}{arch}|good logger\n")
+            );
+            assert_eq!(files, ["nitro-logger"]);
+        }
+    }
+
+    #[test]
+    fn test_download_logger_command_rejects_other_hash() {
+        let amd64 = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+        let arm64 = Aws::download_logger_command(OTHER_SHA256, GOOD_SHA256);
+        let real = Aws::download_logger_command(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64);
+
+        // wrong content, and the right content for the other architecture
+        for (i, (machine, content, command)) in [
+            ("x86_64", "'evil logger'", &amd64),
+            ("aarch64", "'evil logger'", &arm64),
+            ("aarch64", "'good logger'", &amd64),
+            ("x86_64", "''", &amd64),
+            // the real hashes do not match the stand in either
+            ("x86_64", "'good logger'", &real),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (out, files) = run_sh_output(
+                &logger_script(machine, content, command),
+                &format!("logger-bad-{i}"),
+                "",
+            );
+            // the caller fails the launch on anything in stderr
+            assert!(!out.status.success(), "{out:?}");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            assert!(stderr.contains("sha256 mismatch"), "{stderr}");
+            // nothing left to run, not even the logger from before
+            assert!(files.is_empty(), "{files:?}");
+        }
+    }
+
+    #[test]
+    fn test_download_logger_command_fails_without_download() {
+        let command = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+
+        // curl fails
+        let script = format!(
+            "uname() {{ echo x86_64; }}; curl() {{ echo 'curl: (22) 404' >&2; return 22; }}; \
+             echo old > nitro-logger; chmod +x nitro-logger; {command}"
+        );
+        let (out, files) = run_sh_output(&script, "logger-curl", "");
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!out.stderr.is_empty(), "{out:?}");
+        assert!(files.is_empty(), "{files:?}");
+
+        // unknown architecture, nothing is downloaded
+        let (out, files) = run_sh_output(
+            &logger_script("riscv64", "'good logger'", &command),
+            "logger-arch",
+            "",
+        );
+        assert!(!out.status.success(), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(stderr.contains("unsupported architecture"), "{stderr}");
+        assert!(files.is_empty(), "{files:?}");
     }
 }

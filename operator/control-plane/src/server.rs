@@ -56,7 +56,12 @@ async fn handle_ip_request(
     )>,
     Query(query): Query<GetIPRequest>,
 ) -> HandlerResult<Json<GetIPResponse>> {
-    if query.id.is_none() || query.region.is_none() {
+    let (Some(id), Some(region)) = (query.id, query.region) else {
+        return Err(Error::GetIPFail);
+    };
+
+    // only regions from the configured list can have instances
+    if !state.1.contains(&region) {
         return Err(Error::GetIPFail);
     }
 
@@ -65,19 +70,15 @@ async fn handle_ip_request(
     let ip = client
         .get_job_ip(
             &JobId {
-                id: query.id.unwrap(),
+                id,
                 operator: state.4.operator,
                 contract: state.4.contract,
                 chain: state.4.chain,
             },
-            &query.region.unwrap(),
+            &region,
         )
-        .await;
-
-    if ip.is_err() {
-        return Err(Error::GetIPFail);
-    }
-    let ip = ip.unwrap().to_string();
+        .await
+        .map_err(|_| Error::GetIPFail)?;
     let ip = GetIPResponse { ip };
 
     Ok(Json(ip))
@@ -166,9 +167,20 @@ mod tests {
     use crate::market::{GBRateCard, JobId, RateCard, RegionalRates};
     use crate::test::{InstanceMetadata, TestAws};
 
+    // ask the OS for a free port, fixed ports fail when something else is using them
+    // has to be asked for on the address the server binds, a port can be free on
+    // loopback and still be taken for the wildcard address
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind(("0.0.0.0", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
     #[tokio::test]
     async fn test_get_ip_happy_case() -> anyhow::Result<()> {
-        let mut aws: TestAws = Default::default();
+        let mut aws = TestAws::new(&[String::from("ap-south-1")]);
 
         for id in 1..4 {
             let temp_job_id = U256::from(id).to_be_bytes::<32>().encode_hex_with_prefix();
@@ -182,7 +194,7 @@ mod tests {
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8081;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -219,12 +231,25 @@ mod tests {
         let actual_ip = &aws.instances.get_key_value(&job_id).unwrap().1.ip_address;
         assert_eq!(ip, actual_ip);
 
+        // same job, region outside the configured list
+        let res = hc
+            .do_get(&format!("/ip?id={}&region=nope", job_id))
+            .await?;
+        assert_eq!(res.status(), 400);
+        assert_eq!(res.text_body().unwrap(), "BAD_REQUEST");
+
+        // server is still up
+        let res = hc
+            .do_get(&format!("/ip?id={}&region=ap-south-1", job_id))
+            .await?;
+        assert_eq!(res.status(), 200);
+
         Ok(())
     }
 
     #[tokio::test]
     async fn test_get_ip_bad_case() -> anyhow::Result<()> {
-        let mut aws: TestAws = Default::default();
+        let mut aws = TestAws::new(&[String::from("ap-south-1")]);
 
         for id in 1..4 {
             let temp_job_id = U256::from(id).to_be_bytes::<32>().encode_hex_with_prefix();
@@ -238,7 +263,7 @@ mod tests {
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8082;
+        let port = free_port();
 
         let job_id = U256::from(5).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -277,12 +302,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ip_bad_case_no_instances() -> anyhow::Result<()> {
-        let aws: TestAws = Default::default();
+        let aws = TestAws::new(&[String::from("ap-south-1")]);
         let regions: &'static [String] =
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8083;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -327,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_spec_request() -> anyhow::Result<()> {
-        let aws: TestAws = Default::default();
+        let aws = TestAws::new(&[String::from("ap-south-1")]);
         let regions: &'static [String] =
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(
@@ -361,7 +386,7 @@ mod tests {
         );
 
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8084;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -398,7 +423,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_bandwidth_request() -> anyhow::Result<()> {
-        let aws: TestAws = Default::default();
+        let aws = TestAws::new(&[String::from("ap-south-1")]);
         let regions: &'static [String] =
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
@@ -423,7 +448,7 @@ mod tests {
             ]
             .into_boxed_slice(),
         );
-        let port = 8085;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
