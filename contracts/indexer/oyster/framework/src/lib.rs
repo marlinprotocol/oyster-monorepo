@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use diesel::prelude::*;
 use diesel_migrations::embed_migrations;
 use diesel_migrations::EmbeddedMigrations;
-use tracing::{info, instrument};
+use tracing::{error, info, instrument, warn};
 
 /// Trait for blockchain providers that can fetch logs/events and block information.
 ///
@@ -40,7 +40,44 @@ pub trait LogsProvider {
     }
 }
 
+/// Error for failed rpc requests made by handlers through the provider.
+///
+/// The event loop retries the whole range when a handler fails with this error,
+/// any other handler error stops the indexer.
+#[derive(Debug)]
+pub struct RpcError(pub String);
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+
+// outcome of one pass of the event loop
+#[derive(Debug, PartialEq)]
+enum Step {
+    // a range was processed and committed
+    Progress,
+    // nothing new on the chain
+    UpToDate,
+    // the rpc reports a block older than what is already indexed
+    RpcBehind,
+}
+
+// errors from the rpc are kept apart from the rest
+// they are retried, everything else stops the indexer
+enum StepError {
+    Rpc(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+const IDLE_WAIT: Duration = Duration::from_secs(5);
+const RPC_BACKOFF_MIN: Duration = Duration::from_secs(1);
+const RPC_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
 #[instrument(level = "info", skip_all, parent = None)]
 pub fn event_loop<F, P>(
@@ -53,70 +90,136 @@ where
     F: Fn(&mut PgConnection, Log, &P) -> Result<()>,
     P: LogsProvider,
 {
+    if range_size == 0 {
+        return Err(anyhow!("range size must not be zero"));
+    }
+
     // fetch last updated block from the db
     let mut last_updated = last_synced_block(conn)?;
 
     info!(block = last_updated, "last updated");
 
+    let mut backoff = RPC_BACKOFF_MIN;
+
     loop {
-        // fetch latest block from the rpc
-        let latest_block = provider.latest_block()?;
-
-        info!(block = latest_block, "latest block");
-
-        // should not really ever be true
-        // effectively means the rpc was rolled back
-        if latest_block < last_updated {
-            return Err(anyhow!(
-                "rpc is behind the db, should never happen unless the rpc was rolled back"
-            ));
-        }
-
-        if latest_block == last_updated {
-            // we are up to date, simply sleep for a bit
-            std::thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-
-        // start from the next block to what has already been processed
-        let start_block = last_updated + 1;
-        // cap block range using range_size
-        // might need some babysitting during initial sync
-        let end_block = std::cmp::min(start_block + range_size - 1, latest_block);
-
-        info!(start_block, end_block, "fetching range");
-
-        // Use prefetched results if available, otherwise fetch normally
-        let logs = provider.take_prefetched_logs(start_block, end_block)?;
-
-        // Start prefetching the next batch in the background while we process this one.
-        // This overlaps network I/O with DB processing for ~2x pipeline throughput.
-        let next_start = end_block + 1;
-        if next_start <= latest_block {
-            let next_end = std::cmp::min(next_start + range_size - 1, latest_block);
-            info!(
-                next_start_block = next_start,
-                next_end_block = next_end,
-                "prefetching next range"
-            );
-            provider.start_prefetch(next_start, next_end);
-        }
-
-        info!(start_block, end_block, "processing range");
-
-        // execute db writes within a transaction for consistency
-        // NOTE: diesel transactions are synchronous, async is not allowed inside
-        // might be limiting for certain things like making rpc queries while processing logs
-        // using a temporary tokio runtime is a possibility
-        conn.transaction(|conn| {
-            for log in logs {
-                handler(conn, log, provider).context("failed to handle log")?;
+        match step(conn, provider, range_size, &handler, &mut last_updated) {
+            Ok(Step::Progress) => {
+                backoff = RPC_BACKOFF_MIN;
             }
-            set_synced_block(conn, end_block)
-        })?;
-
-        last_updated = end_block;
+            Ok(Step::UpToDate) => {
+                backoff = RPC_BACKOFF_MIN;
+                // we are up to date, simply sleep for a bit
+                std::thread::sleep(IDLE_WAIT);
+            }
+            Ok(Step::RpcBehind) => {
+                // common with load balanced rpcs where one backend lags the others
+                // wait for it to catch up
+                std::thread::sleep(IDLE_WAIT);
+            }
+            Err(StepError::Rpc(err)) => {
+                // rpc errors are expected from time to time, retry with backoff
+                // nothing was written for this range, so the retry starts from the same block
+                error!(?err, retry_in = ?backoff, "rpc error, will retry");
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, RPC_BACKOFF_MAX);
+            }
+            Err(StepError::Fatal(err)) => return Err(err),
+        }
     }
+}
+
+fn step<F, P>(
+    conn: &mut PgConnection,
+    provider: &mut P,
+    range_size: u64,
+    handler: &F,
+    last_updated: &mut u64,
+) -> Result<Step, StepError>
+where
+    F: Fn(&mut PgConnection, Log, &P) -> Result<()>,
+    P: LogsProvider,
+{
+    // fetch latest block from the rpc
+    let latest_block = provider
+        .latest_block()
+        .context("failed to fetch latest block")
+        .map_err(StepError::Rpc)?;
+
+    info!(block = latest_block, "latest block");
+
+    if latest_block < *last_updated {
+        warn!(
+            rpc_block = latest_block,
+            db_block = *last_updated,
+            "rpc is behind the db, waiting"
+        );
+        return Ok(Step::RpcBehind);
+    }
+
+    if latest_block == *last_updated {
+        return Ok(Step::UpToDate);
+    }
+
+    // start from the next block to what has already been processed
+    let start_block = *last_updated + 1;
+    // cap block range using range_size
+    // might need some babysitting during initial sync
+    let end_block = std::cmp::min(start_block.saturating_add(range_size - 1), latest_block);
+
+    info!(start_block, end_block, "fetching range");
+
+    // Use prefetched results if available, otherwise fetch normally
+    let logs = provider
+        .take_prefetched_logs(start_block, end_block)
+        .with_context(|| format!("failed to fetch logs for blocks {start_block} to {end_block}"))
+        .map_err(StepError::Rpc)?;
+
+    // Start prefetching the next batch in the background while we process this one.
+    // This overlaps network I/O with DB processing for ~2x pipeline throughput.
+    let next_start = end_block + 1;
+    if next_start <= latest_block {
+        let next_end = std::cmp::min(next_start.saturating_add(range_size - 1), latest_block);
+        info!(
+            next_start_block = next_start,
+            next_end_block = next_end,
+            "prefetching next range"
+        );
+        provider.start_prefetch(next_start, next_end);
+    }
+
+    info!(start_block, end_block, "processing range");
+
+    // execute db writes within a transaction for consistency
+    // NOTE: diesel transactions are synchronous, async is not allowed inside
+    // might be limiting for certain things like making rpc queries while processing logs
+    // using a temporary tokio runtime is a possibility
+    conn.transaction(|conn| {
+        for log in logs {
+            let block = log.block_number;
+            let idx = log.log_index;
+            handler(conn, log, provider).with_context(|| {
+                format!(
+                    "failed to handle log at block {}, log index {}",
+                    block.map_or("unknown".to_owned(), |x| x.to_string()),
+                    idx.map_or("unknown".to_owned(), |x| x.to_string()),
+                )
+            })?;
+        }
+        set_synced_block(conn, end_block)
+    })
+    .with_context(|| format!("failed to process blocks {start_block} to {end_block}"))
+    .map_err(|err| {
+        // the transaction is rolled back at this point, nothing from the range is stored
+        if err.downcast_ref::<RpcError>().is_some() {
+            StepError::Rpc(err)
+        } else {
+            StepError::Fatal(err)
+        }
+    })?;
+
+    *last_updated = end_block;
+
+    Ok(Step::Progress)
 }
 
 // the sync table has exactly one row, with id SYNC_ROW_ID
@@ -235,6 +338,174 @@ mod tests {
             .get_result::<Count>(conn)
             .unwrap()
             .count
+    }
+
+    struct TestProvider {
+        // results for successive latest_block calls
+        latest: std::collections::VecDeque<Result<u64>>,
+        // blocks which have one log each
+        log_blocks: Vec<u64>,
+        fail_logs: std::cell::Cell<u32>,
+    }
+
+    impl TestProvider {
+        fn new(latest: Vec<Result<u64>>, log_blocks: Vec<u64>) -> Self {
+            TestProvider {
+                latest: latest.into(),
+                log_blocks,
+                fail_logs: 0.into(),
+            }
+        }
+    }
+
+    impl LogsProvider for TestProvider {
+        fn latest_block(&mut self) -> Result<u64> {
+            self.latest.pop_front().expect("unexpected latest_block call")
+        }
+
+        fn logs(&self, start_block: u64, end_block: u64) -> Result<impl IntoIterator<Item = Log>> {
+            if self.fail_logs.get() > 0 {
+                self.fail_logs.set(self.fail_logs.get() - 1);
+                return Err(anyhow!("logs request failed"));
+            }
+
+            Ok(self
+                .log_blocks
+                .iter()
+                .filter(|&&x| x >= start_block && x <= end_block)
+                .map(|&x| Log {
+                    block_number: Some(x),
+                    log_index: Some(7),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>())
+        }
+
+        fn block_timestamp(&self, _block_number: u64) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    fn ok_handler(_: &mut PgConnection, _: Log, _: &TestProvider) -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn test_step_progress_and_idle() {
+        let mut db = TestDb::new("step_progress", None);
+        let conn = &mut db.conn;
+        let mut provider = TestProvider::new(vec![Ok(25), Ok(25), Ok(25), Ok(25)], vec![]);
+        let mut last = last_synced_block(conn).unwrap();
+
+        // ranges are capped by range size, then by the latest block
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (10, 10));
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (25, 25));
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::UpToDate)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (25, 25));
+    }
+
+    #[test]
+    fn test_step_rpc_behind_db_waits() {
+        let mut db = TestDb::new("step_rpc_behind", None);
+        let conn = &mut db.conn;
+        set_synced_block(conn, 100).unwrap();
+        let mut provider = TestProvider::new(vec![Ok(98), Ok(101)], vec![]);
+        let mut last = last_synced_block(conn).unwrap();
+
+        // not an error, nothing is changed
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::RpcBehind)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (100, 100));
+
+        // carries on once the rpc has caught up
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (101, 101));
+    }
+
+    #[test]
+    fn test_step_rpc_errors_are_retryable() {
+        let mut db = TestDb::new("step_rpc_errors", None);
+        let conn = &mut db.conn;
+        let mut provider = TestProvider::new(
+            vec![Err(anyhow!("connection reset")), Ok(5), Ok(5), Ok(5)],
+            vec![3],
+        );
+        provider.fail_logs.set(1);
+        let mut last = last_synced_block(conn).unwrap();
+
+        // latest block request fails
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Err(StepError::Rpc(_))
+        ));
+        // logs request fails
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Err(StepError::Rpc(_))
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (0, 0));
+
+        // rpc request made by a handler fails, writes of the range are rolled back
+        let rpc_failing_handler = |conn: &mut PgConnection, _: Log, _: &TestProvider| {
+            sql_query("UPDATE sync SET block = 4242").execute(conn)?;
+            Err(RpcError("failed to fetch timestamp".to_owned()).into())
+        };
+        assert!(matches!(
+            step(conn, &mut provider, 10, &rpc_failing_handler, &mut last),
+            Err(StepError::Rpc(_))
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (0, 0));
+
+        // same range goes through on the next attempt
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (5, 5));
+    }
+
+    #[test]
+    fn test_step_handler_error_is_fatal_with_block_and_index() {
+        let mut db = TestDb::new("step_handler_error", None);
+        let conn = &mut db.conn;
+        let mut provider = TestProvider::new(vec![Ok(5)], vec![3]);
+        let mut last = last_synced_block(conn).unwrap();
+
+        let failing_handler = |conn: &mut PgConnection, _: Log, _: &TestProvider| {
+            sql_query("UPDATE sync SET block = 4242").execute(conn)?;
+            Err(anyhow!("bad log"))
+        };
+        let Err(StepError::Fatal(err)) =
+            step(conn, &mut provider, 10, &failing_handler, &mut last)
+        else {
+            panic!("expected a fatal error");
+        };
+        let err = format!("{err:#}");
+        assert!(err.contains("block 3, log index 7"), "{err}");
+        assert!(err.contains("bad log"), "{err}");
+
+        // writes of the range are rolled back
+        assert_eq!((last, last_synced_block(conn).unwrap()), (0, 0));
     }
 
     #[test]
