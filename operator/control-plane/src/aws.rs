@@ -36,6 +36,15 @@ const SSH_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 // smallest bandwidth limit applied on job hosts, in kbit/s
 const MIN_BANDWIDTH_KBIT: u64 = 1;
 
+// debug mode logger, downloaded and run on the job host
+// the hashes are for exactly this version, update them together with the url
+const LOGGER_URL_PREFIX: &str =
+    "https://artifacts.marlin.org/oyster/binaries/nitro-logger_v1.0.0_linux_";
+const LOGGER_SHA256_AMD64: &str =
+    "0bcb4eed988c3eafed4f065bd2888f2c4518217305b603b3ac9a7bb7805cdce8";
+const LOGGER_SHA256_ARM64: &str =
+    "37ef3a4635dbc742e1067341550f3c99bd4cfb26bf9a62c181195dfaae88519e";
+
 #[derive(Clone)]
 pub struct Aws {
     clients: HashMap<String, aws_sdk_ec2::Client>,
@@ -737,6 +746,30 @@ impl Aws {
         Ok(())
     }
 
+    // IMPORTANT: the logger is run on the host, it has to match the pinned hash
+    // before it is made executable or moved to the path supervisor runs
+    // removes the previous binary first so a failure midway leaves nothing to run
+    // runs in the home directory like the image download, the hashes are our own
+    // constants and are not quoted
+    fn download_logger_command(amd64_sha256: &str, arm64_sha256: &str) -> String {
+        format!(
+            "rm -f nitro-logger nitro-logger.tmp; \
+case \"$(uname -m)\" in \
+x86_64) arch=amd64 sum={amd64_sha256} ;; \
+aarch64) arch=arm64 sum={arm64_sha256} ;; \
+*) echo \"nitro-logger: unsupported architecture $(uname -m)\" >&2; exit 1 ;; \
+esac; \
+curl -fsS --max-time 120 -o nitro-logger.tmp \"{LOGGER_URL_PREFIX}$arch\" || exit 1; \
+actual=\"$(sha256sum < nitro-logger.tmp | cut -d ' ' -f 1)\"; \
+if [ \"$actual\" != \"$sum\" ]; then \
+rm -f nitro-logger.tmp; \
+echo \"nitro-logger: sha256 mismatch for $arch, expected $sum, got $actual\" >&2; \
+exit 1; \
+fi; \
+chmod +x nitro-logger.tmp && mv nitro-logger.tmp nitro-logger"
+        )
+    }
+
     // Goal: set up or tear down debug logger
     // if debug is set, downloads logger and set it up, does not care about previous setup
     // if debug is false, stops the logger if it is running
@@ -762,8 +795,12 @@ impl Aws {
             }
 
             // set up logger if debug flag is set
-            let (_, stderr) = Self::ssh_exec(sess, "curl -fsS https://artifacts.marlin.org/oyster/binaries/nitro-logger_v1.0.0_linux_`uname -m | sed 's/x86_64/amd64/g; s/aarch64/arm64/g'` -o /home/ubuntu/nitro-logger && chmod +x /home/ubuntu/nitro-logger")
-                .context("Failed to download logger")?;
+            // any error, including a hash mismatch, is reported on stderr
+            let (_, stderr) = Self::ssh_exec(
+                sess,
+                &Self::download_logger_command(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64),
+            )
+            .context("Failed to download logger")?;
             if !stderr.is_empty() {
                 return Err(anyhow!(stderr)).context("Failed to download logger");
             }
@@ -1789,10 +1826,10 @@ impl InfraProvider for Aws {
 mod tests {
     use std::collections::HashMap;
     use std::net::TcpListener;
-    use std::process::Command;
+    use std::process::{Command, Output};
     use std::time::{Duration, Instant};
 
-    use super::Aws;
+    use super::{Aws, LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64, LOGGER_URL_PREFIX};
 
     fn test_aws() -> Aws {
         Aws {
@@ -1849,17 +1886,31 @@ mod tests {
     // run the given script in a real shell inside an empty directory
     // returns stdout and the files which exist afterwards
     fn run_sh(script: &str, tag: &str) -> (String, Vec<String>) {
+        let (out, files) = run_sh_output(script, tag, "");
+        assert!(out.status.success(), "{script}: {out:?}");
+
+        (String::from_utf8(out.stdout).unwrap(), files)
+    }
+
+    // same, for scripts which are allowed to fail
+    // runs check in the directory before it is removed, appended to stdout
+    fn run_sh_output(script: &str, tag: &str, check: &str) -> (Output, Vec<String>) {
         let dir = std::env::temp_dir().join(format!("cp-quote-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let out = Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{script}: {out:?}");
+        let sh = |script: &str| {
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+        };
+        let mut out = sh(script);
+        if !check.is_empty() {
+            out.stdout.extend(sh(check).stdout);
+        }
 
         let mut files: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
@@ -1868,7 +1919,7 @@ mod tests {
         files.sort();
         std::fs::remove_dir_all(&dir).unwrap();
 
-        (String::from_utf8(out.stdout).unwrap(), files)
+        (out, files)
     }
 
     #[test]
@@ -1942,5 +1993,108 @@ mod tests {
             // downloaded image in place, old url forgotten, nothing else created
             assert_eq!(files, ["enclave.eif"]);
         }
+    }
+
+    // sha256 of "good logger\n" and what the stand in for curl below downloads
+    const GOOD_SHA256: &str = "072fb8c4a49f9b5ccf06055b6cde53047b989fae6aa5368d231e33f198c1f81f";
+    const OTHER_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    // stand ins for uname and curl: record the curl arguments on stdout, download the
+    // given content, an older logger is already in place
+    fn logger_script(machine: &str, content: &str, command: &str) -> String {
+        format!(
+            "uname() {{ echo {machine}; }}; \
+             curl() {{ printf '%s|' \"$@\"; echo {content} > nitro-logger.tmp; }}; \
+             echo old > nitro-logger; chmod +x nitro-logger; {command}"
+        )
+    }
+
+    #[test]
+    fn test_logger_hashes_are_pinned() {
+        for sum in [LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64] {
+            assert_eq!(sum.len(), 64);
+            assert!(sum.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        }
+        assert_ne!(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64);
+    }
+
+    #[test]
+    fn test_download_logger_command_accepts_pinned_hash() {
+        let amd64 = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+        let arm64 = Aws::download_logger_command(OTHER_SHA256, GOOD_SHA256);
+
+        for (machine, arch, command) in [("x86_64", "amd64", amd64), ("aarch64", "arm64", arm64)] {
+            let (out, files) = run_sh_output(
+                &logger_script(machine, "'good logger'", &command),
+                &format!("logger-ok-{arch}"),
+                "test -x nitro-logger && cat nitro-logger",
+            );
+            assert!(out.status.success(), "{out:?}");
+            assert!(out.stderr.is_empty(), "{out:?}");
+            assert_eq!(
+                String::from_utf8(out.stdout).unwrap(),
+                format!("-fsS|--max-time|120|-o|nitro-logger.tmp|{LOGGER_URL_PREFIX}{arch}|good logger\n")
+            );
+            assert_eq!(files, ["nitro-logger"]);
+        }
+    }
+
+    #[test]
+    fn test_download_logger_command_rejects_other_hash() {
+        let amd64 = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+        let arm64 = Aws::download_logger_command(OTHER_SHA256, GOOD_SHA256);
+        let real = Aws::download_logger_command(LOGGER_SHA256_AMD64, LOGGER_SHA256_ARM64);
+
+        // wrong content, and the right content for the other architecture
+        for (i, (machine, content, command)) in [
+            ("x86_64", "'evil logger'", &amd64),
+            ("aarch64", "'evil logger'", &arm64),
+            ("aarch64", "'good logger'", &amd64),
+            ("x86_64", "''", &amd64),
+            // the real hashes do not match the stand in either
+            ("x86_64", "'good logger'", &real),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (out, files) = run_sh_output(
+                &logger_script(machine, content, command),
+                &format!("logger-bad-{i}"),
+                "",
+            );
+            // the caller fails the launch on anything in stderr
+            assert!(!out.status.success(), "{out:?}");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            assert!(stderr.contains("sha256 mismatch"), "{stderr}");
+            // nothing left to run, not even the logger from before
+            assert!(files.is_empty(), "{files:?}");
+        }
+    }
+
+    #[test]
+    fn test_download_logger_command_fails_without_download() {
+        let command = Aws::download_logger_command(GOOD_SHA256, OTHER_SHA256);
+
+        // curl fails
+        let script = format!(
+            "uname() {{ echo x86_64; }}; curl() {{ echo 'curl: (22) 404' >&2; return 22; }}; \
+             echo old > nitro-logger; chmod +x nitro-logger; {command}"
+        );
+        let (out, files) = run_sh_output(&script, "logger-curl", "");
+        assert!(!out.status.success(), "{out:?}");
+        assert!(!out.stderr.is_empty(), "{out:?}");
+        assert!(files.is_empty(), "{files:?}");
+
+        // unknown architecture, nothing is downloaded
+        let (out, files) = run_sh_output(
+            &logger_script("riscv64", "'good logger'", &command),
+            "logger-arch",
+            "",
+        );
+        assert!(!out.status.success(), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(stderr.contains("unsupported architecture"), "{stderr}");
+        assert!(files.is_empty(), "{files:?}");
     }
 }
