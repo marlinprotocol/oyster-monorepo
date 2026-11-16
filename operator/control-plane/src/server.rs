@@ -166,6 +166,15 @@ mod tests {
     use crate::market::{GBRateCard, JobId, RateCard, RegionalRates};
     use crate::test::{InstanceMetadata, TestAws};
 
+    // ask the OS for a free port, fixed ports fail when something else is using them
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
     #[tokio::test]
     async fn test_get_ip_happy_case() -> anyhow::Result<()> {
         let mut aws: TestAws = Default::default();
@@ -182,7 +191,7 @@ mod tests {
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8081;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -238,7 +247,7 @@ mod tests {
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8082;
+        let port = free_port();
 
         let job_id = U256::from(5).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -282,7 +291,7 @@ mod tests {
             Box::leak(vec![String::from("ap-south-1")].into_boxed_slice());
         let compute_rates: &'static [RegionalRates] = Box::leak(vec![].into_boxed_slice());
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8083;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -361,7 +370,7 @@ mod tests {
         );
 
         let bandwidth_rates: &'static [GBRateCard] = Box::leak(vec![].into_boxed_slice());
-        let port = 8084;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
@@ -423,7 +432,7 @@ mod tests {
             ]
             .into_boxed_slice(),
         );
-        let port = 8085;
+        let port = free_port();
 
         let job_id = U256::from(1).to_be_bytes::<32>().encode_hex_with_prefix();
 
