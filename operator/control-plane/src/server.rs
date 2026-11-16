@@ -168,8 +168,10 @@ mod tests {
     use crate::test::{InstanceMetadata, TestAws};
 
     // ask the OS for a free port, fixed ports fail when something else is using them
+    // has to be asked for on the address the server binds, a port can be free on
+    // loopback and still be taken for the wildcard address
     fn free_port() -> u16 {
-        std::net::TcpListener::bind(("127.0.0.1", 0))
+        std::net::TcpListener::bind(("0.0.0.0", 0))
             .unwrap()
             .local_addr()
             .unwrap()
