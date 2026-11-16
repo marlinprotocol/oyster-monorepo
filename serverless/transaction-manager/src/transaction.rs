@@ -291,6 +291,7 @@ impl TxnManager {
                 }
                 Err(err) => {
                     failure_reason = err.to_string();
+                    sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
                     continue;
                 }
             };
@@ -609,6 +610,7 @@ impl TxnManager {
                 }
                 Err(err) => {
                     failure_reason = err.to_string();
+                    sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
                     continue;
                 }
             };
@@ -643,6 +645,7 @@ impl TxnManager {
                                     return Err(err);
                                 }
                                 Err(_) => {
+                                    sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
                                     continue;
                                 }
                             }
@@ -711,6 +714,7 @@ impl TxnManager {
                     break;
                 }
                 Err(_) => {
+                    sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
                     continue;
                 }
             };
@@ -753,6 +757,7 @@ impl TxnManager {
             let tx_hash = pending_txn.watch().await;
 
             if tx_hash.is_err() {
+                sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
                 continue;
             }
 

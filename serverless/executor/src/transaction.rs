@@ -28,9 +28,10 @@ pub async fn send_transaction(
                         app_state.jobs_contract_addr,
                         call.abi_encode().into(),
                         Instant::now()
-                            + Duration::from_secs(
-                                app_state.execution_buffer_time + deadline
-                                    - call._totalTime.as_limbs()[0],
+                            + output_txn_deadline(
+                                app_state.execution_buffer_time,
+                                deadline,
+                                call._totalTime.as_limbs()[0],
                             ),
                     )
                     .await
@@ -61,4 +62,30 @@ pub async fn send_transaction(
 
     println!("Executor transaction sender channel stopped!");
     return;
+}
+
+// Time left for the output to be accepted by the 'Jobs' contract
+// Execution buffer time is in secs, the user deadline and the execution time are in millis
+fn output_txn_deadline(
+    execution_buffer_time: u64,
+    user_deadline: u64,
+    total_time: u64,
+) -> Duration {
+    Duration::from_secs(execution_buffer_time)
+        + Duration::from_millis(user_deadline.saturating_sub(total_time))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_txn_deadline_test() {
+        assert_eq!(
+            output_txn_deadline(60, 50000, 100),
+            Duration::from_millis(109900)
+        );
+        assert_eq!(output_txn_deadline(60, 5000, 5000), Duration::from_secs(60));
+        assert_eq!(output_txn_deadline(60, 5000, 5001), Duration::from_secs(60));
+    }
 }
