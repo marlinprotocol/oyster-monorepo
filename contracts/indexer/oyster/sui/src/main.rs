@@ -42,7 +42,7 @@ struct Args {
     #[arg(short, long)]
     remote_checkpoint_url: String,
 
-    /// Market program package ID
+    /// Original market program package ID, as in the event types
     #[arg(short, long)]
     package_id: String,
 
