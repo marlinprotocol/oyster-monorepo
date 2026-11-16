@@ -22,12 +22,6 @@
       },
       {
         "indexed": false,
-        "internalType": "uint256",
-        "name": "secretId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
         "internalType": "bytes32",
         "name": "codehash",
         "type": "bytes32"

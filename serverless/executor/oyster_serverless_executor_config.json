@@ -1,14 +1,13 @@
 {
-    "secret_store_config_port": 6003,
     "workerd_runtime_path": "./runtime/",
     "secret_store_path": "./store/",
     "common_chain_id": 421614,
     "http_rpc_url": "https://sepolia-rollup.arbitrum.io/rpc",
     "web_socket_url": "wss://arb-sepolia.g.alchemy.com/v2/",
-    "tee_manager_contract_addr": "0xE35E287DBC371561E198bFaCBdbEc9cF78bDe930",
     "jobs_contract_addr": "0xd3b682f6F58323EC77dEaE730733C6A83a1561Fd",
     "code_contract_addr": "0xE10F9D50eDEef610888e75fA4BC82f8dA14167B2",
     "enclave_signer_file": "./id.sec",
     "execution_buffer_time": 20,
-    "num_selected_executors": 3
+    "num_selected_executors": 3,
+    "executors_contract_addr": "0xE35E287DBC371561E198bFaCBdbEc9cF78bDe930"
 }

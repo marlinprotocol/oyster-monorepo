@@ -10,16 +10,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use multi_block_txns::TxnManager;
-use serde_json::{json, Value};
 
 use crate::constant::EXECUTION_ENV_ID;
 use crate::events::events_listener;
 use crate::model::{
     AppState, ImmutableConfig, MutableConfig, Register, RegistrationMessage, TeeConfig,
 };
-use crate::utils::{
-    call_secret_store_endpoint_get, call_secret_store_endpoint_post, get_latest_block_number,
-};
+use crate::utils::get_latest_block_number;
 
 pub async fn index() {}
 
@@ -44,38 +41,6 @@ pub async fn inject_immutable_config(
         return (
             StatusCode::BAD_REQUEST,
             String::from("Owner address must be 20 bytes long!\n"),
-        )
-            .into_response();
-    }
-
-    let request_json = json!({
-        "owner_address_hex": immutable_config.owner_address_hex,
-    });
-
-    let secret_store_response = call_secret_store_endpoint_post(
-        app_state.secret_store_config_port,
-        "/immutable-config",
-        request_json,
-    )
-    .await;
-    let Ok((status_code, response_body, _)) = secret_store_response else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to call corresponding secret store endpoint: {:?}\n",
-                secret_store_response.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-
-    if !status_code.is_success() {
-        return (
-            StatusCode::from_u16(status_code.as_u16()).unwrap(),
-            format!(
-                "Failed to inject immutable config into the secret store: {}",
-                response_body
-            ),
         )
             .into_response();
     }
@@ -167,39 +132,6 @@ pub async fn inject_mutable_config(
             .into_response();
     };
 
-    let request_json = json!({
-        "gas_key_hex": mutable_config.secret_store_gas_key,
-        "ws_api_key": mutable_config.ws_api_key,
-    });
-
-    let secret_store_response = call_secret_store_endpoint_post(
-        app_state.secret_store_config_port,
-        "/mutable-config",
-        request_json,
-    )
-    .await;
-    let Ok((status_code, response_body, _)) = secret_store_response else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to call corresponding secret store endpoint: {:?}\n",
-                secret_store_response.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-
-    if !status_code.is_success() {
-        return (
-            StatusCode::from_u16(status_code.as_u16()).unwrap(),
-            format!(
-                "Failed to inject mutable config into the secret store: {}",
-                response_body
-            ),
-        )
-            .into_response();
-    }
-
     // Initialize HTTP RPC client and nonce for sending the signed transactions while holding lock
     let mut mutable_params_injected_guard = app_state.mutable_params_injected.lock().unwrap();
 
@@ -250,31 +182,6 @@ pub async fn get_tee_details(app_state: State<AppState>) -> Response {
             .address();
     }
 
-    let secret_store_response =
-        call_secret_store_endpoint_get(app_state.secret_store_config_port, "/store-details").await;
-    let Ok(secret_store_response) = secret_store_response else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to call corresponding secret store endpoint: {:?}\n",
-                secret_store_response.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-
-    let secret_store_response_value = secret_store_response.2.unwrap();
-    let Some(secret_store_gas_address) = secret_store_response_value
-        .get("gas_address")
-        .and_then(Value::as_str)
-    else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            String::from("Failed to get the secret store address!\n"),
-        )
-            .into_response();
-    };
-
     let details = TeeConfig {
         enclave_address: app_state.enclave_signer.address(),
         enclave_public_key: format!(
@@ -290,7 +197,6 @@ pub async fn get_tee_details(app_state: State<AppState>) -> Response {
         ),
         owner_address: *app_state.enclave_owner.lock().unwrap(),
         executor_gas_address: gas_address,
-        secret_store_gas_address: secret_store_gas_address.to_owned(),
         ws_rpc_url: app_state.ws_rpc_url.read().unwrap().clone(),
     };
     (StatusCode::OK, Json(details)).into_response()
@@ -314,43 +220,6 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
             .into_response();
     }
 
-    let secret_store_response =
-        call_secret_store_endpoint_get(app_state.secret_store_config_port, "/register-details")
-            .await;
-    let Ok(secret_store_response) = secret_store_response else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "Failed to call corresponding secret store endpoint: {:?}\n",
-                secret_store_response.unwrap_err()
-            ),
-        )
-            .into_response();
-    };
-
-    if secret_store_response.0 != reqwest::StatusCode::OK {
-        return (
-            StatusCode::from_u16(secret_store_response.0.as_u16()).unwrap(),
-            format!(
-                "Failed to export registration details from secret store: {}",
-                secret_store_response.1
-            ),
-        )
-            .into_response();
-    }
-
-    let secret_store_response_value = secret_store_response.2.unwrap();
-    let Some(secret_storage_capacity) = secret_store_response_value
-        .get("storage_capacity")
-        .and_then(Value::as_u64)
-    else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            String::from("Failed to get the secret store capacity!\n"),
-        )
-            .into_response();
-    };
-
     let job_capacity = app_state.job_capacity;
     let owner = app_state.enclave_owner.lock().unwrap().clone();
     let sign_timestamp = SystemTime::now()
@@ -361,13 +230,12 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
     let register_data = Register {
         owner: owner,
         jobCapacity: U256::from(job_capacity),
-        storageCapacity: U256::from(secret_storage_capacity),
         env: EXECUTION_ENV_ID,
         signTimestamp: U256::from(sign_timestamp),
     };
 
     let domain_separator = eip712_domain! {
-        name: "marlin.oyster.TeeManager",
+        name: "marlin.oyster.Executors",
         version: "1",
     };
 
@@ -408,7 +276,6 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
 
     let response_body = RegistrationMessage {
         job_capacity,
-        storage_capacity: secret_storage_capacity as usize,
         sign_timestamp,
         env: EXECUTION_ENV_ID,
         owner,
