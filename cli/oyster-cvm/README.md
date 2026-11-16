@@ -217,6 +217,11 @@ Required args:
 - `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
+Optional args:
+- `--force`: Deposit even if the job has already run out of balance
+
+The market does not settle a job when funds are deposited. It charges a job for all the time since its last settlement, up to the balance, the next time the job is settled. If the balance of a job has already run out, a deposit first pays the operator for the time since then, although the enclave was not running. The command works this out from the job on chain, prints how much of the deposit would be lost this way and asks for confirmation. When it is not run from a terminal it stops with an error unless `--force` is passed.
+
 #### `stop`
 Stops an Oyster CVM instance.
 
