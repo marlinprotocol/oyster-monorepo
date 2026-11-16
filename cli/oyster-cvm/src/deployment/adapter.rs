@@ -5,6 +5,11 @@ use sui_sdk_types::{ObjectReference, Transaction};
 
 use crate::deployment::{evm::EvmProvider, sui::SuiProvider};
 
+/// Marks errors raised after a transaction was sent, where it may still land.
+pub const TX_MAYBE_INCLUDED: &str = "transaction might still have been included";
+/// Marks the error raised when a job open transaction succeeded but its job ID could not be read.
+pub const JOB_ID_NOT_FOUND: &str = "Could not find JobOpened event";
+
 #[derive(Clone)]
 pub enum ChainProvider {
     Evm(EvmProvider),

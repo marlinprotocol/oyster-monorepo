@@ -31,6 +31,14 @@ impl WalletArgs {
         Ok(None)
     }
 
+    /// Wallet flags to show in a suggested command, never contains the key itself.
+    pub fn command_hint(&self) -> String {
+        match self.wallet_file {
+            Some(ref path) => format!("--wallet-file {path}"),
+            None => "--wallet-private-key <key>".into(),
+        }
+    }
+
     pub fn load_required(&self) -> Result<String> {
         self.load().transpose().ok_or(anyhow!(
             "Wallet parameter is required, specify one of wallet-private-key or wallet-file."

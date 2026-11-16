@@ -2,7 +2,11 @@ use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     commands::log::{LogArgs, stream_logs},
     configs,
-    deployment::{Deployment, adapter::JobTransactionKind, get_deployment_adapter},
+    deployment::{
+        Deployment,
+        adapter::{JOB_ID_NOT_FOUND, JobTransactionKind, TX_MAYBE_INCLUDED},
+        get_deployment_adapter,
+    },
     types::Platform,
     utils::{
         bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
@@ -18,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::{str::FromStr, time::Duration as StdDuration};
 use sui_sdk_types::Address;
 use tokio::net::TcpStream;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::simulate::{LOCAL_DEV_IMAGE, SimulateArgs, simulate};
 
@@ -157,6 +161,14 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     tracing::info!("Starting deployment...");
 
     let operator = parse_operator(&args.deployment, args.operator);
+
+    // kept to tell the user how to get out of a job if the deployment fails after it is opened
+    let deployment_name = args.deployment.as_str();
+    let recovery_flags = recovery_flags(
+        deployment_name,
+        args.rpc.as_deref(),
+        &args.wallet.command_hint(),
+    );
 
     let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
@@ -300,21 +312,52 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .await?;
 
     // Create job
-    let job_id = deployment_adapter
+    let job_id = match deployment_adapter
         .send_transaction(true, job_create_transaction, &provider)
-        .await?
-        .ok_or(anyhow!("Failed to get the Job ID"))?;
+        .await
+    {
+        Ok(Some(job_id)) => job_id,
+        Ok(None) => {
+            warn_job_may_be_open(
+                deployment_name,
+                &deployment_adapter.get_sender_address(),
+                &recovery_flags,
+            );
+            return Err(anyhow!("Failed to get the Job ID"));
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            if message.contains(TX_MAYBE_INCLUDED) || message.contains(JOB_ID_NOT_FOUND) {
+                warn_job_may_be_open(
+                    deployment_name,
+                    &deployment_adapter.get_sender_address(),
+                    &recovery_flags,
+                );
+            }
+            return Err(err);
+        }
+    };
     info!("Job created with ID: {:?}", job_id);
 
-    info!("Waiting for 3 minutes for enclave to start...");
-    tokio::time::sleep(StdDuration::from_secs(180)).await;
-
-    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
-    info!("IP address obtained: {}", ip_address);
-
-    if !check_reachability(&ip_address).await {
-        return Err(anyhow!("Reachability check failed after maximum retries"));
-    }
+    // The job is open and funded from here on. Whatever goes wrong below, the user has to
+    // be told that it keeps billing and how to stop it.
+    let ip_address = tokio::select! {
+        result = wait_for_enclave(&cp_url, &job_id, &args.region) => match result {
+            Ok(ip_address) => ip_address,
+            Err(err) => {
+                warn_job_is_billing(&job_id, &recovery_flags);
+                return Err(err.context(format!(
+                    "Job {job_id} was opened and funded but the enclave did not come up"
+                )));
+            }
+        },
+        _ = tokio::signal::ctrl_c() => {
+            warn_job_is_billing(&job_id, &recovery_flags);
+            return Err(anyhow!(
+                "Interrupted while waiting for the enclave of job {job_id} to start"
+            ));
+        }
+    };
 
     info!("Enclave is ready! IP address: {}", ip_address);
 
@@ -330,6 +373,61 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn wait_for_enclave(cp_url: &str, job_id: &str, region: &str) -> Result<String> {
+    info!("Waiting for 3 minutes for enclave to start...");
+    tokio::time::sleep(StdDuration::from_secs(180)).await;
+
+    let ip_address = wait_for_ip_address(cp_url, job_id.to_owned(), region).await?;
+    info!("IP address obtained: {}", ip_address);
+
+    if !check_reachability(&ip_address).await {
+        return Err(anyhow!("Reachability check failed after maximum retries"));
+    }
+
+    Ok(ip_address)
+}
+
+/// Flags shared by the commands suggested after a failed deployment.
+fn recovery_flags(deployment: &str, rpc: Option<&str>, wallet_hint: &str) -> String {
+    let mut flags = format!("--deployment {deployment}");
+    if let Some(rpc) = rpc {
+        flags.push_str(&format!(" --rpc {rpc}"));
+    }
+    flags.push(' ');
+    flags.push_str(wallet_hint);
+    flags
+}
+
+fn stop_command(job_id: &str, flags: &str) -> String {
+    format!("oyster-cvm stop --job-id {job_id} {flags}")
+}
+
+fn withdraw_command(job_id: &str, flags: &str) -> String {
+    format!("oyster-cvm withdraw --job-id {job_id} --max {flags}")
+}
+
+fn warn_job_is_billing(job_id: &str, flags: &str) {
+    warn!(
+        "Job {job_id} is open and funded. It keeps billing until it is stopped or its balance runs out."
+    );
+    warn!(
+        "To stop it and get the unused balance back (billed until the stop completes, about 5 minutes):"
+    );
+    warn!("  {}", stop_command(job_id, flags));
+    warn!("To take most of the balance out of the job right away, before stopping it:");
+    warn!("  {}", withdraw_command(job_id, flags));
+}
+
+fn warn_job_may_be_open(deployment: &str, sender: &str, flags: &str) {
+    warn!(
+        "The job open transaction may have been included. If it was, a funded job exists and is billing."
+    );
+    warn!("Check for it with:");
+    warn!("  oyster-cvm list --deployment {deployment} --address {sender}");
+    warn!("and stop it with:");
+    warn!("  {}", stop_command("<job id>", flags));
 }
 
 async fn start_simulation(args: DeployArgs) -> Result<()> {
@@ -591,4 +689,35 @@ async fn check_reachability(ip: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_commands_carry_the_deployment_and_wallet() {
+        let flags = recovery_flags("arb", None, "--wallet-file ./key.txt");
+        assert_eq!(
+            stop_command("0x32ad", &flags),
+            "oyster-cvm stop --job-id 0x32ad --deployment arb --wallet-file ./key.txt"
+        );
+        assert_eq!(
+            withdraw_command("0x32ad", &flags),
+            "oyster-cvm withdraw --job-id 0x32ad --max --deployment arb --wallet-file ./key.txt"
+        );
+    }
+
+    #[test]
+    fn recovery_commands_carry_a_custom_rpc_but_never_the_key() {
+        let flags = recovery_flags(
+            "bsc",
+            Some("https://rpc.example"),
+            "--wallet-private-key <key>",
+        );
+        assert_eq!(
+            stop_command("0x22", &flags),
+            "oyster-cvm stop --job-id 0x22 --deployment bsc --rpc https://rpc.example --wallet-private-key <key>"
+        );
+    }
 }

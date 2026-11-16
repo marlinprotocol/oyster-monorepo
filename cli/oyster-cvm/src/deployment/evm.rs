@@ -22,7 +22,8 @@ use tokio::time::{Instant, sleep};
 use tracing::info;
 
 use crate::deployment::adapter::{
-    ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind, RateLock,
+    ChainFunds, ChainProvider, ChainTransaction, JOB_ID_NOT_FOUND, JobData, JobTransactionKind,
+    RateLock, TX_MAYBE_INCLUDED,
 };
 
 use super::adapter::DeploymentAdapter;
@@ -335,7 +336,7 @@ impl DeploymentAdapter for EvmAdapter {
             info!("Transaction sent, waiting for receipt: {:?}", tx.tx_hash());
             Self::watch(provider, *tx.tx_hash(), 60)
                 .await
-                .context("Failed to get receipt, transaction might still have been included")?;
+                .context(format!("Failed to get receipt, {TX_MAYBE_INCLUDED}"))?;
             info!("Transaction included: {:?}", tx.tx_hash());
         } else {
             info!(
@@ -365,7 +366,7 @@ impl DeploymentAdapter for EvmAdapter {
         info!("Transaction sent, waiting for receipt: {:?}", tx.tx_hash());
         let receipt = Self::get_receipt(&provider, *tx.tx_hash(), 60)
             .await
-            .context("Failed to get receipt, transaction might still have been included")?;
+            .context(format!("Failed to get receipt, {TX_MAYBE_INCLUDED}"))?;
         info!("Transaction included: {:?}", tx.tx_hash());
 
         // Add logging to check transaction status
@@ -393,9 +394,7 @@ impl DeploymentAdapter for EvmAdapter {
                 info!("Event topics: {:?}", log.topics());
             }
 
-            return Err(anyhow!(
-                "Could not find JobOpened event in transaction receipt"
-            ));
+            return Err(anyhow!("{JOB_ID_NOT_FOUND} in transaction receipt"));
         }
 
         Ok(None)

@@ -166,6 +166,8 @@ OR
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
 
+The job is opened and funded before the enclave starts. If the deployment fails after that (no IP address, the enclave is not reachable, or the command is interrupted), the job stays open and keeps billing. The command then prints the job ID and the `oyster-cvm stop` and `oyster-cvm withdraw` commands to get the balance back.
+
 #### `update`
 Updates an existing Oyster CVM job's metadata.
 

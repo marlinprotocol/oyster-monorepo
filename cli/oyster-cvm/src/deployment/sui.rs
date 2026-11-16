@@ -30,8 +30,8 @@ use sui_sdk_types::{
 use tracing::{error, info};
 
 use crate::deployment::adapter::{
-    ChainFunds, ChainProvider, ChainTransaction, DeploymentAdapter, JobData, JobTransactionKind,
-    RateLock,
+    ChainFunds, ChainProvider, ChainTransaction, DeploymentAdapter, JOB_ID_NOT_FOUND, JobData,
+    JobTransactionKind, RateLock,
 };
 
 const SUI_PRIV_KEY_PREFIX: &str = "suiprivkey";
@@ -987,9 +987,7 @@ impl DeploymentAdapter for SuiAdapter {
                 info!("Event type: {}", event.event_type());
             }
 
-            return Err(anyhow!(
-                "Could not find JobOpened event in transaction events"
-            ));
+            return Err(anyhow!("{JOB_ID_NOT_FOUND} in transaction events"));
         }
 
         Ok(None)
