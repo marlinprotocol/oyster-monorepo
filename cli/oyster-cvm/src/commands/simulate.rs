@@ -41,7 +41,8 @@ pub struct SimulateArgs {
     pub expose_ports: Vec<String>,
 
     /// Local dev base image
-    #[arg(short, long, default_value = LOCAL_DEV_IMAGE)]
+    // no short flag: -d belongs to --docker-images
+    #[arg(long, default_value = LOCAL_DEV_IMAGE)]
     pub dev_image: String,
 
     /// Memory limit for the local dev container

@@ -47,7 +47,7 @@ pub struct InitParamsArgs {
     #[command(flatten)]
     pub pcrs: PcrArgs,
 
-    /// Encalve verifier contract address
+    /// Enclave verifier contract address
     #[arg(long, requires = "chain_id")]
     pub contract_address: Option<String>,
 

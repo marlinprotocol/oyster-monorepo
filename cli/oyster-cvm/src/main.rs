@@ -90,6 +90,13 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        // catches clashing flags, which panic at startup in debug builds
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn deposit_takes_base_units_or_decimal_usdc() {

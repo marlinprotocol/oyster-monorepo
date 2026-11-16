@@ -165,13 +165,13 @@ struct InstanceRate {
 }
 
 pub async fn deploy(args: DeployArgs) -> Result<()> {
-    // Start simulation if dry_run flag is opted
+    // Start simulation if the simulate flag is opted
     if args.simulate {
         if args.preset == "blue" {
             return start_simulation(args).await;
         } else {
             return Err(anyhow!(
-                "Dry run is only supported for blue images based deployments!"
+                "--simulate is only supported for blue images based deployments!"
             ));
         }
     }
@@ -729,6 +729,18 @@ async fn wait_for_ip_address(url: &str, job_id: String, region: &str) -> Result<
             tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
             continue;
         };
+
+        // The control plane answers with an error status until it has picked up the job
+        // and the instance has an address, that is expected for the first attempts
+        if !status.is_success() {
+            last_response = format!("status {}: {}", status, text_body.trim());
+            info!(
+                "IP not available yet ({}), waiting {} seconds...",
+                last_response, IP_CHECK_INTERVAL
+            );
+            tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
+            continue;
+        }
 
         // Parse the JSON
         let json_result = serde_json::from_str::<serde_json::Value>(&text_body);
