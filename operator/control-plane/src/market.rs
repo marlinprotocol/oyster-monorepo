@@ -11,6 +11,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Type};
 use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::watch;
 use tokio::time::sleep;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, info_span, Instrument};
@@ -248,6 +249,9 @@ enum JobResult {
     Internal,
 }
 
+// number of events fetched from the db in one go
+const EVENT_BATCH_SIZE: i64 = 1000;
+
 pub async fn run(
     infra_provider: impl InfraProvider + Send + Sync + Clone + 'static,
     db_url: String,
@@ -268,6 +272,16 @@ pub async fn run(
     // trying to implicitly resume connections can cause issues
 
     let mut last_processed_id: i64 = -1;
+
+    // events are replayed from the beginning of the table on start
+    // job managers must not act on a job (insolvency, launches, terminations) while only
+    // a part of its stored events have been delivered, e.g. a job which was opened with
+    // little balance and topped up later looks insolvent until its deposits are processed
+    // this is set once the reader has delivered everything that was stored
+    let (caught_up_tx, caught_up_rx) = watch::channel(false);
+    // whether the last fetch was a full batch, i.e. there might be more events waiting
+    let mut full_batch = false;
+
     loop {
         info!("Connecting to DB endpoint...");
         let db_pool = match PgPoolOptions::new()
@@ -290,7 +304,10 @@ pub async fn run(
         info!("Connected to DB endpoint");
 
         'run: loop {
-            sleep(Duration::from_secs(5)).await;
+            // do not wait between batches while catching up
+            if !full_batch {
+                sleep(Duration::from_secs(5)).await;
+            }
 
             let mut attempts = 5;
             let mut delay = 100;
@@ -316,6 +333,8 @@ pub async fn run(
                     }
                 }
             }
+
+            full_batch = job_events.len() as i64 >= EVENT_BATCH_SIZE;
 
             for event in job_events {
                 let sender = match event.event_name {
@@ -365,6 +384,7 @@ pub async fn run(
                                 address_blacklist,
                                 extra_decimals,
                                 job_registry.clone(),
+                                caught_up_rx.clone(),
                             )
                             .instrument(info_span!(parent: None, "job", ?event.job_id)),
                         );
@@ -390,6 +410,11 @@ pub async fn run(
 
                 last_processed_id = event_id;
             }
+
+            if !full_batch && !*caught_up_tx.borrow() {
+                info!("Reached the end of stored events");
+                caught_up_tx.send_replace(true);
+            }
         }
     }
 }
@@ -404,10 +429,11 @@ async fn fetch_job_events(
         FROM job_events
         WHERE id > $1
         ORDER BY id ASC
-        LIMIT 1000
+        LIMIT $2
         "#,
     )
     .bind(last_processed_id)
+    .bind(EVENT_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
 
@@ -428,7 +454,12 @@ async fn job_manager(
     address_blacklist: &[String],
     extra_decimals: i64,
     job_registry: JobRegistry,
+    // false while stored events are still being replayed, see run()
+    mut caught_up: watch::Receiver<bool>,
 ) -> JobResult {
+    // set if the other end goes away, nothing would ever signal us in that case
+    let mut reader_gone = false;
+
     let mut state = JobState::new(
         &context,
         job_id.clone(),
@@ -450,7 +481,11 @@ async fn job_manager(
     // If job is insolvent, schedule termination
     // Once job is successfully terminated, break out
     // Insolvency and heartbeats only matter when job is not already scheduled for termination
+    // While stored events are being replayed, only events are processed, the rest is held
+    // back till the job has seen its full history
     'event: loop {
+        let replaying = !reader_gone && !*caught_up.borrow();
+
         // compute time to insolvency
         let insolvency_duration = state.insolvency_duration(extra_decimals);
         info!(duration = insolvency_duration.as_secs(), "Insolvency after");
@@ -506,16 +541,25 @@ async fn job_manager(
                 };
             }
 
+            // wait for the replay to finish
+            // events sent before the signal are already in the channel and get picked up
+            // above before anything below runs
+            res = caught_up.changed(), if replaying => {
+                if res.is_err() {
+                    reader_gone = true;
+                }
+            }
+
             // insolvency check
             // enable when processing is successful
-            () = sleep(insolvency_duration), if job_result == JobResult::Success => {
+            () = sleep(insolvency_duration), if !replaying && job_result == JobResult::Success => {
                 state.handle_insolvency();
                 job_result = JobResult::Done;
             }
 
             // aws delayed spin up check
             // should only happen if scheduled
-            () = sleep(aws_delay_timeout), if state.infra_change_scheduled => {
+            () = sleep(aws_delay_timeout), if !replaying && state.infra_change_scheduled => {
                 let res = state.change_infra(&mut infra_provider).await;
                 if res && !state.infra_state {
                     // successful termination, exit
@@ -525,7 +569,7 @@ async fn job_manager(
 
             // running instance heartbeat check
             // should only happen if infra change is not scheduled
-            () = sleep(Duration::from_secs(5)), if !state.infra_change_scheduled => {
+            () = sleep(Duration::from_secs(5)), if !replaying && !state.infra_change_scheduled => {
                 state.heartbeat_check(&mut infra_provider).await;
             }
         }
@@ -1221,7 +1265,7 @@ mod tests {
 
     use alloy_primitives::hex::FromHex;
     use alloy_primitives::{B256, U256};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
     use tokio::time::{sleep, Duration, Instant};
 
     use crate::market::{self, JobEvent};
@@ -1270,6 +1314,18 @@ mod tests {
         job_manager_params: JobManagerParams,
         test_results: TestResults,
     ) {
+        run_test_with_replay(start_time, logs, 0, job_manager_params, test_results).await;
+    }
+
+    // the first `replayed` logs are treated as stored events which are replayed on start
+    // the job manager is told that the replay is over after they are sent
+    async fn run_test_with_replay(
+        start_time: Instant,
+        logs: Vec<(u64, Action)>,
+        replayed: usize,
+        job_manager_params: JobManagerParams,
+        test_results: TestResults,
+    ) {
         let context = TestSystemContext { start: start_time };
 
         let job_num = B256::from_hex(&job_manager_params.job_id.id).unwrap();
@@ -1285,14 +1341,21 @@ mod tests {
         let job_registry_handle = job_registry.clone();
         let job_id = job_manager_params.job_id.id.clone();
 
+        let (caught_up_tx, caught_up_rx) = watch::channel(replayed == 0);
+
         tokio::spawn(async move {
-            for (moment, event) in job_logs {
+            for (idx, (moment, event)) in job_logs.into_iter().enumerate() {
                 let delay = start_time + Duration::from_secs(moment) - Instant::now();
                 sleep(delay).await;
                 if let Err(err) = tx.send(event).await {
                     println!("{}", err);
                 }
+                if idx + 1 == replayed {
+                    caught_up_tx.send_replace(true);
+                }
             }
+            // keep the sender around till the job manager is done
+            caught_up_tx.closed().await;
         });
 
         let res = market::job_manager(
@@ -1308,6 +1371,7 @@ mod tests {
             &job_manager_params.address_blacklist,
             12,
             job_registry,
+            caught_up_rx,
         )
         .await;
 
@@ -1321,6 +1385,137 @@ mod tests {
 
         assert_eq!(res, test_results.res);
         assert_eq!(aws.outcomes, test_results.outcomes);
+    }
+
+    // restart case: the job was opened 5000s ago with funds for 1000s and topped up later
+    // both events are already in the db and get replayed one after the other
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_keeps_topped_up_job() {
+        let start_time = Instant::now();
+        tokio::time::advance(Duration::from_secs(5000)).await;
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (5000, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // the deposit is delivered in the next db poll
+            (5005, Action::Deposit(31000000)),
+            (5400, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![
+                TestAwsOutcome::SpinUp(test::SpinUpOutcome {
+                    time: start_time + Duration::from_secs(5300),
+                    job: job_id.clone(),
+                    instance_type: "c6a.xlarge".into(),
+                    family: "salmon".into(),
+                    region: "ap-south-1".into(),
+                    req_mem: 4096,
+                    req_vcpu: 2,
+                    bandwidth: 76,
+                    image_url: "https://example.com/enclave.eif".into(),
+                    debug: false,
+                    init_params: [].into(),
+                    contract_address: "xyz".into(),
+                    chain_id: "123".into(),
+                    instance_id: compute_instance_id(0),
+                }),
+                TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                    time: start_time + Duration::from_secs(5400),
+                    job: job_id,
+                    region: "ap-south-1".into(),
+                }),
+            ],
+        };
+
+        run_test_with_replay(start_time, logs, 2, job_manager_params, test_results).await;
+    }
+
+    // restart case: the job ran out of funds while the control plane was down
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_terminates_insolvent_job() {
+        let start_time = Instant::now();
+        tokio::time::advance(Duration::from_secs(5000)).await;
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (5000, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // arrives after the replay is over, too late
+            (5005, Action::Deposit(31000000)),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(5000),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test_with_replay(start_time, logs, 1, job_manager_params, test_results).await;
+    }
+
+    // restart case: a job which was closed while its events are still being replayed
+    // is not launched in between
+    #[tokio::test(start_paused = true)]
+    async fn test_replay_does_not_launch_closed_job() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        let logs = vec![
+            (0, Action::Open("{\"region\":\"ap-south-1\",\"url\":\"https://example.com/enclave.eif\",\"instance\":\"c6a.xlarge\",\"memory\":4096,\"vcpu\":2}".to_string(),31000000000000u64,31000u64,0)),
+            // the stored close is delivered after the launch delay has passed
+            (400, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["ap-south-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Done,
+            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
+                time: start_time + Duration::from_secs(400),
+                job: job_id,
+                region: "ap-south-1".into(),
+            })],
+        };
+
+        run_test_with_replay(start_time, logs, 2, job_manager_params, test_results).await;
     }
 
     #[tokio::test(start_paused = true)]
