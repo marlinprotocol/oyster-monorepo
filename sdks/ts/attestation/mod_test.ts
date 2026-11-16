@@ -1,6 +1,11 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { decodeHex } from "jsr:@std/encoding@1/hex";
-import { AWS_ROOT_KEY, MOCK_ROOT_KEY, verify } from "./mod.ts";
+import {
+  AttestationError,
+  AWS_ROOT_KEY,
+  MOCK_ROOT_KEY,
+  verify,
+} from "./mod.ts";
 
 // generated using `curl <ip>:<port>/attestation/raw`
 // on the attestation server of a real Nitro enclave
@@ -109,6 +114,37 @@ Deno.test(async function testVerifyAWSAllSpecified() {
   assertEquals(
     decoded.rootPublicKey,
     AWS_ROOT_KEY,
+  );
+});
+
+Deno.test(async function testVerifyAge() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/aws.bin", import.meta.url),
+  );
+  const timestamp = 0x00000193bef3f3b0;
+  const check = (maxAge: number, currentTimestamp: number) =>
+    verify(attestation, { age: { maxAge, currentTimestamp } });
+
+  // within max age on either side
+  await check(300000, timestamp);
+  await check(300000, timestamp + 300000);
+  await check(300000, timestamp - 300000);
+
+  await assertRejects(
+    () => check(300000, timestamp + 300001),
+    AttestationError,
+    "too old",
+  );
+  // used to pass, any timestamp ahead of the current one did
+  await assertRejects(
+    () => check(300000, timestamp - 300001),
+    AttestationError,
+    "timestamp too far in the future",
+  );
+  await assertRejects(
+    () => check(300000, 0),
+    AttestationError,
+    "timestamp too far in the future",
   );
 });
 
