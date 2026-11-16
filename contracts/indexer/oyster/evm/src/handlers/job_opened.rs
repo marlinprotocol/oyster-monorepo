@@ -6,12 +6,15 @@ use indexer_framework::schema::rate_revisions;
 use indexer_framework::schema::transactions;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
+use alloy::primitives::Bytes;
 use alloy::primitives::U256;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::decode_text;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -27,9 +30,11 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
     let id = log.topics()[1].encode_hex_with_prefix();
     let owner = Address::from_word(log.topics()[2]).to_checksum(None);
     let provider = Address::from_word(log.topics()[3]).to_checksum(None);
+    // metadata is decoded as bytes, the contract does not check that it is valid UTF-8
     let (metadata, rate, balance, timestamp) =
         // parse rate and balance as B256 since the integer representation is not used
-        <(String, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
+        <(Bytes, U256, U256, U256)>::abi_decode_sequence(&log.data().data, true)?;
+    let metadata = decode_text(&metadata);
     let (rate, balance, timestamp, timestamp_epoch) = (
         BigDecimal::from_str(&rate.to_string())?,
         BigDecimal::from_str(&balance.to_string())?,
@@ -827,6 +832,66 @@ mod tests {
                 42i64,
                 BigDecimal::from(timestamp),
             )])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_new_job_with_invalid_utf8_and_nul_metadata() -> Result<()> {
+        // setup
+        let mut db = TestDb::new();
+        let conn = &mut db.conn;
+
+        let contract = "0x1111111111111111111111111111111111111111".parse()?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+
+        // metadata as raw bytes, neither valid UTF-8 nor free of NUL bytes
+        // the abi encoding of string and bytes is the same
+        let metadata = alloy::primitives::Bytes::from_static(b"{\"url\":\"a\0b\xff\xfec\"}");
+
+        // log under test
+        let log = Log {
+            block_hash: Some(keccak256!("some block").into()),
+            block_number: Some(42),
+            block_timestamp: None,
+            log_index: Some(69),
+            transaction_hash: Some(keccak256!("some tx").into()),
+            transaction_index: Some(420),
+            removed: false,
+            inner: alloy::primitives::Log {
+                address: contract,
+                data: LogData::new(
+                    vec![
+                        event!("JobOpened(bytes32,string,address,address,uint256,uint256,uint256)")
+                            .into(),
+                        "0x3333333333333333333333333333333333333333333333333333333333333333"
+                            .parse()?,
+                        "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"
+                            .parse::<Address>()?
+                            .into_word(),
+                        "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+                            .parse::<Address>()?
+                            .into_word(),
+                    ],
+                    (metadata, 1, 2, timestamp).abi_encode_sequence().into(),
+                )
+                .unwrap(),
+            },
+        };
+
+        let provider = MockProvider::new(timestamp);
+        handle_log(conn, log, &provider)?;
+
+        // checks
+        // the job is stored, invalid sequences are replaced and NUL bytes are dropped
+        assert_eq!(jobs::table.count().get_result(conn), Ok(1));
+        assert_eq!(
+            jobs::table.select(jobs::metadata).first(conn),
+            Ok("{\"url\":\"ab\u{fffd}\u{fffd}c\"}".to_owned())
         );
 
         Ok(())

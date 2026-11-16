@@ -1,11 +1,14 @@
 use indexer_framework::schema::providers;
 use alloy::hex::ToHexExt;
 use alloy::primitives::Address;
+use alloy::primitives::Bytes;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::decode_text;
 use diesel::QueryDsl;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -18,7 +21,8 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
     info!(?log, "processing");
 
     let provider = Address::from_word(log.topics()[1]).to_checksum(None);
-    let cp = String::abi_decode(&log.data().data, true)?;
+    // cp is decoded as bytes, the contract does not check that it is valid UTF-8
+    let cp = decode_text(&Bytes::abi_decode(&log.data().data, true)?);
 
     let block = log
         .block_number

@@ -1,10 +1,12 @@
 use indexer_framework::schema::providers;
 use alloy::primitives::Address;
+use alloy::primitives::Bytes;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::Context;
 use anyhow::Result;
 
+use super::decode_text;
 use super::state_mismatch;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -17,7 +19,8 @@ pub fn handle_provider_updated_with_cp(conn: &mut PgConnection, log: Log) -> Res
     info!(?log, "processing");
 
     let provider = Address::from_word(log.topics()[1]).to_checksum(None);
-    let cp = String::abi_decode(&log.data().data, true)?;
+    // cp is decoded as bytes, the contract does not check that it is valid UTF-8
+    let cp = decode_text(&Bytes::abi_decode(&log.data().data, true)?);
 
     // we want to update if provider is active
     // we want to error out if provider does not exist or is not active

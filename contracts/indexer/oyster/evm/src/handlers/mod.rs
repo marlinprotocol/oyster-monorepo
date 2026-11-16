@@ -95,6 +95,13 @@ fn state_mismatch(msg: impl Into<String>) -> anyhow::Error {
     StateMismatch(msg.into()).into()
 }
 
+// Strings in events are not checked by the contract, they can hold invalid UTF-8
+// and NUL bytes. Postgres accepts neither in TEXT columns, so replace the invalid
+// sequences and drop the NUL bytes instead of failing on the same log forever.
+fn decode_text(data: &[u8]) -> String {
+    String::from_utf8_lossy(data).replace('\0', "")
+}
+
 // Entry point for the event loop.
 // Logs which cannot be applied because of a state mismatch are logged and skipped,
 // stopping on them would stop the indexer for good since every retry hits the same log.
@@ -211,6 +218,14 @@ mod tests {
                 data: LogData::new(vec![topic0.into(), job.parse()?], data.into()).unwrap(),
             },
         })
+    }
+
+    #[test]
+    fn test_decode_text() {
+        assert_eq!(decode_text(b"plain"), "plain");
+        assert_eq!(decode_text(b"a\0b\0"), "ab");
+        assert_eq!(decode_text(b"a\xffb"), "a\u{fffd}b");
+        assert_eq!(decode_text(b""), "");
     }
 
     // events for jobs which are missing from the db do not stop the indexer

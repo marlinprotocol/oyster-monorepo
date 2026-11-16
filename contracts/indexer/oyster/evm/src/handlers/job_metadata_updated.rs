@@ -1,10 +1,12 @@
 use indexer_framework::schema::jobs;
 use alloy::hex::ToHexExt;
+use alloy::primitives::Bytes;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::Context;
 use anyhow::Result;
 
+use super::decode_text;
 use super::state_mismatch;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -17,7 +19,8 @@ pub fn handle_job_metadata_updated(conn: &mut PgConnection, log: Log) -> Result<
     info!(?log, "processing");
 
     let id = log.topics()[1].encode_hex_with_prefix();
-    let metadata = String::abi_decode(&log.data().data, true)?;
+    // metadata is decoded as bytes, the contract does not check that it is valid UTF-8
+    let metadata = decode_text(&Bytes::abi_decode(&log.data().data, true)?);
 
     // we want to update if job exists and is not closed
     // we want to error out if job does not exist or is closed
