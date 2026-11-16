@@ -129,7 +129,7 @@ mod live_tests {
             ),
             (
                 Deployment::Bsc,
-                Some("https://bsc-dataseed.bnbchain.org".to_owned()),
+                None,
                 EVM_DUMMY_KEY,
                 bsc::USDC_DECIMALS,
                 bsc::MARKET_EXTRA_DECIMALS,
