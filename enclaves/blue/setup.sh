@@ -123,10 +123,23 @@ sleep 2
 
 # start derive server
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
-sleep 10
 
 # process init params into their constituent files
+# needs the derive server only if a param is encrypted and waits for it by itself
 /app/init-params-decoder
+
+# give the derive server some time to get its seed so apps can use it from the start
+# the kms being down should not stop the boot, carry on after 30 seconds
+attempt=1
+until wget -q -T 2 -O /dev/null "http://127.0.0.1:1100/derive/x25519?path=oyster.boot-probe"; do
+    if [ "$attempt" -ge 30 ]; then
+        echo "[setup.sh] derive server is not ready, continuing without it"
+        break
+    fi
+    echo "[setup.sh] Waiting for derive server..."
+    attempt=$((attempt + 1))
+    sleep 1
+done
 
 # start derive server contract if contract address and root server config are present
 if [ -f /init-params/contract-address ] && [ -f /init-params/root-server-config.json ]; then
