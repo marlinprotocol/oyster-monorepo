@@ -55,23 +55,6 @@ pub fn format_token_display(value: U256, decimals: u32) -> String {
     format!("{whole}.{:0<2}", fraction[..keep].trim_end_matches('0'))
 }
 
-/// Resolves the amount of a deposit or withdrawal, given either in base units of the token
-/// (`--amount`) or as a decimal number of tokens (`--amount-usdc`), to base units.
-pub fn resolve_amount(
-    base_units: Option<U256>,
-    tokens: Option<&str>,
-    decimals: u32,
-) -> Result<Option<U256>> {
-    match (base_units, tokens) {
-        (Some(_), Some(_)) => bail!("Specify only one of --amount and --amount-usdc"),
-        (Some(amount), None) => Ok(Some(amount)),
-        (None, Some(amount)) => Ok(Some(
-            parse_token_amount(amount, decimals).context("Failed to parse --amount-usdc")?,
-        )),
-        (None, None) => Ok(None),
-    }
-}
-
 /// The market charges `rate / 10^extra_decimals` token base units per second, while operators
 /// publish rates in USD per second with `RATE_DECIMALS` decimals. The two only agree when
 /// `token_decimals + extra_decimals == RATE_DECIMALS`. Returns a warning when they do not,
@@ -358,26 +341,6 @@ mod tests {
         assert_eq!(format_token_display(u(1_000_000_000_001), 18), "0.000001");
         assert_eq!(format_token_display(u(1_999_999), 6), "1.999999");
         assert_eq!(format_token_display(u(0), 18), "0.00");
-    }
-
-    #[test]
-    fn amount_in_base_units_or_tokens() {
-        assert_eq!(
-            resolve_amount(Some(u(1_000_000)), None, 6).unwrap(),
-            Some(u(1_000_000))
-        );
-        assert_eq!(
-            resolve_amount(None, Some("1"), 6).unwrap(),
-            Some(u(1_000_000))
-        );
-        assert_eq!(resolve_amount(None, None, 6).unwrap(), None);
-        assert!(resolve_amount(Some(u(1)), Some("1"), 6).is_err());
-        assert!(resolve_amount(None, Some("1.0000001"), 6).is_err());
-
-        // 20 tokens with 18 decimals do not fit in a u64 of base units
-        let twenty = resolve_amount(None, Some("20"), 18).unwrap().unwrap();
-        assert!(twenty > U256::from(u64::MAX));
-        assert_eq!(format_token_amount(twenty, 18), "20.00");
     }
 
     #[test]

@@ -99,31 +99,24 @@ mod tests {
     }
 
     #[test]
-    fn deposit_takes_base_units_or_decimal_usdc() {
+    fn deposit_takes_base_units() {
         let base = ["oyster-cvm", "deposit", "-j", "0x01", "--wallet-file", "k"];
         assert!(Cli::try_parse_from(base.iter().chain(&["--amount", "1000000"])).is_ok());
         // more than u64 base units, needed for the 18 decimal token on BSC
         assert!(
             Cli::try_parse_from(base.iter().chain(&["--amount", "20000000000000000000"])).is_ok()
         );
-        assert!(Cli::try_parse_from(base.iter().chain(&["--amount-usdc", "1.5"])).is_ok());
         assert!(Cli::try_parse_from(base).is_err());
-        assert!(
-            Cli::try_parse_from(base.iter().chain(&["--amount", "1", "--amount-usdc", "1"]))
-                .is_err()
-        );
         // a decimal number is not accepted as base units
         assert!(Cli::try_parse_from(base.iter().chain(&["--amount", "1.5"])).is_err());
     }
 
     #[test]
-    fn withdraw_takes_one_of_amount_amount_usdc_or_max() {
+    fn withdraw_takes_amount_or_max() {
         let base = ["oyster-cvm", "withdraw", "-j", "0x01", "--wallet-file", "k"];
         assert!(Cli::try_parse_from(base.iter().chain(&["--amount", "1000000"])).is_ok());
-        assert!(Cli::try_parse_from(base.iter().chain(&["--amount-usdc", "0.5"])).is_ok());
         assert!(Cli::try_parse_from(base.iter().chain(&["--max"])).is_ok());
         assert!(Cli::try_parse_from(base).is_err());
-        assert!(Cli::try_parse_from(base.iter().chain(&["--max", "--amount-usdc", "1"])).is_err());
         assert!(Cli::try_parse_from(base.iter().chain(&["--max", "--amount", "1"])).is_err());
     }
 }

@@ -231,8 +231,6 @@ Deposits additional USDC funds to an existing job.
 Required args:
 - `--job-id` (-j): The ID of the job to deposit funds to
 - `--amount` (-a): Amount to deposit in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
-OR
-- `--amount-usdc`: Amount to deposit in USDC as a decimal number (e.g. 1.5), converted with the decimals of the token on the chosen chain
 - `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
@@ -266,7 +264,6 @@ Required args:
 - `--wallet-private-key` or `--wallet-file`: Private key for transaction signing, hex encoded with or without `0x` prefix for Arbitrum One and BSC; `--wallet-file` is the path of a file that contains the key [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 - Either:
   - `--amount` (-a): Amount to withdraw in base units of the payment token (e.g. 1000000 = 1 USDC on Arbitrum One and Sui, where USDC has 6 decimals; the token on BSC has 18 decimals)
-  - `--amount-usdc`: Amount to withdraw in USDC as a decimal number (e.g. 1.5)
   - `--max`: Withdraw maximum available amount while maintaining required buffer
 
 Note: A buffer balance of 7 minutes worth of job rate will be maintained to ensure smooth operation.

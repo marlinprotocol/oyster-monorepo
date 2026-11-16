@@ -5,7 +5,7 @@ use crate::deployment::adapter::JobTransactionKind;
 use crate::deployment::{Deployment, get_deployment_adapter};
 use crate::utils::{
     ask_yes_no, deposit_impact, format_duration, format_token_amount, is_interactive,
-    mispricing_warning, resolve_amount,
+    mispricing_warning,
 };
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
@@ -30,12 +30,8 @@ pub struct DepositArgs {
 
     /// Amount to deposit in base units of the payment token
     /// (e.g. 1000000 = 1 USDC on Arbitrum One and Sui where USDC has 6 decimals, the token on BSC has 18)
-    #[arg(short, long, required_unless_present = "amount_usdc")]
+    #[arg(short, long, required = true)]
     amount: Option<U256>,
-
-    /// Amount to deposit in USDC, as a decimal number (e.g. 1.5)
-    #[arg(long, conflicts_with = "amount")]
-    amount_usdc: Option<String>,
 
     #[command(flatten)]
     wallet: WalletArgs,
@@ -108,8 +104,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
         warn!("{warning}");
     }
 
-    let amount_u256 = resolve_amount(amount, args.amount_usdc.as_deref(), token_decimals)?
-        .ok_or_else(|| anyhow!("Amount must be specified"))?;
+    let amount_u256 = amount.ok_or_else(|| anyhow!("Amount must be specified"))?;
     if amount_u256.is_zero() {
         return Err(anyhow!("Amount must be greater than 0"));
     }

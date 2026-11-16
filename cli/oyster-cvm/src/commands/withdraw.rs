@@ -1,7 +1,7 @@
 use crate::args::wallet::WalletArgs;
 use crate::deployment::adapter::JobTransactionKind;
 use crate::deployment::{Deployment, get_deployment_adapter};
-use crate::utils::{format_token_amount, mispricing_warning, resolve_amount};
+use crate::utils::{format_token_amount, mispricing_warning};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
@@ -26,12 +26,8 @@ pub struct WithdrawArgs {
 
     /// Amount to withdraw in base units of the payment token
     /// (e.g. 1000000 = 1 USDC on Arbitrum One and Sui where USDC has 6 decimals, the token on BSC has 18)
-    #[arg(short, long, required_unless_present_any = ["max", "amount_usdc"])]
+    #[arg(short, long, required_unless_present = "max", conflicts_with = "max")]
     amount: Option<U256>,
-
-    /// Amount to withdraw in USDC, as a decimal number (e.g. 1.5)
-    #[arg(long, conflicts_with_all = ["amount", "max"])]
-    amount_usdc: Option<String>,
 
     /// Withdraw all remaining balance
     #[arg(long, conflicts_with = "amount")]
@@ -99,7 +95,6 @@ pub async fn withdraw_from_job(args: WithdrawArgs) -> Result<()> {
     if let Some(warning) = mispricing_warning(token_decimals, extra_decimals) {
         warn!("{warning}");
     }
-    let amount = resolve_amount(amount, args.amount_usdc.as_deref(), token_decimals)?;
 
     // Scale down rate by extra_decimals
     let scaled_rate = job_data
