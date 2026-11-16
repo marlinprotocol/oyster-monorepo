@@ -15,6 +15,8 @@ pub enum ServerlessError {
     NoValidGatewaysForChain(u64, u64),
     #[error("No Subscription Job found for the subscription id: {0}")]
     NoSubscriptionJobFound(U256),
+    #[error("Failed to get logs: {0}")]
+    LogsFetchFailure(String),
 
     #[cfg(test)]
     #[error("Invalid topic")]

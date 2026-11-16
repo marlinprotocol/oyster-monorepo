@@ -47,3 +47,15 @@ pub const REQUEST_CHAIN_TXN_CALL_TIMEOUT: u64 = 60;
 
 // maximum block range of a single eth_getLogs query
 pub const LOGS_BLOCK_RANGE: u64 = 50000;
+// timeout of a single eth_getLogs query, in seconds
+pub const LOGS_CHUNK_TIMEOUT: u64 = 30;
+// attempts for a single eth_getLogs query before the error is returned to the caller
+pub const LOGS_CHUNK_MAX_ATTEMPTS: u8 = 5;
+// wait before retrying a failed eth_getLogs query, in milliseconds, doubled on every retry
+#[cfg(not(test))]
+pub const LOGS_CHUNK_RETRY_BACKOFF_MS: u64 = 500;
+#[cfg(test)]
+pub const LOGS_CHUNK_RETRY_BACKOFF_MS: u64 = 1;
+pub const LOGS_CHUNK_RETRY_MAX_BACKOFF_MS: u64 = 8000;
+// wait before continuing a gateways logs scan after a chunk failed all its attempts, in seconds
+pub const LOGS_SCAN_RETRY_WAIT: u64 = 10;

@@ -47,9 +47,12 @@ Supported outputs:
     "gateway_jobs_contract_addr": "0x68B1D87F95878fE05B998F19b66F4baba5De1aed",
     "enclave_secret_key": "./enclave_secret_key",
     "epoch": 1718602200,
-    "time_interval": 20
+    "time_interval": 20,
+    "offset_for_epoch": 4,
+    "gateways_start_block": 0
   }
   ```
+  `gateways_start_block` is the block the gateway starts reading the `Gateways` contract events from. Set it to the block the `Gateways` contract was deployed at. The events are read in queries of 50,000 blocks, so with `0` on a public chain the gateway has to make several thousand queries before it can relay jobs, and it logs a warning at start-up.
 
 # Dev Run
 
