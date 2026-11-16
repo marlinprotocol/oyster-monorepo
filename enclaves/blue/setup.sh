@@ -2,23 +2,44 @@
 
 set -e
 
+# query the init server on the host, it might not be listening yet
+# retry for about a minute before giving up
+fetch() {
+    attempt=1
+    until /app/vet --url "$1" > "$2.tmp"; do
+        if [ "$attempt" -ge 30 ]; then
+            echo "[setup.sh] could not fetch $1, giving up"
+            return 1
+        fi
+        echo "[setup.sh] could not fetch $1, retrying"
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    mv "$2.tmp" "$2"
+}
+
 # query ip of instance and store
-/app/vet --url vsock://3:1300/instance/ip > /app/ip.txt
+fetch vsock://3:1300/instance/ip /app/ip.txt
 cat /app/ip.txt && echo
 
 # query init params for enclave and store
-/app/vet --url vsock://3:1300/oyster/init-params > /app/init-params
+fetch vsock://3:1300/oyster/init-params /app/init-params
 
 # extract digest, skip if empty
+# no pipes here, a jq or base64 failure has to stop the boot
 mkdir /init-params
 ls -lath /app
 if [ -s /app/init-params ]; then
-    cat /app/init-params | jq -e -r '.digest' | base64 -d > /app/init-params-digest
+    jq -e -r '.digest' /app/init-params > /app/init-params-digest.b64
+    base64 -d /app/init-params-digest.b64 > /app/init-params-digest
     cat /app/init-params-digest
 fi
 
-# extend pcr16 with the digest and lock it
-/app/pcr-extender --index 16 --contents-path /app/init-params-digest
+# extend pcr16 with the digest and lock it, pcr16 stays zero when the job
+# has no init params
+if [ -s /app/init-params-digest ]; then
+    /app/pcr-extender --index 16 --contents-path /app/init-params-digest
+fi
 /app/pcr-locker --index 16
 
 ip=$(cat /app/ip.txt)
