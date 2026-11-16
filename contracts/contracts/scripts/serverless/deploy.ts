@@ -2,7 +2,8 @@
 // which is used as both the request chain and the common chain.
 //
 // Configuration is read from environment variables:
-//   VERIFIER_PCR0, VERIFIER_PCR1, VERIFIER_PCR2  PCRs of the attestation verifier enclave image
+//   VERIFIER_IMAGE_ID                            image id of the attestation verifier enclave (bytes32, hex),
+//                                                as computed by the attestation verifier enclave
 //   VERIFIER_PUBKEY                              secp256k1 public key of the attestation verifier enclave
 //                                                (64 bytes, hex, without the 04 prefix)
 //   ATTESTATION_VERIFIER                         optional, existing AttestationVerifier, skips the two above
@@ -13,7 +14,7 @@
 //
 // Run with: npx hardhat run scripts/serverless/deploy.ts --network <network>
 
-import { getBytes } from "ethers";
+import { getBytes, hexlify } from "ethers";
 import { writeFileSync } from "fs";
 import { ethers, network, upgrades } from "hardhat";
 
@@ -54,14 +55,11 @@ async function main() {
     // Attestation verifier
     let attestationVerifier = process.env.ATTESTATION_VERIFIER;
     if (attestationVerifier === undefined) {
-        const verifierImage = {
-            PCR0: getBytes(env("VERIFIER_PCR0")),
-            PCR1: getBytes(env("VERIFIER_PCR1")),
-            PCR2: getBytes(env("VERIFIER_PCR2")),
-        };
+        const verifierImageId = getBytes(env("VERIFIER_IMAGE_ID"));
+        if (verifierImageId.length !== 32) throw new Error("VERIFIER_IMAGE_ID must be 32 bytes");
         const verifierKey = getBytes(env("VERIFIER_PUBKEY"));
         const AttestationVerifier = await ethers.getContractFactory("AttestationVerifier");
-        const av = await upgrades.deployProxy(AttestationVerifier, [[verifierImage], [verifierKey], admin], {
+        const av = await upgrades.deployProxy(AttestationVerifier, [[hexlify(verifierImageId)], [verifierKey], admin], {
             kind: "uups",
         });
         await av.waitForDeployment();
