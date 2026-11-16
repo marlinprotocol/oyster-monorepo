@@ -9,8 +9,9 @@ use crate::{
     },
     types::Platform,
     utils::{
-        bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
-        format_usdc,
+        ask_yes_no,
+        bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region, parse_hex_rate},
+        format_token_amount, is_interactive, parse_token_amount,
     },
 };
 
@@ -33,6 +34,9 @@ const ATTESTATION_RETRIES: u32 = 20;
 const ATTESTATION_INTERVAL: u64 = 15;
 const TCP_CHECK_RETRIES: u32 = 20;
 const TCP_CHECK_INTERVAL: u64 = 15;
+
+// The control plane of an operator stops an enclave this long before its balance runs out
+const OPERATOR_STOP_BUFFER_MINUTES: u32 = 5;
 
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
@@ -115,6 +119,19 @@ pub struct DeployArgs {
     /// Init params
     #[command(flatten)]
     init_params: InitParamsArgs,
+
+    /// Abort if the total cost of the job is above this many USDC (e.g. 1.5).
+    /// The price comes from the operator's control plane, this bounds what it can make you pay.
+    #[arg(long)]
+    max_cost: Option<String>,
+
+    /// Abort if the rate of the job is above this many USDC per hour (e.g. 0.1)
+    #[arg(long)]
+    max_rate: Option<String>,
+
+    /// Do not ask for confirmation before paying for the job
+    #[arg(short = 'y', long)]
+    yes: bool,
 
     /// Simulate the enclave locally
     #[arg(long, conflicts_with = "image_url")]
@@ -231,9 +248,24 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
 
+    // Token amounts have 18 - EXTRA_DECIMALS decimals, rates are per second with 18 decimals
+    let token_decimals = u32::try_from(18 - extra_decimals)
+        .map_err(|_| anyhow!("Unexpected EXTRA_DECIMALS value {extra_decimals}"))?;
+    let rate_decimals = 18;
+
     // Calculate costs
     // SAFETY: will be some value if simulation is not opted
-    let duration_seconds = (args.duration_in_minutes.unwrap() as u64) * 60;
+    let duration_minutes = args.duration_in_minutes.unwrap();
+    if duration_minutes == 0 {
+        return Err(anyhow!("--duration-in-minutes must be greater than 0"));
+    }
+    if duration_minutes <= OPERATOR_STOP_BUFFER_MINUTES {
+        warn!(
+            "Operators stop an enclave about {} minutes before its balance runs out, a duration of {} minutes leaves no time to run.",
+            OPERATOR_STOP_BUFFER_MINUTES, duration_minutes
+        );
+    }
+    let duration_seconds = (duration_minutes as u64) * 60;
     let (total_cost, total_rate) = calculate_total_cost(
         &selected_instance,
         duration_seconds,
@@ -243,15 +275,47 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         extra_decimals,
     )
     .await?;
+    let hourly_rate = total_rate.saturating_mul(U256::from(3600));
 
+    info!("Operator: {}", operator);
     info!(
-        "Total cost: {:.6} USDC",
-        format_usdc(total_cost, extra_decimals)
+        "Instance: {} in {}, {} minutes",
+        selected_instance.instance, args.region, duration_minutes
     );
     info!(
-        "Total rate: {:.6} USDC/hour",
-        (total_rate.to::<u128>() * 3600) as f64 / 1e18
+        "Total cost: {} USDC",
+        format_token_amount(total_cost, token_decimals)
     );
+    info!(
+        "Total rate: {} USDC/hour",
+        format_token_amount(hourly_rate, rate_decimals)
+    );
+
+    // The price is whatever the operator's control plane answered, check it against the caps
+    let max_cost = args
+        .max_cost
+        .as_deref()
+        .map(|x| parse_token_amount(x, token_decimals))
+        .transpose()
+        .context("Failed to parse --max-cost")?;
+    let max_hourly_rate = args
+        .max_rate
+        .as_deref()
+        .map(|x| parse_token_amount(x, rate_decimals))
+        .transpose()
+        .context("Failed to parse --max-rate")?;
+    check_price_caps(
+        total_cost,
+        hourly_rate,
+        max_cost,
+        max_hourly_rate,
+        token_decimals,
+    )
+    .map_err(|err| {
+        anyhow!(
+            "{err}. The price was quoted by the operator's control plane at {cp_url}, nothing was paid"
+        )
+    })?;
 
     let image_url = args
         .image_url
@@ -292,6 +356,22 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .context("Failed to load init params")?
             .unwrap_or("".into()),
     );
+
+    // Nothing has been paid so far, the approval and the job open transaction follow
+    if args.yes {
+        info!("Skipping confirmation because of --yes");
+    } else if is_interactive() {
+        if !ask_yes_no(&format!(
+            "Open the job and pay {} USDC to it?",
+            format_token_amount(total_cost, token_decimals)
+        ))? {
+            return Err(anyhow!("Deployment cancelled, nothing was paid"));
+        }
+    } else {
+        info!(
+            "Not running in a terminal, continuing without confirmation. Use --max-cost and --max-rate to bound the price."
+        );
+    }
 
     // Approve USDC
     let funds = deployment_adapter
@@ -481,10 +561,8 @@ fn find_minimum_rate_instance(
         .iter()
         .filter(|rate| rate.instance == instance)
         .min_by(|a, b| {
-            let a_rate =
-                U256::from_str_radix(a.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
-            let b_rate =
-                U256::from_str_radix(b.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
+            let a_rate = parse_hex_rate(&a.min_rate).unwrap_or(U256::MAX);
+            let b_rate = parse_hex_rate(&b.min_rate).unwrap_or(U256::MAX);
             a_rate.cmp(&b_rate)
         })
         .cloned()
@@ -506,36 +584,87 @@ async fn calculate_total_cost(
     extra_decimals: i64,
 ) -> Result<(U256, U256)> {
     let instance_secondly_rate_usdc =
-        U256::from_str_radix(instance_rate.min_rate.trim_start_matches("0x"), 16)?;
+        parse_hex_rate(&instance_rate.min_rate).context("Failed to parse instance rate")?;
+    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
 
+    compute_total_cost(
+        instance_secondly_rate_usdc,
+        bandwidth_rate_region,
+        bandwidth,
+        duration,
+        extra_decimals,
+    )
+}
+
+/// Total cost in token base units and total rate (per second, 18 decimals) of a job.
+fn compute_total_cost(
+    instance_secondly_rate_usdc: U256,
+    bandwidth_rate_region: U256,
+    bandwidth: u32,
+    duration: u64,
+    extra_decimals: i64,
+) -> Result<(U256, U256)> {
     let instance_cost_scaled = U256::from(duration)
         .checked_mul(instance_secondly_rate_usdc)
         .context("Failed to multiply duration and instance rate")?;
 
-    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
-    let bandwidth_cost_scaled = U256::from(
-        calculate_bandwidth_cost(
-            &bandwidth.to_string(),
-            "KBps",
-            bandwidth_rate_region,
-            duration,
-        )
-        .context("Failed to calculate bandwidth cost")?,
-    );
+    let bandwidth_cost_scaled = calculate_bandwidth_cost(
+        &bandwidth.to_string(),
+        "KBps",
+        bandwidth_rate_region,
+        duration,
+    )
+    .context("Failed to calculate bandwidth cost")?;
 
     let bandwidth_rate_scaled = bandwidth_cost_scaled
         .checked_div(U256::from(duration))
         .context("Failed to divide bandwidth cost by duration")?;
-    let total_cost_scaled = (instance_cost_scaled
+    let scale = U256::from(10)
+        .checked_pow(U256::from(
+            u64::try_from(extra_decimals).context("Negative extra decimals")?,
+        ))
+        .context("Extra decimals too large")?;
+    let total_cost_scaled = instance_cost_scaled
         .checked_add(bandwidth_cost_scaled)
         .context("Failed to add instance and bandwidth costs")?
-        .checked_div(U256::from(10).pow(U256::from(extra_decimals))))
-    .context("Failed to divide total cost by 1e12")?;
+        .checked_div(scale)
+        .context("Failed to divide total cost by 1e12")?;
     let total_rate_scaled = instance_secondly_rate_usdc
         .checked_add(bandwidth_rate_scaled)
         .context("Failed to add instance and bandwidth rates")?;
 
     Ok((total_cost_scaled, total_rate_scaled))
+}
+
+/// Refuses a price above what the user is willing to pay.
+/// Amounts are in token base units, rates in USDC per hour with 18 decimals.
+fn check_price_caps(
+    total_cost: U256,
+    hourly_rate: U256,
+    max_cost: Option<U256>,
+    max_hourly_rate: Option<U256>,
+    token_decimals: u32,
+) -> Result<()> {
+    if let Some(max_cost) = max_cost
+        && total_cost > max_cost
+    {
+        return Err(anyhow!(
+            "Total cost {} USDC is above --max-cost {} USDC",
+            format_token_amount(total_cost, token_decimals),
+            format_token_amount(max_cost, token_decimals)
+        ));
+    }
+    if let Some(max_hourly_rate) = max_hourly_rate
+        && hourly_rate > max_hourly_rate
+    {
+        return Err(anyhow!(
+            "Rate {} USDC/hour is above --max-rate {} USDC/hour",
+            format_token_amount(hourly_rate, 18),
+            format_token_amount(max_hourly_rate, 18)
+        ));
+    }
+
+    Ok(())
 }
 
 fn create_metadata(
@@ -694,6 +823,59 @@ async fn check_reachability(ip: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.05 USDC/hour
+    const RATE: u64 = 13_888_888_888_889;
+
+    #[test]
+    fn total_cost_and_rate() {
+        // no bandwidth, 60 minutes, 6 decimal token
+        let (cost, rate) = compute_total_cost(U256::from(RATE), U256::ZERO, 10, 3600, 12).unwrap();
+        assert_eq!(cost, U256::from(50_000));
+        assert_eq!(rate, U256::from(RATE));
+
+        // bandwidth rate is per GBps, the default is 10 KBps
+        let bandwidth_rate = U256::from(1024u64 * 1024 * 1000);
+        let (cost, rate) =
+            compute_total_cost(U256::from(RATE), bandwidth_rate, 10, 3600, 12).unwrap();
+        assert_eq!(rate, U256::from(RATE + 10_000));
+        assert_eq!(cost, U256::from((RATE + 10_000) * 3600 / 10u64.pow(12)));
+    }
+
+    #[test]
+    fn hostile_control_plane_values_are_errors_not_panics() {
+        // rate that overflows once multiplied by the duration
+        assert!(compute_total_cost(U256::MAX, U256::ZERO, 10, 3600, 12).is_err());
+        assert!(compute_total_cost(U256::from(1), U256::MAX, 10, 3600, 12).is_err());
+        // zero duration used to surface as a division error deep in the cost code
+        assert!(compute_total_cost(U256::from(RATE), U256::ZERO, 10, 0, 12).is_err());
+        // a rate beyond u128 is priced without panicking, the caps then refuse it
+        let huge = U256::from(u128::MAX) * U256::from(4);
+        let (cost, rate) = compute_total_cost(huge, U256::ZERO, 10, 60, 12).unwrap();
+        let hourly = rate.saturating_mul(U256::from(3600));
+        assert!(check_price_caps(cost, hourly, Some(U256::from(10_000_000)), None, 6).is_err());
+        assert!(!format_token_amount(hourly, 18).is_empty());
+    }
+
+    #[test]
+    fn price_caps() {
+        let cost = U256::from(50_000); // 0.05 USDC
+        let hourly = U256::from(RATE) * U256::from(3600);
+        let cap = |x: &str, decimals| Some(parse_token_amount(x, decimals).unwrap());
+
+        assert!(check_price_caps(cost, hourly, None, None, 6).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), cap("0.06", 18), 6).is_ok());
+        // a cap equal to the price passes
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), None, 6).is_ok());
+        assert_eq!(
+            check_price_caps(cost, hourly, cap("0.049999", 6), None, 6)
+                .unwrap_err()
+                .to_string(),
+            "Total cost 0.05 USDC is above --max-cost 0.049999 USDC"
+        );
+        assert!(check_price_caps(cost, hourly, None, cap("0.05", 18), 6).is_err());
+        assert!(check_price_caps(cost, hourly, cap("1", 6), cap("0.01", 18), 6).is_err());
+    }
 
     #[test]
     fn recovery_commands_carry_the_deployment_and_wallet() {

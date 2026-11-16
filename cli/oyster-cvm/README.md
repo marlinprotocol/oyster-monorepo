@@ -152,6 +152,9 @@ Optional args:
 - `--docker-compose`: Path to custom docker-compose.yml file
 - `--contract-address`: Enclave verifier contract address
 - `--chain-id`: Chain ID for KMS contract root server
+- `--max-cost`: Abort if the total cost of the job is above this many USDC (e.g. `1.5`)
+- `--max-rate`: Abort if the rate of the job is above this many USDC per hour (e.g. `0.1`)
+- `--yes` (-y): Do not ask for confirmation before paying for the job
 - `--simulate`: Simulate the oyster cvm enclave locally before deployment
 - `--simulate-expose-ports`: Application ports to expose out of the local oyster simulation
 \
@@ -165,6 +168,8 @@ OR
 <br>
 OR
 - `--pcr-json`: Pass the path to json file containing pcr values
+
+The price of a job is read from the control plane of the operator. The command prints the total cost and the hourly rate and, when run from a terminal, asks for confirmation before it sends any transaction. `--yes` skips the question. When the command is not run from a terminal it continues without asking, so scripts should pass `--max-cost` and `--max-rate`: if the quoted price is above either of them the command stops before anything is paid.
 
 The job is opened and funded before the enclave starts. If the deployment fails after that (no IP address, the enclave is not reachable, or the command is interrupted), the job stays open and keeps billing. The command then prints the job ID and the `oyster-cvm stop` and `oyster-cvm withdraw` commands to get the balance back.
 
@@ -220,6 +225,7 @@ Required args:
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
 Optional args:
+- `--yes` (-y): Do not ask for confirmation before depositing
 - `--force`: Deposit even if the job has already run out of balance
 
 The market does not settle a job when funds are deposited. It charges a job for all the time since its last settlement, up to the balance, the next time the job is settled. If the balance of a job has already run out, a deposit first pays the operator for the time since then, although the enclave was not running. The command works this out from the job on chain, prints how much of the deposit would be lost this way and asks for confirmation. When it is not run from a terminal it stops with an error unless `--force` is passed.

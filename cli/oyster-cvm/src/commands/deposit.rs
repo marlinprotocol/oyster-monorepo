@@ -49,6 +49,10 @@ pub struct DepositArgs {
     #[arg(long)]
     gas_coin: Option<String>,
 
+    /// Do not ask for confirmation before depositing
+    #[arg(short = 'y', long)]
+    yes: bool,
+
     /// Deposit even if the job has already run out of balance.
     /// The market then takes the cost of the time since the job's last settlement
     /// out of the deposit first, see the warning the command prints.
@@ -61,6 +65,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
 
     let amount = args.amount;
     let force = args.force;
+    let yes = args.yes;
     let wallet_private_key = &args.wallet.load_required()?;
     let job_id = args.job_id;
 
@@ -122,6 +127,7 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
         amount_u256,
     );
 
+    let mut confirmed = yes;
     if impact.ran_out {
         warn!(
             "Job {} ran out of balance {} ago.",
@@ -155,8 +161,9 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
             warn!("Continuing because of --force.");
         } else if is_interactive() {
             if !ask_yes_no("Deposit anyway?")? {
-                return Err(anyhow!("Deposit cancelled"));
+                return Err(anyhow!("Deposit cancelled, nothing was paid"));
             }
+            confirmed = true;
         } else {
             return Err(anyhow!(
                 "Job {} has run out of balance, refusing to deposit. Pass --force to deposit anyway",
@@ -196,6 +203,18 @@ pub async fn deposit_to_job(args: DepositArgs) -> Result<()> {
                 format_duration(OPERATOR_STOP_BUFFER_SECS)
             );
         }
+    }
+
+    // Nothing has been paid so far, the approval and the deposit transaction follow
+    if !confirmed
+        && is_interactive()
+        && !ask_yes_no(&format!(
+            "Deposit {:.6} USDC into job {}?",
+            format_usdc(amount_u256, extra_decimals),
+            job_id
+        ))?
+    {
+        return Err(anyhow!("Deposit cancelled, nothing was paid"));
     }
 
     // First approve USDC transfer

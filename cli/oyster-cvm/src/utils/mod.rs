@@ -3,11 +3,40 @@ pub mod bandwidth;
 use std::io::{IsTerminal, Write};
 
 use alloy::primitives::U256;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Formats a U256 value as USDC with 6 decimal places
 pub fn format_usdc(value: U256, extra_decimals: i64) -> f64 {
     value.to::<u128>() as f64 / 10f64.powi(18 - extra_decimals as i32)
+}
+
+/// Parses a decimal token amount such as `1.5` into base units of a token with `decimals` decimals.
+pub fn parse_token_amount(amount: &str, decimals: u32) -> Result<U256> {
+    let amount = amount.trim();
+    let (whole, fraction) = amount.split_once('.').unwrap_or((amount, ""));
+
+    if whole.is_empty() && fraction.is_empty() {
+        bail!("amount is empty");
+    }
+    if !whole.chars().all(|c| c.is_ascii_digit()) || !fraction.chars().all(|c| c.is_ascii_digit()) {
+        bail!("'{amount}' is not a decimal number");
+    }
+    if fraction.len() > decimals as usize {
+        bail!("'{amount}' has more than {decimals} decimal places");
+    }
+
+    let digits = format!("{whole}{fraction:0<width$}", width = decimals as usize);
+    U256::from_str_radix(&digits, 10).with_context(|| format!("'{amount}' is too large"))
+}
+
+/// Formats base units of a token with `decimals` decimals as a decimal number,
+/// exact, with at least two decimal places.
+pub fn format_token_amount(value: U256, decimals: u32) -> String {
+    let digits = format!("{value:0>width$}", width = decimals as usize + 1);
+    let (whole, fraction) = digits.split_at(digits.len() - decimals as usize);
+    let fraction = fraction.trim_end_matches('0');
+
+    format!("{whole}.{fraction:0<2}")
 }
 
 /// True when the command can ask the user a question.
@@ -213,6 +242,43 @@ mod tests {
         assert!(!impact.ran_out);
         assert_eq!(impact.usable, u(100));
         assert_eq!(impact.secs_after_deposit, None);
+    }
+
+    #[test]
+    fn token_amount_parsing() {
+        assert_eq!(parse_token_amount("1", 6).unwrap(), u(1_000_000));
+        assert_eq!(parse_token_amount("1.5", 6).unwrap(), u(1_500_000));
+        assert_eq!(parse_token_amount("0.000001", 6).unwrap(), u(1));
+        assert_eq!(parse_token_amount(".5", 6).unwrap(), u(500_000));
+        assert_eq!(parse_token_amount("2.", 6).unwrap(), u(2_000_000));
+        assert_eq!(parse_token_amount("7", 0).unwrap(), u(7));
+        // more than u64 base units on an 18 decimal token
+        assert_eq!(
+            parse_token_amount("100", 18).unwrap(),
+            U256::from(100u128 * 10u128.pow(18))
+        );
+
+        assert!(parse_token_amount("0.0000001", 6).is_err());
+        assert!(parse_token_amount("", 6).is_err());
+        assert!(parse_token_amount(".", 6).is_err());
+        assert!(parse_token_amount("-1", 6).is_err());
+        assert!(parse_token_amount("1e6", 6).is_err());
+        assert!(parse_token_amount("0x10", 6).is_err());
+        assert!(parse_token_amount("1,5", 6).is_err());
+        assert!(parse_token_amount(&"9".repeat(80), 6).is_err());
+    }
+
+    #[test]
+    fn token_amount_formatting() {
+        assert_eq!(format_token_amount(u(1_000_000), 6), "1.00");
+        assert_eq!(format_token_amount(u(1_500_000), 6), "1.50");
+        assert_eq!(format_token_amount(u(1), 6), "0.000001");
+        assert_eq!(format_token_amount(u(0), 6), "0.00");
+        assert_eq!(format_token_amount(u(123_456_789), 6), "123.456789");
+        assert_eq!(format_token_amount(u(12803), 18), "0.000000000000012803");
+        assert_eq!(format_token_amount(u(42), 0), "42.00");
+        // does not panic on values beyond u128
+        assert!(format_token_amount(U256::MAX, 18).len() > 60);
     }
 
     #[test]
