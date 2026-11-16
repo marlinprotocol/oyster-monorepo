@@ -19,6 +19,9 @@ use whoami::username;
 
 use crate::market::{validate_image_url, InfraProvider, JobId};
 
+// states in which an instance still exists, i.e. everything but shutting-down and terminated
+const LIVE_INSTANCE_STATES: [&str; 4] = ["pending", "running", "stopping", "stopped"];
+
 // smallest bandwidth limit applied on job hosts, in kbit/s
 const MIN_BANDWIDTH_KBIT: u64 = 1;
 
@@ -1045,11 +1048,10 @@ EOF
             .to_string())
     }
 
-    pub async fn get_job_instance_id(
-        &self,
-        job: &JobId,
-        region: &str,
-    ) -> Result<(bool, String, String)> {
+    // all instances of the job which still exist, as (instance id, state)
+    // terminated instances stay visible in the api with their tags for a while, they and
+    // the ones shutting down are left out so they cannot be mistaken for the job instance
+    async fn get_job_instances(&self, job: &JobId, region: &str) -> Result<Vec<(String, String)>> {
         let job_filter = Filter::builder().name("tag:jobId").values(&job.id).build();
         let operator_filter = Filter::builder()
             .name("tag:operator")
@@ -1063,6 +1065,12 @@ EOF
             .name("tag:contractAddress")
             .values(&job.contract)
             .build();
+        let state_filter = Filter::builder()
+            .name("instance-state-name")
+            .set_values(Some(
+                LIVE_INSTANCE_STATES.iter().map(|s| s.to_string()).collect(),
+            ))
+            .build();
         let res = self
             .client(region)?
             .describe_instances()
@@ -1070,34 +1078,54 @@ EOF
             .filters(operator_filter)
             .filters(contract_filter)
             .filters(chain_filter)
+            .filters(state_filter)
             .send()
             .await
             .context("could not describe instances")?;
-        // response parsing from here
-        let reservations = res.reservations();
 
-        if reservations.is_empty() {
-            Ok((false, "".to_owned(), "".to_owned()))
-        } else {
-            let instance = reservations[0]
-                .instances()
-                .first()
-                .ok_or(anyhow!("instance not found"))?;
-            Ok((
-                true,
-                instance
-                    .instance_id()
-                    .ok_or(anyhow!("could not parse ip address"))?
-                    .to_string(),
-                instance
-                    .state()
-                    .ok_or(anyhow!("could not parse instance state"))?
-                    .name()
-                    .ok_or(anyhow!("could not parse instance state name"))?
-                    .as_str()
-                    .to_owned(),
-            ))
+        // response parsing from here
+        let mut instances = Vec::new();
+        for reservation in res.reservations() {
+            for instance in reservation.instances() {
+                instances.push((
+                    instance
+                        .instance_id()
+                        .ok_or(anyhow!("could not parse instance id"))?
+                        .to_string(),
+                    instance
+                        .state()
+                        .ok_or(anyhow!("could not parse instance state"))?
+                        .name()
+                        .ok_or(anyhow!("could not parse instance state name"))?
+                        .as_str()
+                        .to_owned(),
+                ));
+            }
         }
+
+        Ok(instances)
+    }
+
+    // the instance to treat as the job instance out of the ones which exist
+    // one that is running or about to, if any
+    fn pick_job_instance(instances: &[(String, String)]) -> Option<&(String, String)> {
+        instances
+            .iter()
+            .find(|(_, state)| state == "pending" || state == "running")
+            .or(instances.first())
+    }
+
+    pub async fn get_job_instance_id(
+        &self,
+        job: &JobId,
+        region: &str,
+    ) -> Result<(bool, String, String)> {
+        let instances = self.get_job_instances(job, region).await?;
+
+        Ok(match Self::pick_job_instance(&instances) {
+            Some((instance, state)) => (true, instance.clone(), state.clone()),
+            None => (false, "".to_owned(), "".to_owned()),
+        })
     }
 
     pub async fn get_instance_state(&self, instance_id: &str, region: &str) -> Result<String> {
@@ -1340,16 +1368,37 @@ EOF
         debug: bool,
         init_params: &[u8],
     ) -> Result<()> {
-        let (mut exist, mut instance, state) = self
-            .get_job_instance_id(job, region)
+        let instances = self
+            .get_job_instances(job, region)
             .await
             .context("failed to get job instance")?;
+        let (mut exist, mut instance, state) = match Self::pick_job_instance(&instances) {
+            Some((instance, state)) => (true, instance.clone(), state.clone()),
+            None => (false, String::new(), String::new()),
+        };
+
+        // a job has one instance, anything else is a leftover which nothing keeps track of
+        let mut extras_terminated = false;
+        for (extra, state) in instances.iter().filter(|(id, _)| *id != instance) {
+            info!(instance = extra, state, "Terminating extra instance");
+            self.terminate_instance(extra, region)
+                .await
+                .context("failed to terminate extra instance")?;
+            extras_terminated = true;
+        }
 
         if exist {
             // instance exists already
             if state == "pending" || state == "running" {
                 // instance exists and is already running, we are done
                 info!(instance, "Found existing healthy instance");
+
+                if extras_terminated {
+                    // the elastic ip might have been on one of the extras
+                    self.post_spin_up(job, &instance, region)
+                        .await
+                        .context("failed to move elastic ip to the job instance")?;
+                }
             } else if state == "stopping" || state == "stopped" {
                 // instance unhealthy, terminate
                 info!(instance, "Found existing unhealthy instance");
@@ -1357,10 +1406,6 @@ EOF
                     .await
                     .context("failed to terminate instance")?;
 
-                // set to false so new one can be provisioned
-                exist = false;
-            } else {
-                // state is shutting-down or terminated
                 // set to false so new one can be provisioned
                 exist = false;
             }
@@ -1475,22 +1520,24 @@ EOF
     }
 
     async fn spin_down_impl(&self, job: &JobId, region: &str) -> Result<()> {
-        let (exist, instance, state) = self
-            .get_job_instance_id(job, region)
+        let instances = self
+            .get_job_instances(job, region)
             .await
             .context("failed to get job instance")?;
 
-        if !exist || state == "shutting-down" || state == "terminated" {
+        if instances.is_empty() {
             // instance does not really exist anyway, we are done
             info!("Instance does not exist or is already terminated");
             return Ok(());
         }
 
-        // terminate instance
-        info!(instance, "Terminating existing instance");
-        self.spin_down_instance(&instance, job, region)
-            .await
-            .context("failed to terminate instance")?;
+        // terminate every instance of the job, there should be only one
+        for (instance, _) in instances {
+            info!(instance, "Terminating existing instance");
+            self.spin_down_instance(&instance, job, region)
+                .await
+                .context("failed to terminate instance")?;
+        }
 
         Ok(())
     }
@@ -1652,6 +1699,26 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         (String::from_utf8(out.stdout).unwrap(), files)
+    }
+
+    #[test]
+    fn test_pick_job_instance() {
+        let i = |id: &str, state: &str| (id.to_owned(), state.to_owned());
+
+        assert_eq!(Aws::pick_job_instance(&[]), None);
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "running")]),
+            Some(&i("a", "running"))
+        );
+        // a healthy instance wins over an unhealthy one wherever it is in the response
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "stopped"), i("b", "pending"), i("c", "running")]),
+            Some(&i("b", "pending"))
+        );
+        assert_eq!(
+            Aws::pick_job_instance(&[i("a", "stopping"), i("b", "stopped")]),
+            Some(&i("a", "stopping"))
+        );
     }
 
     #[test]
