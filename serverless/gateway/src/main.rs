@@ -22,6 +22,7 @@ use axum::Router;
 use clap::Parser;
 use env_logger::Env;
 use http_on_vsock_server::{VsockAddrParser, VsockServer};
+use log::warn;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::atomic::AtomicBool;
@@ -77,6 +78,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         config.common_chain_ws_url.push('/');
     }
 
+    if config.gateways_start_block == 0 {
+        warn!(
+            "gateways_start_block is not set in the config, the Gateways contract events will be read from block 0. \
+            On a public chain the first scan is then several thousand eth_getLogs queries and the gateway cannot \
+            relay jobs until it is done. Set gateways_start_block to the block the Gateways contract was deployed at."
+        );
+    }
+
     let enclave_signer_key: SigningKey = SigningKey::from_slice(
         fs::read(config.enclave_secret_key)
             .await
@@ -102,6 +111,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         epoch: config.epoch,
         time_interval: config.time_interval,
         offset_for_epoch: config.offset_for_epoch,
+        gateways_start_block: config.gateways_start_block,
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         immutable_params_injected: Arc::new(Mutex::new(false)),
         mutable_params_injected: Arc::new(AtomicBool::new(false)),

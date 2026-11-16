@@ -1912,7 +1912,7 @@ dependencies = [
 [[package]]
 name = "http-on-vsock-server"
 version = "0.1.0"
-source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#e27249a33c721af6aba05565a67c3098ec267074"
+source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#39aaa5c65b57899b95f5cb114cc7cc2bac58b6a4"
 dependencies = [
  "clap",
  "hyper 0.14.32",
@@ -2400,7 +2400,7 @@ dependencies = [
 [[package]]
 name = "multi-block-txns"
 version = "0.1.0"
-source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#e27249a33c721af6aba05565a67c3098ec267074"
+source = "git+https://github.com/marlinprotocol/oyster-monorepo.git?branch=master#39aaa5c65b57899b95f5cb114cc7cc2bac58b6a4"
 dependencies = [
  "alloy",
  "thiserror 1.0.69",

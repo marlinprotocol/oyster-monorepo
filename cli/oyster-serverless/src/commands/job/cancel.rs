@@ -1,5 +1,5 @@
 use crate::commands::job::types::{CancelArgs, Relay};
-use crate::configs::global::RELAY_CONTRACT_ADDRESS;
+use crate::configs::global::relay_contract_address;
 use crate::utils::provider::create_provider;
 use alloy::hex;
 use alloy::providers::Provider;
@@ -26,7 +26,7 @@ pub async fn cancel_job(args: CancelArgs) -> Result<()> {
     let job_id = data.data().jobId;
 
     // Create contract instance
-    let contract_address = RELAY_CONTRACT_ADDRESS
+    let contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
     let contract = Relay::new(contract_address, provider.clone());

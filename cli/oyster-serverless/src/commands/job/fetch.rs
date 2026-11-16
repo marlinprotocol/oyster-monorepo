@@ -1,6 +1,6 @@
 use crate::commands::job::types::{FetchResponseArgs, Relay};
-use crate::configs::global::ARBITRUM_ONE_RPC_URL;
-use crate::configs::global::RELAY_CONTRACT_ADDRESS;
+use crate::configs::global::rpc_url;
+use crate::configs::global::relay_contract_address;
 use alloy::providers::{Provider, ProviderBuilder};
 use anyhow::{Context, Result};
 use tokio::fs;
@@ -9,7 +9,7 @@ use tracing::{error, info};
 /// Fetches response for a job
 pub async fn fetch_response(args: FetchResponseArgs) -> Result<()> {
     // Create provider with no wallet (read-only)
-    let rpc_url = ARBITRUM_ONE_RPC_URL
+    let rpc_url = rpc_url()
         .parse()
         .context("Failed to parse RPC URL")?;
     let provider = ProviderBuilder::new().on_http(rpc_url);
@@ -29,7 +29,7 @@ pub async fn fetch_response(args: FetchResponseArgs) -> Result<()> {
     let job_id = data.data().jobId;
 
     // Create contract instance
-    let contract_address = RELAY_CONTRACT_ADDRESS
+    let contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
     let contract = Relay::new(contract_address, provider.clone());

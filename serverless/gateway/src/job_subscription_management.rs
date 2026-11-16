@@ -10,13 +10,14 @@ use std::{
 };
 use tokio::{
     sync::mpsc::{Receiver, Sender},
-    time::{sleep_until, Instant},
+    time::{sleep, sleep_until, Instant},
 };
 
 use crate::{
     chain_util::{HttpProvider, HttpProviderLogs, LogsProvider},
     constant::{
-        GATEWAY_BLOCK_STATES_TO_MAINTAIN, REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
+        GATEWAY_BLOCK_STATES_TO_MAINTAIN, LOGS_SCAN_RETRY_WAIT,
+        REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
         REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
         REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
     },
@@ -111,10 +112,22 @@ pub async fn process_historic_subscription_jobs_on_request_chain<'a, P: HttpProv
     job_sub_tx: Sender<JobSubscriptionChannelType>,
     http_provider: P,
 ) {
-    let logs = contracts_client
-        .request_chain_historic_subscription_jobs(&request_chain_data, &http_provider)
-        .await
-        .unwrap();
+    // the gateway does not learn about these subscriptions any other way, so keep trying
+    let logs = loop {
+        match contracts_client
+            .request_chain_historic_subscription_jobs(&request_chain_data, &http_provider)
+            .await
+        {
+            Ok(logs) => break logs,
+            Err(err) => {
+                error!(
+                    "Failed to get the historic job subscription logs on request chain {}, retrying in {} seconds - Error: {:?}",
+                    request_chain_data.chain_id, LOGS_SCAN_RETRY_WAIT, err
+                );
+                sleep(Duration::from_secs(LOGS_SCAN_RETRY_WAIT)).await;
+            }
+        }
+    };
 
     let request_chain_id = request_chain_data.chain_id;
 
@@ -1575,7 +1588,8 @@ mod job_subscription_management_tests {
         let (req_chain_tx, _com_chain_rx) = tokio::sync::mpsc::channel::<Job>(100);
         let (job_sub_tx, mut job_sub_rx) =
             tokio::sync::mpsc::channel::<JobSubscriptionChannelType>(100);
-        let mock_http_provider = MockHttpProvider::new(None);
+        let mock_http_provider =
+            MockHttpProvider::new(None, request_chain_data.request_chain_start_block_number);
 
         process_historic_subscription_jobs_on_request_chain(
             &contracts_client,

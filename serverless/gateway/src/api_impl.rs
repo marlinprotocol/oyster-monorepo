@@ -538,6 +538,7 @@ pub async fn export_signed_registration_message(
             epoch: app_state.epoch,
             time_interval: app_state.time_interval,
             offset_for_epoch: app_state.offset_for_epoch,
+            gateways_start_block: app_state.gateways_start_block,
             gateway_epoch_state_waitlist,
             common_chain_start_block_number: Arc::new(Mutex::new(common_chain_block_number)),
             subscription_job_instance_heap,

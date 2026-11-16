@@ -1,7 +1,7 @@
 use crate::commands::subscription::types::{
     RelayContract, RelaySubscriptions, UpdateSubscriptionArgs,
 };
-use crate::configs::global::{RELAY_CONTRACT_ADDRESS, RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS};
+use crate::configs::global::{relay_contract_address, relay_subscriptions_contract_address};
 use crate::utils::conversion::{to_eth, to_usdc};
 use crate::utils::provider::create_provider;
 use crate::utils::usdc::approve_usdc;
@@ -38,14 +38,14 @@ pub async fn update_subscription(args: UpdateSubscriptionArgs) -> Result<()> {
     let env = data.data().env;
 
     // Create contract instances
-    let realy_subscription_contract_address = RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS
+    let realy_subscription_contract_address = relay_subscriptions_contract_address()
         .parse()
         .context("Failed to parse relay subscriptions contract address")?;
     let realy_subscription_contract =
         RelaySubscriptions::new(realy_subscription_contract_address, provider.clone());
 
     // Parse addresses
-    let relay_contract_address = RELAY_CONTRACT_ADDRESS
+    let relay_contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
 

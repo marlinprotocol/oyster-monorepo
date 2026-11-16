@@ -1,4 +1,4 @@
-use crate::configs::global::ARBITRUM_ONE_RPC_URL;
+use crate::configs::global::rpc_url;
 use alloy::{
     hex,
     network::{Ethereum, EthereumWallet},
@@ -25,7 +25,7 @@ pub async fn create_provider(
         .with_recommended_fillers()
         .wallet(wallet)
         .on_http(
-            ARBITRUM_ONE_RPC_URL
+            rpc_url()
                 .parse()
                 .context("Failed to parse RPC URL")?,
         );
