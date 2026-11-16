@@ -1517,6 +1517,222 @@ describe("RelaySubscriptions - Job Subscription Termination", function () {
     });
 });
 
+describe("RelaySubscriptions - Multiple Job Subscriptions", function () {
+    let signers: Signer[];
+    let addrs: string[];
+    let token: USDCoin;
+    let wallets: Wallet[];
+    let pubkeys: string[];
+    let attestationVerifier: AttestationVerifier;
+    let relay: Relay;
+    let relaySubscriptions: RelaySubscriptions;
+    let olderJobSubsId: bigint;
+    let newerJobSubsId: bigint;
+
+    const overallTimeout = 5,
+        gatewayFeePerJob = 10,
+        executionFeePerMs = 10,
+        periodicGap = 10,
+        olderUsdcDeposit = 2000000n,
+        newerUsdcDeposit = 3000000n,
+        olderCallbackDeposit = parseUnits("1"),
+        newerCallbackDeposit = parseUnits("2");
+
+    before(async function () {
+        signers = await ethers.getSigners();
+        addrs = await Promise.all(signers.map((a) => a.getAddress()));
+        wallets = signers.map((_, idx) => walletForIndex(idx));
+        pubkeys = wallets.map((w) => normalize(w.signingKey.publicKey));
+
+        const USDCoin = await ethers.getContractFactory("USDCoin");
+        token = await upgrades.deployProxy(
+            USDCoin,
+            [addrs[0]],
+            {
+                kind: "uups",
+            }
+        ) as unknown as USDCoin;
+
+        const AttestationVerifier = await ethers.getContractFactory("AttestationVerifier");
+        attestationVerifier = await upgrades.deployProxy(
+            AttestationVerifier,
+            [[image1], [pubkeys[14]], addrs[0]],
+            { kind: "uups" },
+        ) as unknown as AttestationVerifier;
+
+        let admin = addrs[0],
+            images = [image1, image2],
+            maxAge = 600,
+            globalMinTimeout = 10 * 1000,  // in milliseconds
+            globalMaxTimeout = 100 * 1000,  // in milliseconds
+            fixedGas = 150000,
+            callbackMeasureGas = 4530;
+        const Relay = await ethers.getContractFactory("Relay");
+        relay = await upgrades.deployProxy(
+            Relay,
+            [admin, images],
+            {
+                kind: "uups",
+                initializer: "initialize",
+                constructorArgs: [
+                    attestationVerifier.target,
+                    maxAge,
+                    token.target,
+                    globalMinTimeout,
+                    globalMaxTimeout,
+                    overallTimeout,
+                    gatewayFeePerJob,
+                    fixedGas,
+                    callbackMeasureGas
+                ]
+            },
+        ) as unknown as Relay;
+
+        let minPeriodicGap = 10,
+            maxPeriodicGap = 10000,
+            maxTerminationDuration = 1000000;
+        const RelaySubscriptions = await ethers.getContractFactory("RelaySubscriptions");
+        relaySubscriptions = await upgrades.deployProxy(
+            RelaySubscriptions,
+            [admin],
+            {
+                kind: "uups",
+                initializer: "initialize",
+                constructorArgs: [
+                    relay.target,
+                    minPeriodicGap,
+                    maxPeriodicGap,
+                    maxTerminationDuration
+                ]
+            },
+        ) as unknown as RelaySubscriptions;
+
+        // the two subscriptions have different owners
+        await token.transfer(addrs[2], 10000000);
+        await token.connect(signers[2]).approve(relaySubscriptions.target, 10000000);
+        await token.transfer(addrs[3], 10000000);
+        await token.connect(signers[3]).approve(relaySubscriptions.target, 10000000);
+
+        const timestamp = await time.latest() * 1000;
+        let [signature, attestation] = await createAttestation(pubkeys[15], image2, wallets[14], timestamp - 540000);
+
+        let signTimestamp = await time.latest();
+        let signedDigest = await createGatewaySignature(addrs[1], signTimestamp, wallets[15]);
+
+        await relay.connect(signers[1]).registerGateway(signature, attestation, signedDigest, signTimestamp);
+
+        let env = 1;
+        await relay.addGlobalEnv(env, executionFeePerMs);
+
+        let jobSubsParams = {
+            startTime: 0,
+            maxGasPrice: (await signers[0].provider?.getFeeData())?.gasPrice || parseUnits("1", 9),
+            usdcDeposit: olderUsdcDeposit,
+            callbackGasLimit: 0,
+            callbackContract: addrs[1],
+            env,
+            codehash: keccak256(solidityPacked(["string"], ["codehash"])),
+            codeInputs: solidityPacked(["string"], ["codeInput"]),
+            userTimeout: 50000,
+            refundAccount: addrs[1],
+            periodicGap,
+            terminationTimestamp: await time.latest() + 20
+        };
+        await setNextBlockBaseFeePerGas(1);
+        await relaySubscriptions.connect(signers[2])
+            .startJobSubscription(jobSubsParams, { value: olderCallbackDeposit });
+        olderJobSubsId = await relaySubscriptions.jobSubsCount();
+
+        jobSubsParams.usdcDeposit = newerUsdcDeposit;
+        jobSubsParams.terminationTimestamp = await time.latest() + 20;
+        await setNextBlockBaseFeePerGas(1);
+        await relaySubscriptions.connect(signers[3])
+            .startJobSubscription(jobSubsParams, { value: newerCallbackDeposit });
+        newerJobSubsId = await relaySubscriptions.jobSubsCount();
+    });
+
+    takeSnapshotBeforeAndAfterEveryTest(async () => { });
+
+    it("response on the older job subscription is charged to it and not to the newer one", async function () {
+        expect(newerJobSubsId).to.not.eq(olderJobSubsId);
+
+        let jobId = olderJobSubsId,	// last 127 bits(i.e. instanceCount) would be 0 for the first response
+            output = solidityPacked(["string"], ["it is the output"]),
+            totalTime = 100,
+            errorCode = 0,
+            signTimestamp = await time.latest();
+        let gatewayUsdcBalInit = await token.balanceOf(addrs[1]);
+
+        let signedDigest = await createJobResponseSignature(jobId, output, totalTime, errorCode, signTimestamp, wallets[15]);
+        let tx = relaySubscriptions.connect(signers[1]).jobSubsResponse(signedDigest, jobId, output, totalTime, errorCode, signTimestamp);
+        await expect(tx).to.emit(relaySubscriptions, "JobSubscriptionResponded");
+
+        let gatewayPayout = BigInt(totalTime * executionFeePerMs + gatewayFeePerJob);
+        expect(await token.balanceOf(addrs[1])).to.eq(gatewayUsdcBalInit + gatewayPayout);
+
+        // the newer job subscription is left as it was
+        let newerJobSubs = await relaySubscriptions.jobSubscriptions(newerJobSubsId);
+        expect(newerJobSubs.currentRuns).to.eq(0);
+        expect(newerJobSubs.job.usdcDeposit).to.eq(newerUsdcDeposit);
+        expect(newerJobSubs.job.callbackDeposit).to.eq(newerCallbackDeposit);
+
+        // the older job subscription has paid the gateway
+        let olderJobSubs = await relaySubscriptions.jobSubscriptions(olderJobSubsId);
+        expect(olderJobSubs.currentRuns).to.eq(1);
+        expect(olderJobSubs.job.usdcDeposit).to.eq(olderUsdcDeposit - gatewayPayout);
+        expect(olderJobSubs.job.callbackDeposit).to.be.lt(olderCallbackDeposit);
+
+        // the deposits left in the two job subscriptions are what the contract holds
+        expect(await token.balanceOf(relaySubscriptions.target))
+            .to.eq(olderJobSubs.job.usdcDeposit + newerJobSubs.job.usdcDeposit);
+        expect(await ethers.provider.getBalance(relaySubscriptions.target))
+            .to.eq(olderJobSubs.job.callbackDeposit + newerJobSubs.job.callbackDeposit);
+    });
+
+    it("can respond on the older job subscription after the newer one is terminated and refunded", async function () {
+        // terminate the newer job subscription and refund its deposits
+        await relaySubscriptions.connect(signers[3]).terminateJobSubscription(newerJobSubsId);
+        await time.increase(2 * overallTimeout + 1);
+
+        let newerOwnerUsdcBalInit = await token.balanceOf(addrs[3]);
+        await expect(relaySubscriptions.connect(signers[1]).refundJobSubsDeposits(newerJobSubsId))
+            .to.emit(relaySubscriptions, "JobSubscriptionDepositsRefunded")
+            .withArgs(newerJobSubsId, addrs[3], newerUsdcDeposit, newerCallbackDeposit, true);
+        expect(await token.balanceOf(addrs[3])).to.eq(newerOwnerUsdcBalInit + newerUsdcDeposit);
+        expect((await relaySubscriptions.jobSubscriptions(newerJobSubsId)).job.jobOwner).to.eq(ZeroAddress);
+
+        // respond for the current run of the older job subscription
+        let olderJobSubsInit = await relaySubscriptions.jobSubscriptions(olderJobSubsId);
+        let instanceCount = (BigInt(await time.latest()) - olderJobSubsInit.job.startTime) / BigInt(periodicGap);
+        let jobId = olderJobSubsId + instanceCount,
+            output = solidityPacked(["string"], ["it is the output"]),
+            totalTime = 100,
+            errorCode = 0,
+            signTimestamp = await time.latest();
+        let gatewayUsdcBalInit = await token.balanceOf(addrs[1]);
+
+        let signedDigest = await createJobResponseSignature(jobId, output, totalTime, errorCode, signTimestamp, wallets[15]);
+        let tx = relaySubscriptions.connect(signers[1]).jobSubsResponse(signedDigest, jobId, output, totalTime, errorCode, signTimestamp);
+        await expect(tx).to.emit(relaySubscriptions, "JobSubscriptionResponded");
+
+        let gatewayPayout = BigInt(totalTime * executionFeePerMs + gatewayFeePerJob);
+        expect(await token.balanceOf(addrs[1])).to.eq(gatewayUsdcBalInit + gatewayPayout);
+
+        let olderJobSubs = await relaySubscriptions.jobSubscriptions(olderJobSubsId);
+        expect(olderJobSubs.currentRuns).to.eq(instanceCount + 1n);
+        expect(olderJobSubs.job.usdcDeposit).to.eq(olderUsdcDeposit - gatewayPayout);
+        expect(olderJobSubs.job.callbackDeposit).to.be.lt(olderCallbackDeposit);
+
+        // the refunded job subscription is not created again by the response
+        let newerJobSubs = await relaySubscriptions.jobSubscriptions(newerJobSubsId);
+        expect(newerJobSubs.job.usdcDeposit).to.eq(0);
+        expect(newerJobSubs.job.callbackDeposit).to.eq(0);
+
+        expect(await token.balanceOf(relaySubscriptions.target)).to.eq(olderJobSubs.job.usdcDeposit);
+        expect(await ethers.provider.getBalance(relaySubscriptions.target)).to.eq(olderJobSubs.job.callbackDeposit);
+    });
+});
+
 describe("RelaySubscriptions - Job Subscription sent by UserSample contract", function () {
     let signers: Signer[];
     let addrs: string[];
