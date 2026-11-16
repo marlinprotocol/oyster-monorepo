@@ -15,6 +15,7 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
 use crate::cgroups::Cgroups;
+use crate::constant::MAX_OUTPUT_BYTES_LENGTH;
 use crate::model::CodeContract::saveCodeInCallDataCall;
 
 // Define errors that might arise during a job execution
@@ -363,7 +364,7 @@ async fn client_call(
     req_url: &str,
     inputs: &Vec<u8>,
 ) -> Result<Vec<u8>, reqwest::Error> {
-    let response = client
+    let mut response = client
         .post(req_url)
         .body(inputs.to_owned())
         .send()
@@ -373,12 +374,77 @@ async fn client_call(
             err
         })?;
 
-    Ok(response
-        .bytes()
+    // Stop reading once the output is over the allowed size, the worker can send any amount of data
+    let mut output = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|err| {
+        eprintln!("Failed to parse response from the worker: {:?}", err);
+        err
+    })? {
+        output.extend_from_slice(&chunk);
+        if output.len() > MAX_OUTPUT_BYTES_LENGTH {
+            output.truncate(MAX_OUTPUT_BYTES_LENGTH + 1);
+            break;
+        }
+    }
+
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+
+    use axum::body::Body;
+    use axum::response::Response;
+    use axum::routing::post;
+    use axum::Router;
+    use tokio::time::timeout;
+
+    use super::*;
+
+    // Start a server in place of the worker and return its port
+    fn start_worker(app: Router) -> u16 {
+        let server = axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0)))
+            .serve(app.into_make_service());
+        let port = server.local_addr().port();
+        tokio::spawn(server);
+
+        port
+    }
+
+    #[tokio::test]
+    async fn worker_response_read_stops_over_the_output_limit() {
+        // The response body never ends
+        let port = start_worker(Router::new().route(
+            "/",
+            post(|| async {
+                Response::new(Body::wrap_stream(tokio_stream::iter(
+                    std::iter::repeat_with(|| Ok::<_, Infallible>(vec![1u8; 1024])),
+                )))
+            }),
+        ));
+
+        let response = timeout(
+            Duration::from_secs(10),
+            get_workerd_response(port, Vec::new()),
+        )
         .await
-        .map_err(|err| {
-            eprintln!("Failed to parse response from the worker: {:?}", err);
-            err
-        })?
-        .to_vec())
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.len(), MAX_OUTPUT_BYTES_LENGTH + 1);
+    }
+
+    #[tokio::test]
+    async fn worker_response_within_the_output_limit() {
+        let port = start_worker(
+            Router::new().route("/", post(|body: axum::body::Bytes| async move { body })),
+        );
+
+        let inputs = vec![7u8; MAX_OUTPUT_BYTES_LENGTH];
+        let response = get_workerd_response(port, inputs.clone()).await.unwrap();
+
+        assert_eq!(response, inputs);
+    }
 }
