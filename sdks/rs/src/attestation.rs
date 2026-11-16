@@ -45,6 +45,7 @@ pub enum AttestationError {
 
 #[derive(Debug, Default, Clone)]
 pub struct AttestationExpectations<'a> {
+    // root of the cert chain, [verify] expects [AWS_ROOT_KEY] if this is not set
     pub root_public_key: Option<&'a [u8]>,
     pub pcrs: Option<[[u8; 48]; 4]>,
     pub image_id: Option<&'a [u8; 32]>,
@@ -55,9 +56,35 @@ pub struct AttestationExpectations<'a> {
     pub user_data: Option<&'a [u8]>,
 }
 
+/// Verifies an attestation document against the expectations.
+///
+/// The cert chain has to end in the AWS Nitro root unless a different root is
+/// set through `root_public_key`. An attestation chained to any other root,
+/// like the one of the mock attestation servers, is rejected.
 pub fn verify(
     attestation_doc: &[u8],
     expectations: AttestationExpectations,
+) -> Result<AttestationDecoded, AttestationError> {
+    verify_inner(attestation_doc, expectations, true)
+}
+
+/// Same as [verify], but accepts any root if `root_public_key` is not set
+/// and returns the one it found.
+///
+/// The cert chain is only checked against itself in that case, anybody can
+/// produce an attestation that passes. Only meant for tests and for callers
+/// that check the returned root on their own.
+pub fn verify_any_root(
+    attestation_doc: &[u8],
+    expectations: AttestationExpectations,
+) -> Result<AttestationDecoded, AttestationError> {
+    verify_inner(attestation_doc, expectations, false)
+}
+
+fn verify_inner(
+    attestation_doc: &[u8],
+    expectations: AttestationExpectations,
+    pin_aws_root: bool,
 ) -> Result<AttestationDecoded, AttestationError> {
     let mut result = AttestationDecoded {
         root_public_key: Default::default(),
@@ -126,8 +153,11 @@ pub fn verify(
     result.root_public_key =
         verify_root_of_trust(&mut attestation_doc, &cosesign1, result.timestamp_ms)?;
 
-    // check root public key if exists
-    if let Some(root_public_key) = expectations.root_public_key {
+    // check root public key, defaults to the aws root unless the caller opted out
+    let expected_root_public_key = expectations
+        .root_public_key
+        .or(pin_aws_root.then_some(AWS_ROOT_KEY.as_slice()));
+    if let Some(root_public_key) = expected_root_public_key {
         if result.root_public_key.as_ref() != root_public_key {
             return Err(AttestationError::VerifyFailed(
                 "root public key mismatch".into(),
@@ -408,7 +438,7 @@ mod tests {
 
     use crate::attestation::{AWS_ROOT_KEY, AttestationExpectations, MOCK_ROOT_KEY};
 
-    use super::verify;
+    use super::{verify, verify_any_root};
 
     // generated using `curl <ip>:<port>/attestation/raw`
     // on the attestation server of a real Nitro enclave
@@ -519,6 +549,79 @@ mod tests {
     }
 
     #[test]
+    fn test_mock_rejected_unless_asked_for() {
+        for name in ["custom.bin", "custom_pcr16.bin"] {
+            let attestation = std::fs::read(
+                file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/" + name,
+            )
+            .unwrap();
+
+            // nothing specified means the aws root
+            let err = verify(&attestation, Default::default()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "failed to verify attestation: root public key mismatch"
+            );
+
+            // same with other expectations set
+            let err = verify(
+                &attestation,
+                AttestationExpectations {
+                    public_key: Some(&hex!("12345678")),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "failed to verify attestation: root public key mismatch"
+            );
+
+            // an explicit root still works with both
+            for verify in [verify, verify_any_root] {
+                verify(
+                    &attestation,
+                    AttestationExpectations {
+                        root_public_key: Some(&MOCK_ROOT_KEY),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                verify(
+                    &attestation,
+                    AttestationExpectations {
+                        root_public_key: Some(&AWS_ROOT_KEY),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+            }
+        }
+    }
+
+    #[test]
+    fn test_aws_accepted_by_default() {
+        let attestation =
+            std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws.bin")
+                .unwrap();
+
+        let decoded = verify(&attestation, Default::default()).unwrap();
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+
+        let decoded = verify_any_root(&attestation, Default::default()).unwrap();
+        assert_eq!(decoded.root_public_key.as_ref(), AWS_ROOT_KEY);
+
+        verify_any_root(
+            &attestation,
+            AttestationExpectations {
+                root_public_key: Some(&MOCK_ROOT_KEY),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    }
+
+    #[test]
     fn test_age() {
         let attestation =
             std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/aws.bin")
@@ -564,7 +667,7 @@ mod tests {
             std::fs::read(file!().rsplit_once('/').unwrap().0.to_owned() + "/testcases/custom.bin")
                 .unwrap();
 
-        let decoded = verify(&attestation, Default::default()).unwrap();
+        let decoded = verify_any_root(&attestation, Default::default()).unwrap();
 
         assert_eq!(decoded.timestamp_ms, 0x00000193bf444e30);
         assert_eq!(decoded.pcrs[0], [0; 48]);
@@ -743,7 +846,7 @@ mod tests {
         )
         .unwrap();
 
-        let decoded = verify(&attestation, Default::default()).unwrap();
+        let decoded = verify_any_root(&attestation, Default::default()).unwrap();
 
         assert_eq!(decoded.timestamp_ms, 0x00000196870610d9);
         assert_eq!(decoded.pcrs[0], [0; 48]);

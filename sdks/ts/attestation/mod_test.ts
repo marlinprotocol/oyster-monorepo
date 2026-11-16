@@ -5,6 +5,7 @@ import {
   AWS_ROOT_KEY,
   MOCK_ROOT_KEY,
   verify,
+  verifyAnyRoot,
 } from "./mod.ts";
 
 // generated using `curl <ip>:<port>/attestation/raw`
@@ -117,6 +118,48 @@ Deno.test(async function testVerifyAWSAllSpecified() {
   );
 });
 
+Deno.test(async function testVerifyMockRejectedUnlessAskedFor() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/custom.bin", import.meta.url),
+  );
+
+  // nothing specified means the aws root
+  await assertRejects(
+    () => verify(attestation),
+    AttestationError,
+    "root public key mismatch",
+  );
+  await assertRejects(
+    () => verify(attestation, { publicKey: decodeHex("12345678") }),
+    AttestationError,
+    "root public key mismatch",
+  );
+
+  // an explicit root still works with both
+  for (const f of [verify, verifyAnyRoot]) {
+    await f(attestation, { rootPublicKey: MOCK_ROOT_KEY });
+    await assertRejects(
+      () => f(attestation, { rootPublicKey: AWS_ROOT_KEY }),
+      AttestationError,
+      "root public key mismatch",
+    );
+  }
+});
+
+Deno.test(async function testVerifyAWSAcceptedByDefault() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/aws.bin", import.meta.url),
+  );
+
+  assertEquals((await verify(attestation)).rootPublicKey, AWS_ROOT_KEY);
+  assertEquals((await verifyAnyRoot(attestation)).rootPublicKey, AWS_ROOT_KEY);
+  await assertRejects(
+    () => verifyAnyRoot(attestation, { rootPublicKey: MOCK_ROOT_KEY }),
+    AttestationError,
+    "root public key mismatch",
+  );
+});
+
 Deno.test(async function testVerifyAge() {
   const attestation = await Deno.readFile(
     new URL("./testcases/aws.bin", import.meta.url),
@@ -155,7 +198,7 @@ Deno.test(async function testVerifyMockNoneSpecified() {
     new URL("./testcases/custom.bin", import.meta.url),
   );
 
-  const decoded = await verify(attestation);
+  const decoded = await verifyAnyRoot(attestation);
 
   assertEquals(decoded.timestamp, 0x00000193bf444e30);
   assertEquals(decoded.pcrs[0], new Uint8Array(48).fill(0));
