@@ -33,7 +33,6 @@
 // we read it here, do NAT and forward onwards
 
 use std::ffi::CStr;
-use std::io::Read;
 use std::net::SocketAddrV4;
 
 use anyhow::{anyhow, Context};
@@ -43,7 +42,7 @@ use socket2::{SockAddr, Socket};
 
 use oyster_raw_proxy::{
     accept_vsock_conn_with_backoff, new_ip_socket_with_backoff, new_vsock_server_with_backoff,
-    ProxyError, SocketError, VsockAddrParser,
+    read_ip_packet, ProxyError, SocketError, VsockAddrParser,
 };
 
 #[derive(Parser)]
@@ -102,19 +101,8 @@ fn handle_conn(
     let external_addr: SockAddr = "1.1.1.1:80".parse::<SocketAddrV4>().unwrap().into();
 
     loop {
-        // read till total size
-        conn_socket
-            .read_exact(&mut buf[0..4])
-            .map_err(SocketError::ReadError)
-            .map_err(ProxyError::VsockError)?;
-
-        let size: usize = u16::from_be_bytes(buf[2..4].try_into().unwrap()).into();
-
-        // read till full frame
-        conn_socket
-            .read_exact(&mut buf[4..size])
-            .map_err(SocketError::ReadError)
-            .map_err(ProxyError::VsockError)?;
+        // read a full packet, resets the connection on malformed sizes
+        let size = read_ip_packet(conn_socket, &mut buf).map_err(ProxyError::VsockError)?;
 
         // IMPORTANT: checks are needed here, assume packets from the enclave to be untrusted
 
