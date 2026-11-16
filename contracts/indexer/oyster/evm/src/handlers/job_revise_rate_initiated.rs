@@ -7,6 +7,8 @@ use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::state_mismatch;
 use bigdecimal::BigDecimal;
 use diesel::sql_types::Numeric;
 use diesel::sql_types::Timestamp;
@@ -94,8 +96,8 @@ pub fn handle_job_revise_rate_initiated(
         // we have failed to make any changes
         // the only real condition is when the request does not exist or job does not exist or is closed
         // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!(
-            "did not expect to find a non existent request or closed job"
+        return Err(state_mismatch(
+            "did not expect to find a non existent request or closed job",
         ));
     }
 

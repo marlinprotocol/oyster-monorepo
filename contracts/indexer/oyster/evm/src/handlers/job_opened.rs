@@ -15,6 +15,7 @@ use anyhow::Result;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
+use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use tracing::warn;
 use tracing::{info, instrument};
@@ -54,8 +55,17 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .ok_or(anyhow!("did not get tx hash from log"))?
         .encode_hex_with_prefix();
 
-    // we want to insert if job does not exist and provider exists and is active
-    // we want to error out if job already exists or provider does not exist or is inactive
+    // we want to insert if job does not exist
+    // if a row with this id already exists, it did not come from this event
+    // since a job is opened only once, replace it with what the chain says
+    let existing = jobs::table
+        .filter(jobs::id.eq(&id))
+        .count()
+        .get_result::<i64>(conn)
+        .context("failed to check for existing job")?;
+    if existing != 0 {
+        warn!(id, ?block, ?idx, "job already exists, replacing it");
+    }
 
     info!(
         id,
@@ -88,6 +98,19 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             jobs::is_closed.eq(false),
             jobs::end_epoch.eq(&end_epoch),
         ))
+        .on_conflict(jobs::id)
+        .do_update()
+        .set((
+            jobs::metadata.eq(&metadata),
+            jobs::owner.eq(&owner),
+            jobs::provider.eq(&provider),
+            jobs::rate.eq(&rate),
+            jobs::balance.eq(&balance),
+            jobs::last_settled.eq(&timestamp),
+            jobs::created.eq(&timestamp),
+            jobs::is_closed.eq(false),
+            jobs::end_epoch.eq(&end_epoch),
+        ))
         .execute(conn)
         .context("failed to create job")?;
 
@@ -98,7 +121,15 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
         .values((
             transactions::block.eq(block as i64),
             transactions::idx.eq(idx as i64),
-            transactions::tx_hash.eq(tx_hash),
+            transactions::tx_hash.eq(&tx_hash),
+            transactions::job.eq(&id),
+            transactions::amount.eq(&balance),
+            transactions::is_deposit.eq(true),
+        ))
+        .on_conflict((transactions::block, transactions::idx))
+        .do_update()
+        .set((
+            transactions::tx_hash.eq(&tx_hash),
             transactions::job.eq(&id),
             transactions::amount.eq(&balance),
             transactions::is_deposit.eq(true),
@@ -114,6 +145,12 @@ pub fn handle_job_opened(conn: &mut PgConnection, log: Log) -> Result<()> {
             rate_revisions::job_id.eq(&id),
             rate_revisions::value.eq(&rate),
             rate_revisions::block.eq(block as i64),
+            rate_revisions::timestamp.eq(&timestamp_epoch),
+        ))
+        .on_conflict((rate_revisions::job_id, rate_revisions::block))
+        .do_update()
+        .set((
+            rate_revisions::value.eq(&rate),
             rate_revisions::timestamp.eq(&timestamp_epoch),
         ))
         .execute(conn)
@@ -705,7 +742,7 @@ mod tests {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                    ("some metadata", 1, 2, timestamp)
+                    ("metadata from the chain", 1, 4, timestamp)
                         .abi_encode_sequence()
                         .into(),
                 )
@@ -715,13 +752,10 @@ mod tests {
 
         let provider = MockProvider::new(timestamp);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log, &provider);
+        handle_log(conn, log, &provider)?;
 
         // checks
-        assert_eq!(
-            format!("{:?}", res.unwrap_err()),
-            "failed to create job\n\nCaused by:\n    duplicate key value violates unique constraint \"jobs_pkey\""
-        );
+        // the existing row is replaced with the data from the event
         assert_eq!(jobs::table.count().get_result(conn), Ok(2));
         assert_eq!(
             jobs::table
@@ -731,15 +765,15 @@ mod tests {
             Ok(vec![
                 (
                     "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                    "some metadata".to_owned(),
+                    "metadata from the chain".to_owned(),
                     "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB".to_owned(),
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
                     BigDecimal::from(1),
-                    BigDecimal::from(2),
+                    BigDecimal::from(4),
                     now,
                     now,
                     false,
-                    BigDecimal::from(timestamp + (2 * RATE_SCALING_FACTOR)),
+                    BigDecimal::from(timestamp + (4 * RATE_SCALING_FACTOR)),
                 ),
                 (
                     "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
@@ -756,19 +790,30 @@ mod tests {
             ])
         );
 
-        assert_eq!(transactions::table.count().get_result(conn), Ok(1));
+        assert_eq!(transactions::table.count().get_result(conn), Ok(2));
         assert_eq!(
             transactions::table
                 .select(transactions::all_columns)
-                .first(conn),
-            Ok((
-                123i64,
-                5i64,
-                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-                BigDecimal::from(10),
-                false,
-            ))
+                .order_by((transactions::block, transactions::idx))
+                .load(conn),
+            Ok(vec![
+                (
+                    42i64,
+                    69i64,
+                    keccak256!("some tx").encode_hex_with_prefix(),
+                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                    BigDecimal::from(4),
+                    true,
+                ),
+                (
+                    123i64,
+                    5i64,
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+                    BigDecimal::from(10),
+                    false,
+                ),
+            ])
         );
 
         assert_eq!(rate_revisions::table.count().get_result(conn), Ok(1));

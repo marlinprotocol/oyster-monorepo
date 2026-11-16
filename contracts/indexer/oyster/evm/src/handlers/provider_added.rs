@@ -6,7 +6,7 @@ use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use diesel::query_dsl::methods::FilterDsl;
+use diesel::QueryDsl;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -29,8 +29,9 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
         .encode_hex_with_prefix();
 
     // we want to insert if provider does not exist
-    // we want to error out if provider exists and is_active is true
-    // we want to update only if is_active is false
+    // we want to update if provider exists
+    // an existing active provider is not expected since the contract does not
+    // allow adding a provider twice, the row is replaced with what the chain says
 
     info!(provider, cp, ?block, ?tx_hash, "inserting provider");
 
@@ -40,9 +41,18 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
     // ON CONFLICT (id)
     // DO UPDATE SET
     //     is_active = true
-    //     cp = "<cp>"
-    // WHERE is_active = false;
-    let count = diesel::insert_into(providers::table)
+    //     cp = "<cp>";
+    let existing_active = providers::table
+        .filter(providers::id.eq(&provider))
+        .filter(providers::is_active.eq(true))
+        .count()
+        .get_result::<i64>(conn)
+        .context("failed to check for existing provider")?;
+    if existing_active != 0 {
+        warn!(provider, ?block, "provider already exists, replacing it");
+    }
+
+    diesel::insert_into(providers::table)
         .values((
             providers::id.eq(&provider),
             providers::cp.eq(&cp),
@@ -58,20 +68,8 @@ pub fn handle_provider_added(conn: &mut PgConnection, log: Log) -> Result<()> {
             providers::block.eq(block as i64),
             providers::tx_hash.eq(&tx_hash),
         ))
-        // we want to detect if we update any rows
-        // we do it by only updating rows where is_active is false
-        // and later checking if any rows were updated
-        .filter(providers::is_active.eq(false))
         .execute(conn)
         .context("failed to add provider")?;
-
-    if count != 1 {
-        // !!! should never happen
-        // we have failed to make any changes
-        // the only real condition is when there is an existing active provider
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("did not expect to find existing provider"));
-    }
 
     info!(provider, cp, "inserted provider");
 
@@ -308,7 +306,7 @@ mod tests {
                             .parse::<Address>()?
                             .into_word(),
                     ],
-                    "some cp".abi_encode().into(),
+                    "new cp".abi_encode().into(),
                 )
                 .unwrap(),
             },
@@ -317,13 +315,10 @@ mod tests {
         // using timestamp 0 because we don't care about it
         let provider = MockProvider::new(0);
         // use handle_log instead of concrete handler to test dispatch
-        let res = handle_log(conn, log, &provider);
+        handle_log(conn, log, &provider)?;
 
         // checks
-        assert_eq!(
-            format!("{:?}", res.unwrap_err()),
-            "did not expect to find existing provider"
-        );
+        // the existing row is replaced with the data from the event
         assert_eq!(providers::table.count().get_result(conn), Ok(2));
         assert_eq!(
             providers::table
@@ -340,9 +335,9 @@ mod tests {
                 ),
                 (
                     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa".to_owned(),
-                    "some cp".to_owned(),
+                    "new cp".to_owned(),
                     42,
-                    "0x999999999999999999999999999bcdef1234567890abcdef1234567890abcdef".to_owned(),
+                    keccak256!("some tx").encode_hex_with_prefix(),
                     true,
                 )
             ])

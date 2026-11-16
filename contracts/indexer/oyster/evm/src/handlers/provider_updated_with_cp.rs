@@ -4,6 +4,8 @@ use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::state_mismatch;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -42,8 +44,8 @@ pub fn handle_provider_updated_with_cp(conn: &mut PgConnection, log: Log) -> Res
         // we should have had exactly one row made inactive
         // if count is 0, that means the provider did not exist or was not active
         // if count is more than 1, there was somehow more than one provider entry
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("count {count} should have been 1"));
+        // reported as a state mismatch, the caller skips the log
+        return Err(state_mismatch(format!("count {count} should have been 1")));
     }
 
     info!(provider, "updated provider");

@@ -13,7 +13,7 @@ use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 use indexer_framework::{event_loop, start_from, MIGRATIONS};
 use provider::AlloyProvider;
-use handlers::handle_log;
+use handlers::process_log;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -64,7 +64,7 @@ fn run() -> Result<()> {
     };
     let is_start_set = start_from(&mut conn, args.start_block)?;
     debug!("is_start_set: {}", is_start_set);
-    event_loop(&mut conn, &mut provider, args.range_size, handle_log)
+    event_loop(&mut conn, &mut provider, args.range_size, process_log)
 }
 
 fn main() -> Result<()> {
