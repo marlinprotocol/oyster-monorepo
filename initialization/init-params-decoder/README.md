@@ -75,6 +75,12 @@ The decoder will create the following files:
 - `/init-params/hello/hello` with `hello` as the content
 - `/init-params/Cargo.toml` with decrypted contents of the `Cargo.toml` file
 
+## Params that are not attested
+
+Only params with `should_attest` set are part of the digest, and hence of PCR16 and the image id. The init params come from the host, so anything that is not attested can be added, removed or replaced by whoever runs the host without the image id changing.
+
+To keep such params away from files that the enclave picks up by itself (the compose file and the `.env` next to it, files the compose file refers to, the kms contract config), the decoder only accepts them under `unattested/`, e.g. `unattested/app.env` ends up in `/init-params/unattested/app.env`. A param with `should_attest` unset and any other path is an error. Refer to these files explicitly, and treat their contents as coming from the host. Encrypting such a param does not change this, anybody can encrypt to the public key.
+
 ## License
 
 This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](./LICENSE.txt).

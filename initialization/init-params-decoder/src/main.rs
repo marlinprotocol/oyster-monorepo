@@ -41,6 +41,12 @@ struct Args {
 // paths in the digest are always relative to this
 const DIGEST_ROOT: &str = "/init-params/";
 
+// params that are not attested are not covered by the image id
+// the host can add them or swap them without anyone noticing
+// they are only allowed in here, away from the files the enclave reads by default
+// like the compose file, .env next to it or the kms contract config
+const UNATTESTED_DIR: &str = "unattested";
+
 // derive server takes a while to come up since it needs the kms
 const KEY_FETCH_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const KEY_FETCH_MAX_BACKOFF: Duration = Duration::from_secs(15);
@@ -124,6 +130,15 @@ fn decode(
                 .any(|x| !matches!(x, Component::Normal(_)))
             {
                 bail!("invalid path")
+            }
+
+            if !init_param.should_attest {
+                let mut components = Path::new(&init_param.path).components();
+                if components.next() != Some(Component::Normal(UNATTESTED_DIR.as_ref()))
+                    || components.next().is_none()
+                {
+                    bail!("params that are not attested have to be under {UNATTESTED_DIR}/");
+                }
             }
 
             let path = output_dir.join(&init_param.path);
@@ -495,6 +510,71 @@ mod tests {
 
             assert!(format!("{err:?}").contains("invalid path"), "{path}");
         }
+    }
+
+    #[test]
+    fn unattested_params_outside_their_dir_fail() {
+        for path in [
+            ".env",
+            "docker-compose.yml",
+            "contract-address",
+            "root-server-config.json",
+            "conf/app.toml",
+            "unattested",
+            "unattestedx/a",
+        ] {
+            let dir = TestDir::new();
+            let params = init_params(
+                &digest(&[("docker-compose.yml", b"services: {}")]),
+                &[
+                    param("docker-compose.yml", b"services: {}", true, false),
+                    param(path, b"FOO=bar", false, false),
+                ],
+            );
+
+            let err = decode(&params, &dir.0, no_key).unwrap_err();
+
+            assert!(
+                format!("{err:?}").contains("have to be under unattested/"),
+                "{path}: {err:?}"
+            );
+            assert!(!dir.0.join(".env").exists());
+        }
+    }
+
+    #[test]
+    fn unattested_params_in_their_dir_are_written_and_not_in_the_digest() {
+        let dir = TestDir::new();
+        let (pk, sk) = keypair();
+        let params = init_params(
+            &digest(&[("docker-compose.yml", b"services: {}")]),
+            &[
+                param("docker-compose.yml", b"services: {}", true, false),
+                param("unattested/app.env", b"FOO=bar", false, false),
+                param("unattested/keys/api", &seal(b"hunter2", &pk), false, true),
+            ],
+        );
+
+        decode(&params, &dir.0, || Ok(sk)).unwrap();
+
+        assert_eq!(read(dir.0.join("unattested/app.env")).unwrap(), b"FOO=bar");
+        assert_eq!(read(dir.0.join("unattested/keys/api")).unwrap(), b"hunter2");
+    }
+
+    #[test]
+    fn attested_params_can_be_anywhere() {
+        let dir = TestDir::new();
+        let params = init_params(
+            &digest(&[(".env", b"FOO=bar"), ("unattested/a", b"hello")]),
+            &[
+                param(".env", b"FOO=bar", true, false),
+                param("unattested/a", b"hello", true, false),
+            ],
+        );
+
+        decode(&params, &dir.0, no_key).unwrap();
+
+        assert_eq!(read(dir.0.join(".env")).unwrap(), b"FOO=bar");
     }
 
     #[test]
