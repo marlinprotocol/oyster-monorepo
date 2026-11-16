@@ -225,6 +225,13 @@ Required args:
 - `--deployment`: Chain through which to deploy the instance
 - `--wallet-private-key` or `--wallet-private-key-file`: Private key for transaction signing [Base 64 encoded 33-byte private key (flag || private_key) for Sui chain]
 
+Optional args:
+- `--no-wait`: Send the stop request and exit without waiting for the notice period. Run the same command again later to close the job.
+
+The command sends a stop request (a rate revision to 0), waits for the notice period of the market (300 seconds on Arbitrum One and BSC) and then closes the job, which returns the unused balance. The job keeps billing until the close transaction lands.
+
+If the command is interrupted during the wait, run it again with the same arguments. It reads the pending stop request from the chain, waits only for the time that is left (or not at all if the notice period is over) and closes the job.
+
 #### `withdraw`
 Withdraws USDC funds from an existing job. The command will first attempt to settle the job and then ensure a buffer balance is maintained for future operations.
 

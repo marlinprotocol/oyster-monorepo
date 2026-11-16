@@ -78,3 +78,59 @@ pub fn get_deployment_adapter(
         }),
     }
 }
+
+// Read-only checks against the live deployments (eth_call / simulation only, nothing is signed or sent).
+// Run with `cargo test -- --ignored live_`.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::deployment::adapter::RateLock;
+
+    // throwaway keys, only needed to construct a provider
+    const EVM_DUMMY_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+    const SUI_DUMMY_KEY: &str = "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB";
+
+    #[tokio::test]
+    #[ignore = "reads Arbitrum One"]
+    async fn live_arbitrum_rate_lock() {
+        let mut adapter = get_deployment_adapter(Deployment::Arbitrum, None, None, None, None);
+        let provider = adapter
+            .create_provider_with_wallet(EVM_DUMMY_KEY)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            adapter.get_rate_lock_wait_time(&provider).await.unwrap(),
+            300
+        );
+        // job 0 was closed long ago, closing deletes the lock
+        let job = format!("0x{:064x}", 0);
+        assert_eq!(
+            adapter.get_rate_lock(&job, &provider).await.unwrap(),
+            RateLock::None
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "reads Sui mainnet"]
+    async fn live_sui_rate_lock() {
+        let mut adapter = get_deployment_adapter(Deployment::Sui, None, None, None, None);
+        let provider = adapter
+            .create_provider_with_wallet(SUI_DUMMY_KEY)
+            .await
+            .unwrap();
+
+        // the mainnet package has no wait time registered for the rate lock selector
+        let wait_time = adapter.get_rate_lock_wait_time(&provider).await.unwrap();
+        println!("rate lock wait time: {wait_time}");
+        for job in ["114", "115", "116", "121", "201"] {
+            let exists = adapter
+                .get_job_data_if_exists(job.into(), &provider)
+                .await
+                .unwrap()
+                .is_some();
+            let lock = adapter.get_rate_lock(job, &provider).await.unwrap();
+            println!("job {job}: exists {exists}, lock {lock:?}");
+        }
+    }
+}

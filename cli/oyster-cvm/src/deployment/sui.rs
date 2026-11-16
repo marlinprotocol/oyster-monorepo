@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use alloy::primitives::U256;
+use alloy::primitives::{U256, keccak256};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose};
@@ -31,11 +31,15 @@ use tracing::{error, info};
 
 use crate::deployment::adapter::{
     ChainFunds, ChainProvider, ChainTransaction, DeploymentAdapter, JobData, JobTransactionKind,
+    RateLock,
 };
 
 const SUI_PRIV_KEY_PREFIX: &str = "suiprivkey";
 const GRPC_AUTH_TOKEN: &str = "x-token";
 const OYSTER_MARKET_MODULE_NAME: &str = "market";
+const OYSTER_LOCK_MODULE_NAME: &str = "lock";
+// lock selector used by the market for rate revisions, keccak256("RATE_LOCK")
+const RATE_LOCK_SELECTOR_PREIMAGE: &str = "RATE_LOCK";
 const GAS_BUDGET_BUFFER: u64 = 1000;
 const MAX_GAS_BUDGET: u64 = 50000000000000;
 const TRANSACTION_CONFIRMATION_TIMEOUT_SECS: u64 = 120;
@@ -349,6 +353,86 @@ impl DeploymentAdapter for SuiAdapter {
                 last_settled as i64
             },
         }))
+    }
+
+    async fn get_rate_lock(&self, job_id: &str, provider: &ChainProvider) -> Result<RateLock> {
+        let ChainProvider::Sui(provider) = provider else {
+            return Err(anyhow!("Internal error"));
+        };
+
+        let job_id = job_id.parse::<u128>().context("Failed to parse job ID")?;
+        let (selector, key) = rate_lock_selector_and_key(job_id);
+
+        // lock::lock_status(&LockData, &vector<u8>, &vector<u8>, &Clock): LockStatus
+        let return_values = self
+            .simulate_view(
+                provider,
+                OYSTER_LOCK_MODULE_NAME,
+                "lock_status",
+                vec![
+                    Input::Shared {
+                        object_id: self.lock_data_id,
+                        initial_shared_version: self.market_package_initial_version,
+                        mutable: false,
+                    },
+                    Input::Pure {
+                        value: bcs::to_bytes(&selector)
+                            .context("Failed to bcs encode lock selector")?,
+                    },
+                    Input::Pure {
+                        value: bcs::to_bytes(&key).context("Failed to bcs encode lock key")?,
+                    },
+                    Input::Shared {
+                        object_id: self.clock_id,
+                        initial_shared_version: self.clock_initial_shared_version,
+                        mutable: false,
+                    },
+                ],
+            )
+            .await
+            .context("Failed to fetch rate lock status")?;
+
+        rate_lock_from_status_bytes(
+            return_values
+                .first()
+                .ok_or_else(|| anyhow!("Empty response received for lock_status call"))?,
+        )
+    }
+
+    async fn get_rate_lock_wait_time(&self, provider: &ChainProvider) -> Result<u64> {
+        let ChainProvider::Sui(provider) = provider else {
+            return Err(anyhow!("Internal error"));
+        };
+
+        let selector = keccak256(RATE_LOCK_SELECTOR_PREIMAGE).to_vec();
+
+        // lock::lock_wait_time(&LockData, vector<u8>): u64
+        let return_values = self
+            .simulate_view(
+                provider,
+                OYSTER_LOCK_MODULE_NAME,
+                "lock_wait_time",
+                vec![
+                    Input::Shared {
+                        object_id: self.lock_data_id,
+                        initial_shared_version: self.market_package_initial_version,
+                        mutable: false,
+                    },
+                    Input::Pure {
+                        value: bcs::to_bytes(&selector)
+                            .context("Failed to bcs encode lock selector")?,
+                    },
+                ],
+            )
+            .await
+            .context("Failed to fetch rate lock wait time")?;
+
+        bcs::from_bytes(
+            return_values
+                .first()
+                .ok_or_else(|| anyhow!("Empty response received for lock_wait_time call"))?,
+        )
+        .context("Failed to bcs decode lock wait time")
     }
 
     async fn prepare_funds(
@@ -912,6 +996,81 @@ impl DeploymentAdapter for SuiAdapter {
     }
 }
 
+impl SuiAdapter {
+    /// Runs a read-only function of the market package through simulation
+    /// and returns its bcs encoded return values.
+    async fn simulate_view(
+        &self,
+        provider: &SuiProvider,
+        module: &'static str,
+        function: &'static str,
+        inputs: Vec<Input>,
+    ) -> Result<Vec<Vec<u8>>> {
+        let move_call = MoveCall {
+            package: self.market_package_id,
+            module: Identifier::from_static(module),
+            function: Identifier::from_static(function),
+            type_arguments: vec![],
+            arguments: (0..inputs.len() as u16).map(Argument::Input).collect(),
+        };
+
+        let transaction_kind = TransactionKind::ProgrammableTransaction(ProgrammableTransaction {
+            commands: vec![Command::MoveCall(move_call)],
+            inputs,
+        });
+
+        let mut client = provider.client.clone();
+
+        let response = client
+            .execution_client()
+            .simulate_transaction(
+                SimulateTransactionRequest::const_default()
+                    .with_transaction(
+                        TransactionProto::const_default()
+                            .with_kind(transaction_kind)
+                            .with_sender(Address::ZERO),
+                    )
+                    .with_read_mask(FieldMask {
+                        paths: vec!["command_outputs".into()],
+                    }),
+            )
+            .await?
+            .into_inner();
+        if response.command_outputs.is_empty() {
+            return Err(anyhow!("No output received for {function} call"));
+        }
+
+        Ok(response.command_outputs[0]
+            .return_values
+            .iter()
+            .map(|value| value.value().value().to_vec())
+            .collect())
+    }
+}
+
+/// Selector and key under which the market keeps the rate lock of a job:
+/// `keccak256("RATE_LOCK")` and `keccak256(bcs(job_id))`.
+fn rate_lock_selector_and_key(job_id: u128) -> (Vec<u8>, Vec<u8>) {
+    (
+        keccak256(RATE_LOCK_SELECTOR_PREIMAGE).to_vec(),
+        keccak256(job_id.to_le_bytes()).to_vec(),
+    )
+}
+
+/// Decodes `lock::LockStatus`, a bcs enum with variants None, Unlocked, Locked.
+/// The unlock time and the pending rate are not exposed by the package.
+fn rate_lock_from_status_bytes(bytes: &[u8]) -> Result<RateLock> {
+    match bytes {
+        [0] => Ok(RateLock::None),
+        [1] => Ok(RateLock::Matured { new_rate: None }),
+        [2] => Ok(RateLock::Pending {
+            remaining_secs: None,
+            new_rate: None,
+        }),
+        _ => Err(anyhow!("Unknown lock status returned: {:?}", bytes)),
+    }
+}
+
 fn decode_wallet_key(value: &str) -> Result<(SimpleKeypair, Address)> {
     let bytes = if value.starts_with(SUI_PRIV_KEY_PREFIX) {
         let (parsed, data) =
@@ -1121,4 +1280,47 @@ async fn estimate_gas(
         price: gas_payment.price(),
         budget: min(gas_payment.budget() + GAS_BUDGET_BUFFER, MAX_GAS_BUDGET),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // values taken from LockCreated events of the mainnet market package
+    #[test]
+    fn rate_lock_selector_and_key_match_mainnet_events() {
+        let (selector, key) = rate_lock_selector_and_key(121);
+        assert_eq!(
+            hex::encode(selector),
+            "bb00c34f1a27e23493f1bd516e88ec0af9b091cc990f207e765f5bd5af012243"
+        );
+        assert_eq!(
+            hex::encode(key),
+            "e4affb857739a8fc664e0f963eec03710fb4db4b441d5c5d97cf18043a0be3b4"
+        );
+
+        let (_, key) = rate_lock_selector_and_key(173);
+        assert_eq!(
+            hex::encode(key),
+            "596f39b5621a6e2ef31829d33ec5ac6cee44f19ba7a4be4ac25a959052fbdb31"
+        );
+    }
+
+    #[test]
+    fn rate_lock_status_decoding() {
+        assert_eq!(rate_lock_from_status_bytes(&[0]).unwrap(), RateLock::None);
+        assert_eq!(
+            rate_lock_from_status_bytes(&[1]).unwrap(),
+            RateLock::Matured { new_rate: None }
+        );
+        assert_eq!(
+            rate_lock_from_status_bytes(&[2]).unwrap(),
+            RateLock::Pending {
+                remaining_secs: None,
+                new_rate: None
+            }
+        );
+        assert!(rate_lock_from_status_bytes(&[3]).is_err());
+        assert!(rate_lock_from_status_bytes(&[]).is_err());
+    }
 }

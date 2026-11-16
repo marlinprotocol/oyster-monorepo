@@ -1,6 +1,7 @@
 use std::{str::FromStr, time::Duration};
 
 use alloy::{
+    eips::BlockNumberOrTag,
     hex::ToHexExt,
     network::EthereumWallet,
     primitives::{Address, B256, FixedBytes, U256, keccak256},
@@ -21,7 +22,7 @@ use tokio::time::{Instant, sleep};
 use tracing::info;
 
 use crate::deployment::adapter::{
-    ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind,
+    ChainFunds, ChainProvider, ChainTransaction, JobData, JobTransactionKind, RateLock,
 };
 
 use super::adapter::DeploymentAdapter;
@@ -103,6 +104,35 @@ impl EvmAdapter {
                     bail!("Timed out waiting for transaction");
                 }
             }
+        }
+    }
+}
+
+/// Key of a job's rate lock in the market's `locks` mapping,
+/// `keccak256(abi.encodePacked(selector, job))` as in `LockUpgradeable`.
+pub fn rate_lock_id(selector: B256, job: B256) -> B256 {
+    let mut data = [0u8; 64];
+    data[..32].copy_from_slice(selector.as_slice());
+    data[32..].copy_from_slice(job.as_slice());
+    keccak256(data)
+}
+
+/// Mirrors `LockUpgradeable._lockStatus`: no lock when the unlock time is 0,
+/// matured when `unlockTime <= block.timestamp`, pending otherwise.
+pub fn rate_lock_from_unlock_time(unlock_time: U256, new_rate: U256, now: u64) -> RateLock {
+    if unlock_time.is_zero() {
+        return RateLock::None;
+    }
+
+    let unlock_time = unlock_time.saturating_to::<u64>();
+    if unlock_time <= now {
+        RateLock::Matured {
+            new_rate: Some(new_rate),
+        }
+    } else {
+        RateLock::Pending {
+            remaining_secs: Some(unlock_time - now),
+            new_rate: Some(new_rate),
         }
     }
 }
@@ -197,6 +227,68 @@ impl DeploymentAdapter for EvmAdapter {
             rate: job.rate,
             last_settled: job.lastSettled.saturating_to::<i64>(),
         }))
+    }
+
+    async fn get_rate_lock(&self, job_id: &str, provider: &ChainProvider) -> Result<RateLock> {
+        let ChainProvider::Evm(provider) = provider else {
+            return Err(anyhow!("Internal error"));
+        };
+
+        let market_address = Address::from_str(&self.market_address)?;
+        let market = OysterMarket::new(market_address, provider);
+        let job: B256 = job_id.parse().context("Failed to parse job ID")?;
+
+        let selector = market
+            .RATE_LOCK_SELECTOR()
+            .call()
+            .await
+            .context("Failed to fetch rate lock selector")?;
+        let lock = market
+            .locks(rate_lock_id(selector, job))
+            .call()
+            .await
+            .context("Failed to fetch rate lock")?;
+
+        if lock.unlockTime.is_zero() {
+            return Ok(RateLock::None);
+        }
+
+        // compare against the chain's clock, the contract checks block.timestamp
+        let now = provider
+            .get_block_by_number(BlockNumberOrTag::Latest)
+            .await
+            .context("Failed to fetch latest block")?
+            .ok_or_else(|| anyhow!("Latest block not found"))?
+            .header
+            .timestamp;
+
+        Ok(rate_lock_from_unlock_time(
+            lock.unlockTime,
+            lock.iValue,
+            now,
+        ))
+    }
+
+    async fn get_rate_lock_wait_time(&self, provider: &ChainProvider) -> Result<u64> {
+        let ChainProvider::Evm(provider) = provider else {
+            return Err(anyhow!("Internal error"));
+        };
+
+        let market_address = Address::from_str(&self.market_address)?;
+        let market = OysterMarket::new(market_address, provider);
+
+        let selector = market
+            .RATE_LOCK_SELECTOR()
+            .call()
+            .await
+            .context("Failed to fetch rate lock selector")?;
+        let wait_time = market
+            .lockWaitTime(selector)
+            .call()
+            .await
+            .context("Failed to fetch rate lock wait time")?;
+
+        Ok(wait_time.saturating_to::<u64>())
     }
 
     async fn prepare_funds(
@@ -355,5 +447,49 @@ impl DeploymentAdapter for EvmAdapter {
         self.sender_address
             .map(|addr| addr.to_string())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::b256;
+
+    #[test]
+    fn rate_lock_id_is_keccak_of_selector_and_job() {
+        // keccak256("RATE_LOCK") ++ bytes32(1)
+        let selector = keccak256("RATE_LOCK");
+        let job = b256!("0000000000000000000000000000000000000000000000000000000000000001");
+        let mut packed = Vec::new();
+        packed.extend_from_slice(selector.as_slice());
+        packed.extend_from_slice(job.as_slice());
+        assert_eq!(rate_lock_id(selector, job), keccak256(&packed));
+        assert_ne!(rate_lock_id(selector, job), rate_lock_id(job, selector));
+    }
+
+    #[test]
+    fn rate_lock_status_follows_the_contract() {
+        let zero = U256::ZERO;
+        assert_eq!(rate_lock_from_unlock_time(zero, zero, 1000), RateLock::None);
+        assert_eq!(
+            rate_lock_from_unlock_time(U256::from(1300), zero, 1000),
+            RateLock::Pending {
+                remaining_secs: Some(300),
+                new_rate: Some(zero)
+            }
+        );
+        // unlockTime == block.timestamp is already unlocked
+        assert_eq!(
+            rate_lock_from_unlock_time(U256::from(1000), zero, 1000),
+            RateLock::Matured {
+                new_rate: Some(zero)
+            }
+        );
+        assert_eq!(
+            rate_lock_from_unlock_time(U256::from(900), U256::from(7), 1000),
+            RateLock::Matured {
+                new_rate: Some(U256::from(7))
+            }
+        );
     }
 }

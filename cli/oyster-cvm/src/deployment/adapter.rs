@@ -31,6 +31,28 @@ pub struct JobData {
     pub last_settled: i64,
 }
 
+/// State of the rate revision lock of a job, as the market contract sees it.
+///
+/// `oyster-cvm stop` creates this lock with a new rate of 0 and may close the
+/// job only once it has matured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLock {
+    /// No rate revision has been requested.
+    None,
+    /// A rate revision was requested and its notice period is still running.
+    Pending {
+        /// Seconds left on the chain's clock, when the chain exposes the unlock time.
+        remaining_secs: Option<u64>,
+        /// Rate the job is being revised to, when the chain exposes it.
+        new_rate: Option<U256>,
+    },
+    /// The notice period is over, the job can be closed.
+    Matured {
+        /// Rate the job is being revised to, when the chain exposes it.
+        new_rate: Option<U256>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum JobTransactionKind {
     Create {
@@ -74,6 +96,11 @@ pub trait DeploymentAdapter: Send + Sync {
         job_id: String,
         provider: &ChainProvider,
     ) -> Result<Option<JobData>>;
+
+    /// Reads the rate revision lock of a job from the chain.
+    async fn get_rate_lock(&self, job_id: &str, provider: &ChainProvider) -> Result<RateLock>;
+    /// Notice period, in seconds, between a rate revision request and its finalization.
+    async fn get_rate_lock_wait_time(&self, provider: &ChainProvider) -> Result<u64>;
 
     async fn prepare_funds(
         &self,
