@@ -223,6 +223,14 @@ pub async fn execute(
     })?)
 }
 
+// Kill the worker and wait for it, a killed child stays as a zombie process until it is waited for
+pub fn terminate(child: &mut Child) -> std::io::Result<()> {
+    child.kill()?;
+    child.wait()?;
+
+    Ok(())
+}
+
 // Wait until the cgroup port is exposed with the user code endpoint
 pub async fn wait_for_port(port: u16) -> bool {
     let start_time = Instant::now();
@@ -434,6 +442,21 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.len(), MAX_OUTPUT_BYTES_LENGTH + 1);
+    }
+
+    #[test]
+    fn terminated_worker_is_reaped() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("100")
+            .spawn()
+            .unwrap();
+        let proc_path = format!("/proc/{}", child.id());
+        assert!(std::path::Path::new(&proc_path).exists());
+
+        terminate(&mut child).unwrap();
+
+        // A zombie process would still have its entry
+        assert!(!std::path::Path::new(&proc_path).exists());
     }
 
     #[tokio::test]
