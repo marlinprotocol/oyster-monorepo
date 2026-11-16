@@ -34,10 +34,19 @@ Supported outputs:
 Usage: init-params-decoder [OPTIONS]
 
 Options:
-      --init-params-path <INIT_PARAMS_PATH>  Init params file [default: /app/init-params]
-      --derive-endpoint <DERIVE_ENDPOINT>    Derive server endpoint [default: http://127.0.0.1:1100]
-  -h, --help                                 Print help
+      --init-params-path <INIT_PARAMS_PATH>
+          Init params file [default: /app/init-params]
+      --derive-endpoint <DERIVE_ENDPOINT>
+          Derive server endpoint [default: http://127.0.0.1:1100]
+      --output-dir <OUTPUT_DIR>
+          Directory to write the decoded params into, the digest always uses /init-params [default: /init-params]
+      --key-fetch-timeout-secs <KEY_FETCH_TIMEOUT_SECS>
+          How long to keep retrying the derive server for the decryption key, only used if there are encrypted params [default: 600]
+  -h, --help
+          Print help
 ```
+
+The derive server is contacted only if at least one param has `should_decrypt` set. The request is retried with backoff till the timeout runs out, nothing is written if the key could not be fetched.
 
 ## Example
 
