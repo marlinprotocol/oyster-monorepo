@@ -200,6 +200,7 @@
         derive-server = kms.derive-server.compressed;
         init-params-decoder = initialization.init-params-decoder.compressed;
         kernels = kernels.tuna;
+        pcr-utils = initialization.pcr-utils.compressed;
       };
       enclaves.blue = nixpkgs.legacyPackages.${systemConfig.system}.callPackage ./enclaves/blue {
         inherit nixpkgs systemConfig nitro-util;
