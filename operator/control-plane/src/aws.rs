@@ -63,8 +63,10 @@ impl Aws {
         }
     }
 
-    async fn client(&self, region: &str) -> &aws_sdk_ec2::Client {
-        &self.clients[region]
+    fn client(&self, region: &str) -> Result<&aws_sdk_ec2::Client> {
+        self.clients
+            .get(region)
+            .ok_or_else(|| anyhow!("region {region} is not configured"))
     }
 
     pub async fn generate_key_pair(&self) -> Result<()> {
@@ -135,8 +137,7 @@ impl Aws {
             .read_to_end(&mut buffer)
             .context("Failed to read pub key file")?;
 
-        self.client(region)
-            .await
+        self.client(region)?
             .import_key_pair()
             .key_name(&self.key_name)
             .public_key_material(aws_sdk_ec2::primitives::Blob::new(buffer))
@@ -149,8 +150,7 @@ impl Aws {
 
     async fn check_key_pair(&self, region: &str) -> Result<bool> {
         Ok(!self
-            .client(region)
-            .await
+            .client(region)?
             .describe_key_pairs()
             .filters(
                 Filter::builder()
@@ -465,10 +465,11 @@ impl Aws {
         let rules: Vec<&str> = stdout.trim().split('\n').map(|s| s.trim()).collect();
 
         for i in 0..2 {
-            if rules[i] != iptables_rules[i] {
+            let rule = rules.get(i).copied().unwrap_or("");
+            if rule != iptables_rules[i] {
                 return Err(anyhow!(
                     "Failed to match rule: got '{}' expected '{}'",
-                    rules[i],
+                    rule,
                     iptables_rules[i],
                 ));
             }
@@ -741,8 +742,10 @@ EOF
             serde_json::from_str(&stdout).context("could not parse enclave description")?;
 
         if let Some(item) = enclave_data.first() {
-            if item["Measurements"] == eif_data["Measurements"]
-                && item["Flags"] == (if debug { "DEBUG_MODE" } else { "NONE" })
+            let flags = if debug { "DEBUG_MODE" } else { "NONE" };
+            if item.get("Measurements").is_some()
+                && item.get("Measurements") == eif_data.get("Measurements")
+                && item.get("Flags").and_then(Value::as_str) == Some(flags)
             {
                 // same enclave, correct debug mode, just return
                 return Ok(());
@@ -793,8 +796,7 @@ EOF
 
     pub async fn get_instance_ip(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(
                 Filter::builder()
@@ -867,8 +869,7 @@ EOF
             .context("could not get subnet")?;
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .run_instances()
             .image_id(instance_ami)
             .instance_type(instance_type)
@@ -894,8 +895,7 @@ EOF
 
     async fn terminate_instance(&self, instance_id: &str, region: &str) -> Result<()> {
         let _ = self
-            .client(region)
-            .await
+            .client(region)?
             .terminate_instances()
             .instance_ids(instance_id)
             .send()
@@ -916,8 +916,7 @@ EOF
             .build();
 
         let own_ami = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_images()
             .owners("self")
             .filters(project_filter)
@@ -954,8 +953,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_images()
             .owners(owner)
             .filters(name_filter)
@@ -979,8 +977,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_security_groups()
             .filters(filter)
             .send()
@@ -1002,8 +999,7 @@ EOF
             .build();
 
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_subnets()
             .filters(filter)
             .send()
@@ -1037,8 +1033,7 @@ EOF
             .values(&job.contract)
             .build();
         let res = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(job_filter)
             .filters(operator_filter)
@@ -1076,8 +1071,7 @@ EOF
 
     pub async fn get_instance_state(&self, instance_id: &str, region: &str) -> Result<String> {
         Ok(self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instances()
             .filters(
                 Filter::builder()
@@ -1160,8 +1154,7 @@ EOF
             .build();
 
         let resp = self
-            .client(region)
-            .await
+            .client(region)?
             .allocate_address()
             .domain(DomainType::Vpc)
             .tag_specifications(tags)
@@ -1200,8 +1193,7 @@ EOF
 
         Ok(
             match self
-                .client(region)
-                .await
+                .client(region)?
                 .describe_addresses()
                 .filters(job_filter)
                 .filters(operator_filter)
@@ -1242,8 +1234,7 @@ EOF
 
         Ok(
             match self
-                .client(region)
-                .await
+                .client(region)?
                 .describe_addresses()
                 .filters(instance_id_filter)
                 .send()
@@ -1275,8 +1266,7 @@ EOF
         alloc_id: &str,
         region: &str,
     ) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .associate_address()
             .allocation_id(alloc_id)
             .instance_id(instance_id)
@@ -1287,8 +1277,7 @@ EOF
     }
 
     async fn disassociate_address(&self, association_id: &str, region: &str) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .disassociate_address()
             .association_id(association_id)
             .send()
@@ -1298,8 +1287,7 @@ EOF
     }
 
     async fn release_address(&self, alloc_id: &str, region: &str) -> Result<()> {
-        self.client(region)
-            .await
+        self.client(region)?
             .release_address()
             .allocation_id(alloc_id)
             .send()
@@ -1383,8 +1371,7 @@ EOF
         let instance_type =
             InstanceType::from_str(instance_type).context("cannot parse instance type")?;
         let resp = self
-            .client(region)
-            .await
+            .client(region)?
             .describe_instance_types()
             .instance_types(instance_type.clone())
             .send()

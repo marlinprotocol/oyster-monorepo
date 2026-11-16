@@ -746,6 +746,13 @@ impl<'a> JobState<'a> {
             true
         } else {
             // terminate mode
+            if !self.allowed_regions.contains(&self.region) {
+                // instances are only ever launched in allowed regions
+                // nothing to terminate, and the provider has no client for this region
+                info!(self.region, "Region not supported, nothing to terminate");
+                return true;
+            }
+
             let res = infra_provider.spin_down(&self.job_id, &self.region).await;
             if let Err(err) = res {
                 error!(?err, "Failed to terminate instance");
@@ -1273,8 +1280,10 @@ mod tests {
             .collect();
 
         let (tx, rx) = mpsc::channel::<JobEvent>(10);
-        let mut aws: TestAws = Default::default();
+        let mut aws = TestAws::new(&job_manager_params.allowed_regions);
         let job_registry = market::JobRegistry::new_test();
+        let job_registry_handle = job_registry.clone();
+        let job_id = job_manager_params.job_id.id.clone();
 
         tokio::spawn(async move {
             for (moment, event) in job_logs {
@@ -1303,6 +1312,12 @@ mod tests {
         .await;
 
         assert!(aws.instances.is_empty());
+
+        // jobs which are done or rejected must be recorded so they are skipped on restarts
+        assert_eq!(
+            job_registry_handle.is_job_terminated(&job_id),
+            res == JobResult::Done || res == JobResult::Failed
+        );
 
         assert_eq!(res, test_results.res);
         assert_eq!(aws.outcomes, test_results.outcomes);
@@ -1649,13 +1664,42 @@ mod tests {
             address_blacklist: vec![],
         };
 
+        // the provider has no client for ap-east-1, it must not be called at all
         let test_results = TestResults {
             res: JobResult::Failed,
-            outcomes: vec![TestAwsOutcome::SpinDown(test::SpinDownOutcome {
-                time: start_time + Duration::from_secs(0),
-                job: job_id,
-                region: "ap-east-1".into(),
-            })],
+            outcomes: vec![],
+        };
+
+        run_test(start_time, logs, job_manager_params, test_results).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_invalid_metadata_default_region_not_allowed() {
+        let start_time = Instant::now();
+        let job_id = format!("{:064x}", 1);
+
+        // metadata fails to parse, the job is left with the default region
+        // which this operator does not run
+        let logs = vec![
+            (0, Action::Open("not json".to_string(), 31000000000000u64, 31000u64, 0)),
+            (505, Action::Close),
+        ];
+
+        let job_manager_params = JobManagerParams {
+            job_id: market::JobId {
+                id: job_id.clone(),
+                operator: "abc".into(),
+                contract: "xyz".into(),
+                chain: "123".into(),
+            },
+            allowed_regions: vec!["us-east-1".to_owned()],
+            address_whitelist: vec![],
+            address_blacklist: vec![],
+        };
+
+        let test_results = TestResults {
+            res: JobResult::Failed,
+            outcomes: vec![],
         };
 
         run_test(start_time, logs, job_manager_params, test_results).await;

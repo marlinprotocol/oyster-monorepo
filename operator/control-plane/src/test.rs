@@ -109,7 +109,29 @@ pub struct TestAws {
     // HashMap format - (Job, InstanceMetadata)
     pub instances: HashMap<String, InstanceMetadata>,
 
+    // regions this provider is configured for
+    pub regions: Vec<String>,
+
     counter: u64,
+}
+
+#[cfg(test)]
+impl TestAws {
+    pub fn new(regions: &[String]) -> Self {
+        Self {
+            regions: regions.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    // the real provider only has clients for the configured regions,
+    // any call with another region is a bug in the caller
+    fn check_region(&self, region: &str) {
+        assert!(
+            self.regions.iter().any(|r| r == region),
+            "infra provider called with unconfigured region {region}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +149,8 @@ impl InfraProvider for TestAws {
         debug: bool,
         init_params: &[u8],
     ) -> Result<()> {
+        self.check_region(region);
+
         let res = self.instances.get_key_value(&job.id);
         if let Some(x) = res {
             self.outcomes.push(TestAwsOutcome::SpinUp(SpinUpOutcome {
@@ -176,6 +200,8 @@ impl InfraProvider for TestAws {
     }
 
     async fn spin_down(&mut self, job: &JobId, region: &str) -> Result<()> {
+        self.check_region(region);
+
         self.outcomes
             .push(TestAwsOutcome::SpinDown(SpinDownOutcome {
                 time: Instant::now(),
@@ -188,14 +214,18 @@ impl InfraProvider for TestAws {
         Ok(())
     }
 
-    async fn get_job_ip(&self, job: &JobId, _region: &str) -> Result<String> {
+    async fn get_job_ip(&self, job: &JobId, region: &str) -> Result<String> {
+        self.check_region(region);
+
         let instance_metadata = self.instances.get(&job.id);
         instance_metadata
             .map(|x| x.ip_address.clone())
             .ok_or(anyhow!("Instance not found for job - {}", job.id))
     }
 
-    async fn check_enclave_running(&mut self, _job: &JobId, _region: &str) -> Result<bool> {
+    async fn check_enclave_running(&mut self, _job: &JobId, region: &str) -> Result<bool> {
+        self.check_region(region);
+
         Ok(true)
     }
 }
