@@ -209,17 +209,22 @@ pub async fn add_gateway_epoch_state(
 #[cfg(test)]
 pub struct MockHttpProvider {
     pub job: Option<Job>,
+    pub latest_block: u64,
 }
 
 #[cfg(test)]
 impl MockHttpProvider {
-    pub fn new(job: Option<Job>) -> Self {
-        Self { job }
+    pub fn new(job: Option<Job>, latest_block: u64) -> Self {
+        Self { job, latest_block }
     }
 }
 
 #[cfg(test)]
 impl HttpProviderLogs for MockHttpProvider {
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+        Ok(self.latest_block)
+    }
+
     async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
         if filter.has_topics() {
             let topic0 = &filter.topics[0];

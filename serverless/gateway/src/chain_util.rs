@@ -52,6 +52,7 @@ pub trait LogsProvider {
 
 pub trait HttpProviderLogs {
     async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError>;
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError>;
 }
 
 pub struct HttpProvider {
@@ -74,6 +75,10 @@ impl HttpProviderLogs for HttpProvider {
     async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
         HttpProviderLogs::get_logs(&self.provider()?, filter).await
     }
+
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+        HttpProviderLogs::get_latest_block_number(&self.provider()?).await
+    }
 }
 
 impl HttpProviderLogs for RootProvider<Http<Client>> {
@@ -81,6 +86,12 @@ impl HttpProviderLogs for RootProvider<Http<Client>> {
         Provider::get_logs(self, filter)
             .await
             .map_err(|err| ServerlessError::LogsFetchFailure(err.to_string()))
+    }
+
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+        Provider::get_block_number(self)
+            .await
+            .map_err(|err| ServerlessError::BlockNumberFetchFailure(err.to_string()))
     }
 }
 
@@ -163,6 +174,51 @@ pub async fn get_logs_in_chunks<P: HttpProviderLogs>(
     }
 
     Ok(())
+}
+
+// Fetch the logs matching the filter from the given block to the latest block, in chunks.
+pub async fn get_logs_till_latest_block<P: HttpProviderLogs>(
+    provider: &P,
+    filter: &Filter,
+    from_block: u64,
+) -> Result<Vec<Log>, ServerlessError> {
+    let mut latest_block = None;
+    let mut backoff = LOGS_CHUNK_RETRY_BACKOFF_MS;
+    for attempt in 1..=LOGS_CHUNK_MAX_ATTEMPTS {
+        let res = timeout(
+            Duration::from_secs(LOGS_CHUNK_TIMEOUT),
+            provider.get_latest_block_number(),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(ServerlessError::BlockNumberFetchFailure(format!(
+                "timed out after {} seconds",
+                LOGS_CHUNK_TIMEOUT
+            )))
+        });
+
+        match res {
+            Ok(block_number) => {
+                latest_block = Some(block_number);
+                break;
+            }
+            Err(err) => {
+                error!(
+                    "Failed to get the latest block number (attempt {} of {}) - Error: {}",
+                    attempt, LOGS_CHUNK_MAX_ATTEMPTS, err
+                );
+                if attempt == LOGS_CHUNK_MAX_ATTEMPTS {
+                    return Err(err);
+                }
+                sleep(Duration::from_millis(backoff)).await;
+                backoff = std::cmp::min(backoff * 2, LOGS_CHUNK_RETRY_MAX_BACKOFF_MS);
+            }
+        }
+    }
+
+    let mut scan = LogsScan::new(from_block, latest_block.unwrap());
+    get_logs_in_chunks(provider, filter, &mut scan).await?;
+    Ok(scan.logs)
 }
 
 pub async fn get_block_number_by_timestamp(
@@ -623,6 +679,42 @@ mod chain_util_tests {
                 ..Default::default()
             }])
         }
+
+        async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+            Ok(LOGS_BLOCK_RANGE + 100)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_till_latest_block_splits_the_range() {
+        let provider = RangeRecordingProvider::new(vec![]);
+
+        let logs = get_logs_till_latest_block(&provider, &Filter::new(), 50)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *provider.queries.lock().unwrap(),
+            vec![
+                (50, LOGS_BLOCK_RANGE + 49),
+                (LOGS_BLOCK_RANGE + 50, LOGS_BLOCK_RANGE + 100),
+            ]
+        );
+        assert_eq!(logs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_till_latest_block_returns_the_error() {
+        // the first chunk fails all its attempts
+        let max_attempts = LOGS_CHUNK_MAX_ATTEMPTS as usize;
+        let provider = RangeRecordingProvider::new((0..max_attempts).collect());
+
+        let res = get_logs_till_latest_block(&provider, &Filter::new(), 50).await;
+
+        assert_eq!(
+            res.unwrap_err(),
+            ServerlessError::LogsFetchFailure("mock failure".to_owned())
+        );
     }
 
     #[tokio::test]

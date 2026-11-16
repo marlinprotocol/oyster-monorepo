@@ -17,6 +17,8 @@ pub enum ServerlessError {
     NoSubscriptionJobFound(U256),
     #[error("Failed to get logs: {0}")]
     LogsFetchFailure(String),
+    #[error("Failed to get the block number: {0}")]
+    BlockNumberFetchFailure(String),
 
     #[cfg(test)]
     #[error("Invalid topic")]
