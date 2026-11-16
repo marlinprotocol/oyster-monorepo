@@ -109,6 +109,28 @@ impl EvmAdapter {
     }
 }
 
+/// Parses a hex encoded 32 byte private key, with or without `0x` prefix.
+/// Errors never include the key.
+pub fn parse_private_key(wallet_private_key: &str) -> Result<PrivateKeySigner> {
+    let key = wallet_private_key.trim();
+    let key = key
+        .strip_prefix("0x")
+        .or_else(|| key.strip_prefix("0X"))
+        .unwrap_or(key);
+
+    let bytes = hex::decode(key)
+        .map_err(|_| anyhow!("Failed to decode private key, it should be hex encoded"))?;
+    if bytes.len() != 32 {
+        bail!(
+            "Private key should be 32 bytes (64 hex characters), got {} bytes",
+            bytes.len()
+        );
+    }
+
+    PrivateKeySigner::from_bytes(&FixedBytes::<32>::from_slice(&bytes))
+        .context("Failed to create signer from private key")
+}
+
 /// Key of a job's rate lock in the market's `locks` mapping,
 /// `keccak256(abi.encodePacked(selector, job))` as in `LockUpgradeable`.
 pub fn rate_lock_id(selector: B256, job: B256) -> B256 {
@@ -144,12 +166,7 @@ impl DeploymentAdapter for EvmAdapter {
         &mut self,
         wallet_private_key: &str,
     ) -> Result<ChainProvider> {
-        let private_key = FixedBytes::<32>::from_slice(
-            &hex::decode(wallet_private_key).context("Failed to decode private key")?,
-        );
-
-        let signer = PrivateKeySigner::from_bytes(&private_key)
-            .context("Failed to create signer from private key")?;
+        let signer = parse_private_key(wallet_private_key)?;
         self.sender_address = Some(signer.address());
 
         let wallet = EthereumWallet::from(signer);
@@ -472,6 +489,28 @@ impl DeploymentAdapter for EvmAdapter {
 mod tests {
     use super::*;
     use alloy::primitives::b256;
+
+    #[test]
+    fn private_key_parsing() {
+        let key = "01".repeat(32);
+        let address = parse_private_key(&key).unwrap().address();
+        assert_eq!(
+            parse_private_key(&format!("0x{key}")).unwrap().address(),
+            address
+        );
+        assert_eq!(
+            parse_private_key(&format!("{key}\n")).unwrap().address(),
+            address
+        );
+
+        // wrong lengths used to panic
+        for bad in ["", "01", &"01".repeat(31), &"01".repeat(33), "zz"] {
+            let err = parse_private_key(bad).unwrap_err().to_string();
+            assert!(!err.contains("0101"), "{err}");
+        }
+        // not a valid secp256k1 scalar
+        assert!(parse_private_key(&"00".repeat(32)).is_err());
+    }
 
     #[test]
     fn rate_lock_id_is_keccak_of_selector_and_job() {
