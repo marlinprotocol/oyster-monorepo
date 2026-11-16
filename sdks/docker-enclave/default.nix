@@ -11,6 +11,7 @@
   derive-server,
   init-params-decoder,
   kernels,
+  pcr-utils,
   compose ? ./. + "/docker-compose.yml",
   dockerImages ? [],
 }: let
@@ -28,6 +29,8 @@
   deriveServer = "${derive-server}/bin/kms-derive-server";
   initParamsDecoder = "${init-params-decoder}/bin/init-params-decoder";
   vet' = "${vet}/bin/vet";
+  pcrExtender = "${pcr-utils}/bin/pcr-extender";
+  pcrLocker = "${pcr-utils}/bin/pcr-locker";
   kernel = kernels.kernel;
   kernelConfig = kernels.kernelConfig;
   nsmKo = kernels.nsmKo;
@@ -51,15 +54,18 @@
     cp ${keygenSecp256k1} $out/app/keygen-secp256k1
     cp ${deriveServer} $out/app/kms-derive-server
     cp ${initParamsDecoder} $out/app/init-params-decoder
-    cp ${setup} $out/app/setup.sh
-    chmod +x $out/app/*
-    cp ${supervisorConf} $out/etc/supervisord.conf
+    cp ${pcrExtender} $out/app/pcr-extender
+    cp ${pcrLocker} $out/app/pcr-locker
     cp ${compose} $out/app/docker-compose.yml
+    mkdir -p $out/app/docker-images
     ${
       if builtins.length dockerImages == 0
       then "# No docker images provided"
       else builtins.concatStringsSep "\n" (map (img: "cp ${img} $out/app/docker-images/") dockerImages)
     }
+    cp ${setup} $out/app/setup.sh
+    chmod +x $out/app/*
+    cp ${supervisorConf} $out/etc/supervisord.conf
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''
@@ -75,7 +81,13 @@ in {
     kernel = kernel;
     kernelConfig = kernelConfig;
     nsmKo = nsmKo;
-    cmdline = builtins.readFile nitro.blobs.${eifArch}.cmdLine;
+    cmdline = (
+      if eifArch == "aarch64"
+      then "reboot=k panic=30 pci=off nomodules console=ttyS0 random.trust_cpu=on"
+      else if eifArch == "x86_64"
+      then builtins.readFile nitro.blobs.${eifArch}.cmdLine
+      else abort "Unsupported architecture '${eifArch}'"
+    );
 
     entrypoint = "/app/setup.sh";
     env = "";
