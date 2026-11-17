@@ -68,16 +68,58 @@ enum Step {
     RpcBehind,
 }
 
-// errors from the rpc are kept apart from the rest
+// errors from the rpc and database timeouts are kept apart from the rest
 // they are retried, everything else stops the indexer
 enum StepError {
     Rpc(anyhow::Error),
+    DbTimeout(anyhow::Error),
     Fatal(anyhow::Error),
 }
 
 const IDLE_WAIT: Duration = Duration::from_secs(5);
 const RPC_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const RPC_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+// limits for the queries of the indexer's own database session
+// without them a lock held by another session, for example an idle transaction left open in psql,
+// stops the indexer with nothing in the logs
+pub const DB_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DB_STATEMENT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Sets lock and statement timeouts on the session, call after the migrations have run.
+///
+/// A query that hits either limit fails, the event loop logs it and retries the range.
+pub fn set_db_timeouts(
+    conn: &mut PgConnection,
+    lock_timeout: Duration,
+    statement_timeout: Duration,
+) -> Result<()> {
+    // one statement per query, a prepared statement can not hold two
+    diesel::sql_query(format!("SET lock_timeout = {}", lock_timeout.as_millis()))
+        .execute(conn)
+        .context("failed to set lock timeout")?;
+    diesel::sql_query(format!(
+        "SET statement_timeout = {}",
+        statement_timeout.as_millis()
+    ))
+    .execute(conn)
+    .context("failed to set statement timeout")?;
+
+    Ok(())
+}
+
+// true if the error comes from a query cancelled by lock_timeout or statement_timeout
+// postgres reports both as "canceling statement due to ... timeout"
+fn is_db_timeout(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<diesel::result::Error>(),
+            Some(diesel::result::Error::DatabaseError(_, info))
+                if info.message().starts_with("canceling statement due to")
+                    && info.message().ends_with("timeout")
+        )
+    })
+}
 
 #[instrument(level = "info", skip_all, parent = None)]
 pub fn event_loop<F, P>(
@@ -120,6 +162,13 @@ where
                 // rpc errors are expected from time to time, retry with backoff
                 // nothing was written for this range, so the retry starts from the same block
                 error!(?err, retry_in = ?backoff, "rpc error, will retry");
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, RPC_BACKOFF_MAX);
+            }
+            Err(StepError::DbTimeout(err)) => {
+                // another session holds a lock the range needs, or a query ran too long
+                // the range was rolled back, retry it with the same backoff as rpc errors
+                error!(?err, retry_in = ?backoff, "database timeout, will retry");
                 std::thread::sleep(backoff);
                 backoff = std::cmp::min(backoff * 2, RPC_BACKOFF_MAX);
             }
@@ -212,6 +261,8 @@ where
         // the transaction is rolled back at this point, nothing from the range is stored
         if err.downcast_ref::<RpcError>().is_some() {
             StepError::Rpc(err)
+        } else if is_db_timeout(&err) {
+            StepError::DbTimeout(err)
         } else {
             StepError::Fatal(err)
         }
@@ -477,6 +528,43 @@ mod tests {
         assert_eq!((last, last_synced_block(conn).unwrap()), (0, 0));
 
         // same range goes through on the next attempt
+        assert!(matches!(
+            step(conn, &mut provider, 10, &ok_handler, &mut last),
+            Ok(Step::Progress)
+        ));
+        assert_eq!((last, last_synced_block(conn).unwrap()), (5, 5));
+    }
+
+    #[test]
+    fn test_step_db_lock_is_retryable() {
+        let mut db = TestDb::new("step_db_lock", None);
+        let url = {
+            let admin_url = admin_url();
+            admin_url[..=admin_url.rfind('/').unwrap()].to_owned() + &db.name
+        };
+        let conn = &mut db.conn;
+        set_db_timeouts(conn, Duration::from_millis(500), Duration::from_secs(5)).unwrap();
+        let mut provider = TestProvider::new(vec![Ok(5), Ok(5)], vec![3]);
+        let mut last = last_synced_block(conn).unwrap();
+
+        // another session takes the sync row lock and keeps its transaction open
+        let mut other = PgConnection::establish(&url).unwrap();
+        sql_query("BEGIN").execute(&mut other).unwrap();
+        sql_query("SELECT block FROM sync FOR UPDATE")
+            .execute(&mut other)
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let result = step(conn, &mut provider, 10, &ok_handler, &mut last);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let Err(StepError::DbTimeout(err)) = result else {
+            panic!("expected a database timeout");
+        };
+        assert!(format!("{err:#}").contains("lock timeout"));
+        assert_eq!(last, 0);
+
+        // once the lock is released the same range goes through
+        sql_query("ROLLBACK").execute(&mut other).unwrap();
         assert!(matches!(
             step(conn, &mut provider, 10, &ok_handler, &mut last),
             Ok(Step::Progress)

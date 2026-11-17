@@ -12,7 +12,9 @@ use diesel::PgConnection;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 use handlers::handle_log;
-use indexer_framework::{event_loop, start_from, MIGRATIONS};
+use indexer_framework::{
+    event_loop, set_db_timeouts, start_from, DB_LOCK_TIMEOUT, DB_STATEMENT_TIMEOUT, MIGRATIONS,
+};
 use provider::SuiProvider;
 use tracing::debug;
 use tracing::error;
@@ -77,6 +79,9 @@ fn run() -> Result<()> {
         // error is not sized, pain to handle the usual way
         .map_err(|e| anyhow!("failed to apply migrations: {e}"))?;
     info!("Applied pending migrations");
+
+    // set after the migrations, which may take longer than the statement timeout
+    set_db_timeouts(&mut conn, DB_LOCK_TIMEOUT, DB_STATEMENT_TIMEOUT)?;
 
     let mut provider = SuiProvider::new(
         args.remote_checkpoint_url,
