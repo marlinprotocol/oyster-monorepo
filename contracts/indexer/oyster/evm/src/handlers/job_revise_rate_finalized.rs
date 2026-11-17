@@ -8,6 +8,8 @@ use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::state_mismatch;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -60,17 +62,17 @@ pub fn handle_job_revise_rate_finalized(
         .filter(jobs::id.eq(&id))
         .filter(jobs::is_closed.eq(false))
         .select(jobs::balance)
-        .get_result::<BigDecimal>(conn)
-        .context("failed to get job balance");
+        .get_result::<BigDecimal>(conn);
 
-    if job_balance.is_err() {
-        // !!! should never happen
-        // the only reason this would happen is if the job does not exist or is closed
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("failed to find balance for job"));
-    }
-
-    let job_balance = job_balance.unwrap();
+    let job_balance = match job_balance {
+        Ok(x) => x,
+        // the job does not exist or is closed
+        // reported as a state mismatch, the caller skips the log
+        Err(diesel::result::Error::NotFound) => {
+            return Err(state_mismatch("failed to find balance for job"));
+        }
+        Err(err) => return Err(err).context("failed to find balance for job"),
+    };
     let mut new_end_epoch = BigDecimal::from(block_timestamp);
 
     if &rate != &BigDecimal::from(0) {
@@ -98,8 +100,8 @@ pub fn handle_job_revise_rate_finalized(
         // !!! should never happen
         // we have failed to make any changes
         // the only real condition is when the job does not exist or is closed
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("could not find job"));
+        // reported as a state mismatch, the caller skips the log
+        return Err(state_mismatch("could not find job"));
     }
 
     // target sql:
@@ -111,12 +113,9 @@ pub fn handle_job_revise_rate_finalized(
         .context("failed to delete revise rate request")?;
 
     if count != 1 {
-        // !!! should never happen
         // the only real condition is when the request does not exist
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!(
-            "did not expect to find a non existent request when finalizing job rate revision"
-        ));
+        // the rate is already applied to the job above, just move on
+        warn!("did not expect to find a non existent request when finalizing job rate revision");
     }
 
     // target sql:
