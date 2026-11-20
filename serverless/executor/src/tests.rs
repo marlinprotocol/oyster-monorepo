@@ -35,7 +35,7 @@ pub mod serverless_executor_test {
 
     use crate::cgroups::Cgroups;
     use crate::constant::{EXECUTION_ENV_ID, MAX_OUTPUT_BYTES_LENGTH};
-    use crate::events::handle_event_logs;
+    use crate::events::{handle_event_logs, ProcessedLogs};
     use crate::model::{
         AppState, ExecutorsContract, JobsContract, JobsTransaction, RegistrationMessage,
     };
@@ -84,6 +84,8 @@ pub mod serverless_executor_test {
             http_rpc_txn_manager: Arc::new(Mutex::new(None)),
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
             last_block_seen: Arc::new(AtomicU64::new(0)),
+            logs_backfill_chunk_size: 10000,
+            processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
         }
     }
 

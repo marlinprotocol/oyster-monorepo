@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use JobsContract::{slashOnExecutionTimeoutCall, submitOutputCall};
 
 use crate::cgroups::Cgroups;
+use crate::constant::DEFAULT_LOGS_BACKFILL_CHUNK_SIZE;
+use crate::events::ProcessedLogs;
 
 sol!(
     #[allow(missing_docs)]
@@ -70,6 +72,12 @@ pub struct Config {
     pub enclave_signer_file: String,
     pub execution_buffer_time: u64,
     pub num_selected_executors: u8,
+    #[serde(default = "default_logs_backfill_chunk_size")]
+    pub logs_backfill_chunk_size: u64,
+}
+
+fn default_logs_backfill_chunk_size() -> u64 {
+    DEFAULT_LOGS_BACKFILL_CHUNK_SIZE
 }
 
 // App data struct containing the necessary fields to run the executor
@@ -96,6 +104,8 @@ pub struct AppState {
     pub enclave_owner: Arc<Mutex<Address>>,
     pub http_rpc_txn_manager: Arc<Mutex<Option<Arc<TxnManager>>>>,
     pub last_block_seen: Arc<AtomicU64>,
+    pub logs_backfill_chunk_size: u64,
+    pub processed_logs: Arc<Mutex<ProcessedLogs>>,
     pub job_requests_running: Arc<Mutex<HashSet<U256>>>,
 }
 

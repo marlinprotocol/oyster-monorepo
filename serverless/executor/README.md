@@ -89,7 +89,8 @@ Configuration file parameters required for running an executor node:
   "code_contract_addr": // User code calldata smart contract address on common chain,
   "enclave_signer_file": // path to enclave secp256k1 private key file,
   "execution_buffer_time": // Execution buffer time as configured on common chain (in seconds),
-  "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain
+  "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain,
+  "logs_backfill_chunk_size": // (Optional, default 10000) Maximum block range of a single 'eth_getLogs' query, lower it if the RPC provider limits the range
 }
 ```
 Example command to run the executor locally:
