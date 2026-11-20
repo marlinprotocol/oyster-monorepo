@@ -105,6 +105,8 @@ pub async fn generate_app_state() -> AppState {
         request_chain_ids: Arc::new(Mutex::new(HashSet::new())),
         registered: Arc::new(AtomicBool::new(false)),
         registration_events_listener_active: Arc::new(Mutex::new(false)),
+        registration_check_started: Arc::new(AtomicBool::new(false)),
+        registration_check_lock: Arc::new(tokio::sync::Mutex::new(())),
         epoch: EPOCH,
         time_interval: TIME_INTERVAL,
         offset_for_epoch: OFFSET_FOR_EPCOH,

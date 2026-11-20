@@ -5,20 +5,24 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::k256::elliptic_curve::generic_array::sequence::Lengthen;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::http::reqwest::Url;
-use anyhow::Context;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use log::info;
+use log::{error, info};
 use multi_block_txns::TxnManager;
 use serde_json::json;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{atomic::Ordering, Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::{sleep, timeout, Duration};
 
-use crate::contract_abi::GatewaysContract;
+use crate::constant::{
+    REGISTRATION_CHECK_RETRY_BACKOFF_MS, REGISTRATION_CHECK_RETRY_MAX_BACKOFF_MS,
+    REGISTRATION_CHECK_TIMEOUT,
+};
+use crate::contract_abi::{GatewaysContract, RelayContract};
 use crate::model::{
     AppState, ContractsClient, GatewayData, GatewayDetailsResponse, ImmutableConfig, MutableConfig,
     RequestChainData, SignedRegistrationBody, SignedRegistrationResponse,
@@ -55,8 +59,11 @@ pub async fn inject_immutable_config(
     // Initialize owner address for the enclave
     *app_state.enclave_owner.lock().unwrap() = owner_address;
     *immutable_params_injected_guard = true;
+    drop(immutable_params_injected_guard);
 
     info!("Immutable params configured!");
+
+    start_registration_check(&app_state);
 
     return (
         StatusCode::OK,
@@ -156,8 +163,12 @@ pub async fn inject_mutable_config(
     app_state
         .mutable_params_injected
         .store(true, Ordering::SeqCst);
+    drop(wallet_guard);
+    drop(contracts_client_guard);
 
     info!("Mutable params configured!");
+
+    start_registration_check(&app_state);
 
     return (StatusCode::OK, String::from("Mutable params configured!\n")).into_response();
 }
@@ -236,6 +247,28 @@ pub async fn export_signed_registration_message(
         )
             .into_response();
     };
+
+    // An enclave that is still registered on chain, e.g. after a restart of the gateway process,
+    // cannot register again, it resumes instead. The lock keeps the check started at the config
+    // injection from running at the same time.
+    let _registration_check_guard = app_state.registration_check_lock.lock().await;
+    match check_registration_and_resume(&app_state).await {
+        Ok(true) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                String::from("Enclave has already been registered.\n"),
+            )
+                .into_response();
+        }
+        Ok(false) => {}
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read the registration of the enclave: {}\n", err),
+            )
+                .into_response();
+        }
+    }
 
     // generate common chain signature
     let enclave_owner = app_state.enclave_owner.lock().unwrap().clone();
@@ -355,104 +388,13 @@ pub async fn export_signed_registration_message(
         ).into_response();
     };
 
-    let mut request_chains_data: HashMap<u64, RequestChainData> = HashMap::new();
-
     let gas_wallet_hex = app_state.wallet.read().unwrap().clone();
 
-    let gateways_contract = Arc::new(GatewaysContract::new(
-        app_state.gateways_contract_addr,
-        common_chain_http_provider.clone(),
-    ));
-
-    // iterate over all chain ids and get their registration signatures
-    for &chain_id in &chain_ids {
-        // get request chain rpc url
-        let request_chain_info = match gateways_contract
-            .requestChains(U256::from(chain_id))
-            .call()
-            .await
-        {
-            Ok(info) => info,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!(
-                        "Failed to fetch the request chain data for chain id {}: {}\n",
-                        chain_id, e
-                    ),
-                )
-                    .into_response();
-            }
+    let request_chains_data =
+        match fetch_request_chains_data(&app_state, &chain_ids, &gas_wallet_hex).await {
+            Ok(request_chains_data) => request_chains_data,
+            Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
         };
-
-        let request_chain_http_provider = ProviderBuilder::new()
-            .on_builtin(&request_chain_info.httpRpcUrl)
-            .await;
-
-        let Ok(request_chain_http_provider) = request_chain_http_provider else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Failed to connect to the request chain {} http rpc server {}: {}\n",
-                    chain_id,
-                    request_chain_info.httpRpcUrl,
-                    request_chain_http_provider.unwrap_err()
-                ),
-            )
-                .into_response();
-        };
-
-        let block_number = request_chain_http_provider
-            .get_block_number()
-            .await
-            .context(format!(
-                "Failed to get the latest block number of the request chain {}",
-                chain_id
-            ))
-            .unwrap();
-
-        drop(request_chain_http_provider);
-
-        let request_chain_txn_manager = TxnManager::new(
-            request_chain_info.httpRpcUrl.to_string(),
-            chain_id,
-            gas_wallet_hex.clone(),
-            None,
-            None,
-            None,
-            None,
-        );
-
-        let Ok(request_chain_txn_manager) = request_chain_txn_manager else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Failed to create txn manager for request chain {}\n",
-                    chain_id
-                ),
-            )
-                .into_response();
-        };
-
-        let mut ws_rpc_url = request_chain_info.wsRpcUrl.to_string().clone();
-        if !ws_rpc_url.ends_with('/') {
-            ws_rpc_url.push('/');
-        }
-        request_chains_data.insert(
-            chain_id,
-            RequestChainData {
-                chain_id,
-                relay_address: request_chain_info.relayAddress.clone(),
-                relay_subscriptions_address: request_chain_info.relaySubscriptionsAddress.clone(),
-                ws_rpc_url,
-                http_rpc_url: request_chain_info.httpRpcUrl.to_string().clone(),
-                request_chain_start_block_number: block_number,
-                confirmation_blocks: 5,
-                last_seen_block: Arc::new(0.into()),
-                request_chain_txn_manager,
-            },
-        );
-    }
 
     let mut request_chain_ids_guard = app_state.request_chain_ids.lock().unwrap();
     if request_chain_ids_guard.is_empty() {
@@ -479,72 +421,17 @@ pub async fn export_signed_registration_message(
     if *registration_events_listener_active_guard == false {
         let mut contracts_client_guard = app_state.contracts_client.lock().unwrap();
 
-        let gateway_epoch_state: Arc<RwLock<BTreeMap<u64, BTreeMap<Address, GatewayData>>>> =
-            Arc::new(RwLock::new(BTreeMap::new()));
-        let gateway_epoch_state_waitlist = Arc::new(RwLock::new(HashMap::new()));
-
-        let subscription_job_instance_heap = Arc::new(RwLock::new(BinaryHeap::new()));
-        let subscription_jobs = Arc::new(RwLock::new(HashMap::new()));
-
-        if *gas_wallet_hex != *app_state.wallet.read().unwrap() {
-            for request_chain_data in request_chains_data.values_mut() {
-                let res = request_chain_data
-                    .request_chain_txn_manager
-                    .update_private_signer(gas_wallet_hex.clone());
-                if let Err(e) = res {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, String::from(format!(
-                        "Failed to update the private signer for the request chain txn manager: {}\n",
-                        e
-                    ))).into_response();
-                }
-            }
-        }
-
-        let common_chain_txn_manager = TxnManager::new(
-            app_state.common_chain_http_url.clone(),
-            app_state.common_chain_id,
-            app_state.wallet.read().unwrap().clone(),
-            None,
-            None,
-            None,
-            None,
-        );
-
-        let Ok(common_chain_txn_manager) = common_chain_txn_manager else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Failed to create txn manager for common chain {}\n",
-                    app_state.common_chain_id
-                ),
-            )
-                .into_response();
-        };
-
-        let contracts_client = Arc::new(ContractsClient {
+        let contracts_client = match new_contracts_client(
+            &app_state,
             enclave_owner,
-            enclave_signer_key: app_state.enclave_signer_key.clone(),
-            enclave_address: app_state.enclave_address,
-            common_chain_ws_url: app_state.common_chain_ws_url.clone(),
-            common_chain_http_url: app_state.common_chain_http_url.clone(),
-            common_chain_txn_manager,
-            gateways_contract_address: app_state.gateways_contract_addr,
-            gateway_jobs_contract_address: app_state.gateway_jobs_contract_addr,
-            request_chains_data: Arc::new(RwLock::new(request_chains_data)),
-            gateway_epoch_state,
-            request_chain_ids: chain_ids.clone(),
-            active_jobs: Arc::new(RwLock::new(HashMap::new())),
-            current_jobs: Arc::new(RwLock::new(HashMap::new())),
-            epoch: app_state.epoch,
-            time_interval: app_state.time_interval,
-            offset_for_epoch: app_state.offset_for_epoch,
-            gateways_start_block: app_state.gateways_start_block,
-            gateway_epoch_state_waitlist,
-            common_chain_start_block_number: Arc::new(Mutex::new(common_chain_block_number)),
-            subscription_job_instance_heap,
-            subscription_jobs,
-            ws_api_key: app_state.ws_api_key.clone(),
-        });
+            &chain_ids,
+            request_chains_data,
+            &gas_wallet_hex,
+            common_chain_block_number,
+        ) {
+            Ok(contracts_client) => contracts_client,
+            Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+        };
 
         *contracts_client_guard = Some(Arc::clone(&contracts_client));
 
@@ -567,6 +454,418 @@ pub async fn export_signed_registration_message(
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+// Read the request chain data from the Gateways contract and create a txn manager for each of the
+// given request chains. The errors are returned as the text of the http response.
+async fn fetch_request_chains_data(
+    app_state: &AppState,
+    chain_ids: &HashSet<u64>,
+    gas_wallet_hex: &str,
+) -> Result<HashMap<u64, RequestChainData>, String> {
+    let common_chain_http_provider = ProviderBuilder::new().on_http(
+        Url::parse(&app_state.common_chain_http_url)
+            .map_err(|err| format!("Invalid common chain http url: {}\n", err))?,
+    );
+
+    let gateways_contract =
+        GatewaysContract::new(app_state.gateways_contract_addr, common_chain_http_provider);
+
+    let mut request_chains_data: HashMap<u64, RequestChainData> = HashMap::new();
+
+    for &chain_id in chain_ids {
+        // get request chain rpc url
+        let request_chain_info = gateways_contract
+            .requestChains(U256::from(chain_id))
+            .call()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to fetch the request chain data for chain id {}: {}\n",
+                    chain_id, e
+                )
+            })?;
+
+        let request_chain_http_provider = ProviderBuilder::new()
+            .on_builtin(&request_chain_info.httpRpcUrl)
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to connect to the request chain {} http rpc server {}: {}\n",
+                    chain_id, request_chain_info.httpRpcUrl, e
+                )
+            })?;
+
+        let block_number = request_chain_http_provider
+            .get_block_number()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to get the latest block number of the request chain {}: {}\n",
+                    chain_id, e
+                )
+            })?;
+
+        drop(request_chain_http_provider);
+
+        let request_chain_txn_manager = TxnManager::new(
+            request_chain_info.httpRpcUrl.to_string(),
+            chain_id,
+            gas_wallet_hex.to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| {
+            format!(
+                "Failed to create txn manager for request chain {}\n",
+                chain_id
+            )
+        })?;
+
+        let mut ws_rpc_url = request_chain_info.wsRpcUrl.to_string().clone();
+        if !ws_rpc_url.ends_with('/') {
+            ws_rpc_url.push('/');
+        }
+        request_chains_data.insert(
+            chain_id,
+            RequestChainData {
+                chain_id,
+                relay_address: request_chain_info.relayAddress.clone(),
+                relay_subscriptions_address: request_chain_info.relaySubscriptionsAddress.clone(),
+                ws_rpc_url,
+                http_rpc_url: request_chain_info.httpRpcUrl.to_string().clone(),
+                request_chain_start_block_number: block_number,
+                confirmation_blocks: 5,
+                last_seen_block: Arc::new(0.into()),
+                request_chain_txn_manager,
+            },
+        );
+    }
+
+    Ok(request_chains_data)
+}
+
+// Create the contracts client that serves the gateway once it is registered.
+// The errors are returned as the text of the http response.
+fn new_contracts_client(
+    app_state: &AppState,
+    enclave_owner: Address,
+    chain_ids: &HashSet<u64>,
+    mut request_chains_data: HashMap<u64, RequestChainData>,
+    gas_wallet_hex: &str,
+    common_chain_block_number: u64,
+) -> Result<Arc<ContractsClient>, String> {
+    let gateway_epoch_state: Arc<RwLock<BTreeMap<u64, BTreeMap<Address, GatewayData>>>> =
+        Arc::new(RwLock::new(BTreeMap::new()));
+    let gateway_epoch_state_waitlist = Arc::new(RwLock::new(HashMap::new()));
+
+    let subscription_job_instance_heap = Arc::new(RwLock::new(BinaryHeap::new()));
+    let subscription_jobs = Arc::new(RwLock::new(HashMap::new()));
+
+    // the gas key can be updated while the request chains data is fetched
+    if gas_wallet_hex != app_state.wallet.read().unwrap().as_str() {
+        for request_chain_data in request_chains_data.values_mut() {
+            let res = request_chain_data
+                .request_chain_txn_manager
+                .update_private_signer(gas_wallet_hex.to_string());
+            if let Err(e) = res {
+                return Err(format!(
+                    "Failed to update the private signer for the request chain txn manager: {}\n",
+                    e
+                ));
+            }
+        }
+    }
+
+    let common_chain_txn_manager = TxnManager::new(
+        app_state.common_chain_http_url.clone(),
+        app_state.common_chain_id,
+        app_state.wallet.read().unwrap().clone(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .map_err(|_| {
+        format!(
+            "Failed to create txn manager for common chain {}\n",
+            app_state.common_chain_id
+        )
+    })?;
+
+    Ok(Arc::new(ContractsClient {
+        enclave_owner,
+        enclave_signer_key: app_state.enclave_signer_key.clone(),
+        enclave_address: app_state.enclave_address,
+        common_chain_ws_url: app_state.common_chain_ws_url.clone(),
+        common_chain_http_url: app_state.common_chain_http_url.clone(),
+        common_chain_txn_manager,
+        gateways_contract_address: app_state.gateways_contract_addr,
+        gateway_jobs_contract_address: app_state.gateway_jobs_contract_addr,
+        request_chains_data: Arc::new(RwLock::new(request_chains_data)),
+        gateway_epoch_state,
+        request_chain_ids: chain_ids.clone(),
+        active_jobs: Arc::new(RwLock::new(HashMap::new())),
+        current_jobs: Arc::new(RwLock::new(HashMap::new())),
+        epoch: app_state.epoch,
+        time_interval: app_state.time_interval,
+        offset_for_epoch: app_state.offset_for_epoch,
+        gateways_start_block: app_state.gateways_start_block,
+        gateway_epoch_state_waitlist,
+        common_chain_start_block_number: Arc::new(Mutex::new(common_chain_block_number)),
+        subscription_job_instance_heap,
+        subscription_jobs,
+        ws_api_key: app_state.ws_api_key.clone(),
+    }))
+}
+
+// Registration of the enclave found on chain at start-up
+#[derive(Debug, PartialEq)]
+pub enum RegistrationState {
+    // not registered on the common chain, it is registered with a signed registration message
+    NotRegistered,
+    // registered on the common chain with another owner than the injected one
+    OwnerMismatch(Address),
+    // registered on the common chain, but not with this owner on these request chains
+    RequestChainsNotRegistered(Vec<u64>),
+    Registered,
+}
+
+// Decide from the owners read on chain whether the gateway can resume serving as registered.
+pub fn registration_state(
+    enclave_owner: Address,
+    common_chain_owner: Address,
+    request_chain_owners: &BTreeMap<u64, Address>,
+) -> RegistrationState {
+    if common_chain_owner == Address::ZERO {
+        return RegistrationState::NotRegistered;
+    }
+
+    if common_chain_owner != enclave_owner {
+        return RegistrationState::OwnerMismatch(common_chain_owner);
+    }
+
+    let not_registered: Vec<u64> = request_chain_owners
+        .iter()
+        .filter(|(_, &owner)| owner != enclave_owner)
+        .map(|(&chain_id, _)| chain_id)
+        .collect();
+    if !not_registered.is_empty() {
+        return RegistrationState::RequestChainsNotRegistered(not_registered);
+    }
+
+    RegistrationState::Registered
+}
+
+// Start the check of the on chain registration once both configs are injected.
+// It runs once per process.
+fn start_registration_check(app_state: &AppState) {
+    if !*app_state.immutable_params_injected.lock().unwrap()
+        || !app_state.mutable_params_injected.load(Ordering::SeqCst)
+    {
+        return;
+    }
+
+    if app_state
+        .registration_check_started
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    let app_state = app_state.clone();
+    tokio::spawn(async move {
+        resume_registration(app_state).await;
+    });
+}
+
+// After a restart of the gateway process the enclave key is still registered on chain, so no
+// GatewayRegistered event comes. Read the registration from the contracts and, if this enclave
+// is registered with the injected owner, serve it again without a new registration.
+// RPC errors are retried with a backoff.
+pub async fn resume_registration(app_state: AppState) {
+    let mut backoff = REGISTRATION_CHECK_RETRY_BACKOFF_MS;
+    loop {
+        let res = {
+            let _registration_check_guard = app_state.registration_check_lock.lock().await;
+            check_registration_and_resume(&app_state).await
+        };
+
+        match res {
+            Ok(_) => return,
+            Err(err) => {
+                error!(
+                    "Failed to read the registration of the enclave, retrying in {} ms - Error: {}",
+                    backoff,
+                    err.trim_end()
+                );
+                sleep(Duration::from_millis(backoff)).await;
+                backoff = std::cmp::min(backoff * 2, REGISTRATION_CHECK_RETRY_MAX_BACKOFF_MS);
+            }
+        }
+    }
+}
+
+// Read the registration of the enclave from the contracts and resume serving it if it is
+// registered. Returns whether the gateway is now serving the registered enclave.
+// The caller holds the registration check lock.
+async fn check_registration_and_resume(app_state: &AppState) -> Result<bool, String> {
+    timeout(
+        Duration::from_secs(REGISTRATION_CHECK_TIMEOUT),
+        check_registration_and_resume_inner(app_state),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(format!(
+            "timed out after {} seconds",
+            REGISTRATION_CHECK_TIMEOUT
+        ))
+    })
+}
+
+async fn check_registration_and_resume_inner(app_state: &AppState) -> Result<bool, String> {
+    if app_state.registered.load(Ordering::SeqCst) {
+        return Ok(true);
+    }
+
+    let enclave_owner = *app_state.enclave_owner.lock().unwrap();
+    let enclave_address = app_state.enclave_address;
+
+    let common_chain_http_provider = ProviderBuilder::new().on_http(
+        Url::parse(&app_state.common_chain_http_url)
+            .map_err(|err| format!("Invalid common chain http url: {}", err))?,
+    );
+    let gateways_contract = GatewaysContract::new(
+        app_state.gateways_contract_addr,
+        common_chain_http_provider.clone(),
+    );
+
+    let common_chain_owner = gateways_contract
+        .gateways(enclave_address)
+        .call()
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to read the gateway from the Gateways contract: {}",
+                err
+            )
+        })?
+        .owner;
+
+    // only the common chain is read before deciding when the enclave is not registered there
+    let state = registration_state(enclave_owner, common_chain_owner, &BTreeMap::new());
+    if state != RegistrationState::Registered {
+        log_registration_state(&state);
+        return Ok(false);
+    }
+
+    let chain_ids: HashSet<u64> = gateways_contract
+        .getGatewayChainIds(enclave_address)
+        .call()
+        .await
+        .map_err(|err| format!("Failed to read the chain ids of the gateway: {}", err))?
+        ._0
+        .iter()
+        .map(|chain_id| chain_id.to::<u64>())
+        .collect();
+
+    let common_chain_block_number = common_chain_http_provider
+        .get_block_number()
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to get the latest block number of the common chain: {}",
+                err
+            )
+        })?;
+
+    let gas_wallet_hex = app_state.wallet.read().unwrap().clone();
+    let request_chains_data =
+        fetch_request_chains_data(app_state, &chain_ids, &gas_wallet_hex).await?;
+
+    let mut request_chain_owners: BTreeMap<u64, Address> = BTreeMap::new();
+    for request_chain_data in request_chains_data.values() {
+        let provider = ProviderBuilder::new()
+            .on_builtin(&request_chain_data.http_rpc_url)
+            .await
+            .map_err(|err| {
+                format!(
+                    "Failed to connect to the request chain {} http rpc server: {}",
+                    request_chain_data.chain_id, err
+                )
+            })?;
+        let owner = RelayContract::new(request_chain_data.relay_address, provider)
+            .gatewayOwners(enclave_address)
+            .call()
+            .await
+            .map_err(|err| {
+                format!(
+                    "Failed to read the gateway owner on request chain {}: {}",
+                    request_chain_data.chain_id, err
+                )
+            })?
+            ._0;
+        request_chain_owners.insert(request_chain_data.chain_id, owner);
+    }
+
+    let state = registration_state(enclave_owner, common_chain_owner, &request_chain_owners);
+    if state != RegistrationState::Registered {
+        log_registration_state(&state);
+        return Ok(false);
+    }
+
+    let mut registration_events_listener_active_guard = app_state
+        .registration_events_listener_active
+        .lock()
+        .unwrap();
+    // a signed registration message was exported before, that flow serves the gateway
+    if *registration_events_listener_active_guard {
+        info!("Registration is already being handled, not resuming from the on chain registration");
+        return Ok(false);
+    }
+
+    let contracts_client = new_contracts_client(
+        app_state,
+        enclave_owner,
+        &chain_ids,
+        request_chains_data,
+        &gas_wallet_hex,
+        common_chain_block_number,
+    )?;
+
+    *app_state.request_chain_ids.lock().unwrap() = chain_ids.clone();
+    *app_state.contracts_client.lock().unwrap() = Some(Arc::clone(&contracts_client));
+    app_state.registered.store(true, Ordering::SeqCst);
+    *registration_events_listener_active_guard = true;
+
+    info!(
+        "Enclave is registered on the common chain and request chains {:?}, resuming",
+        chain_ids
+    );
+    tokio::spawn(async move {
+        let _ = contracts_client.run().await;
+    });
+
+    Ok(true)
+}
+
+fn log_registration_state(state: &RegistrationState) {
+    match state {
+        RegistrationState::NotRegistered => {
+            info!("Enclave is not registered on the common chain, waiting for a registration")
+        }
+        RegistrationState::OwnerMismatch(owner) => error!(
+            "Enclave is registered on the common chain with owner {:?}, which is not the injected owner, not resuming",
+            owner
+        ),
+        RegistrationState::RequestChainsNotRegistered(chain_ids) => error!(
+            "Enclave is registered on the common chain but not on the request chains {:?}, not resuming",
+            chain_ids
+        ),
+        RegistrationState::Registered => {}
+    }
 }
 
 // Endpoint exposed to retrieve gateway enclave details
@@ -1381,5 +1680,73 @@ mod api_impl_tests {
         assert_eq!(response.owner_address, expected_response.owner_address);
         assert_eq!(response.gas_address, expected_response.gas_address);
         assert_eq!(response.ws_api_key, expected_response.ws_api_key);
+    }
+
+    #[test]
+    fn registration_state_test() {
+        let owner = Address::from_str(OWNER_ADDRESS).unwrap();
+        let other = Address::from_str(GAS_WALLET_PUBLIC_ADDRESS).unwrap();
+
+        // not registered on the common chain, the request chains are not looked at
+        assert_eq!(
+            registration_state(owner, Address::ZERO, &BTreeMap::from([(CHAIN_ID, owner)])),
+            RegistrationState::NotRegistered
+        );
+
+        // registered by another owner
+        assert_eq!(
+            registration_state(owner, other, &BTreeMap::new()),
+            RegistrationState::OwnerMismatch(other)
+        );
+
+        // registered on the common chain only
+        assert_eq!(
+            registration_state(owner, owner, &BTreeMap::new()),
+            RegistrationState::Registered
+        );
+
+        // missing or different owner on some request chains
+        assert_eq!(
+            registration_state(
+                owner,
+                owner,
+                &BTreeMap::from([
+                    (CHAIN_ID, owner),
+                    (CHAIN_ID + 1, Address::ZERO),
+                    (CHAIN_ID + 2, other)
+                ])
+            ),
+            RegistrationState::RequestChainsNotRegistered(vec![CHAIN_ID + 1, CHAIN_ID + 2])
+        );
+
+        // registered everywhere
+        assert_eq!(
+            registration_state(
+                owner,
+                owner,
+                &BTreeMap::from([(CHAIN_ID, owner), (CHAIN_ID + 1, owner)])
+            ),
+            RegistrationState::Registered
+        );
+    }
+
+    #[tokio::test]
+    async fn registration_check_starts_once_after_both_configs() {
+        let app_state = generate_app_state().await;
+        let server = TestServer::new(new_app(app_state.clone())).unwrap();
+
+        let resp = server
+            .post("/immutable-config")
+            .json(&json!({"owner_address_hex": OWNER_ADDRESS}))
+            .await;
+        resp.assert_status_ok();
+        assert!(!app_state.registration_check_started.load(Ordering::SeqCst));
+
+        let resp = server
+            .post("/mutable-config")
+            .json(&json!({"gas_key_hex": GAS_WALLET_KEY, "ws_api_key": WS_API_KEY}))
+            .await;
+        resp.assert_status_ok();
+        assert!(app_state.registration_check_started.load(Ordering::SeqCst));
     }
 }

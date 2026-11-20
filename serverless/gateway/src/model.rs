@@ -26,6 +26,10 @@ pub struct AppState {
     pub immutable_params_injected: Arc<Mutex<bool>>,
     pub mutable_params_injected: Arc<AtomicBool>,
     pub registration_events_listener_active: Arc<Mutex<bool>>,
+    // the check of the on chain registration at start-up has been started
+    pub registration_check_started: Arc<AtomicBool>,
+    // serializes the check of the on chain registration with the export of a registration message
+    pub registration_check_lock: Arc<tokio::sync::Mutex<()>>,
     pub contracts_client: Arc<Mutex<Option<Arc<ContractsClient>>>>,
     pub ws_api_key: Arc<RwLock<String>>,
 }
