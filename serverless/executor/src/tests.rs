@@ -85,6 +85,8 @@ pub mod serverless_executor_test {
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
             last_block_seen: Arc::new(AtomicU64::new(0)),
             logs_backfill_chunk_size: 10000,
+            job_lookback_blocks: 2400,
+            catch_up_until_block: Arc::new(AtomicU64::new(0)),
             processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
         }
     }

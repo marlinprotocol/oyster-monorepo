@@ -11,3 +11,8 @@ pub const DEFAULT_LOGS_BACKFILL_CHUNK_SIZE: u64 = 10000; // Default block range 
 pub const LOGS_SWEEP_INTERVAL_SECS: u64 = 10; // Interval of the 'eth_getLogs' sweep that catches logs the subscriptions missed
 pub const RPC_REQUEST_RETRIES: u32 = 3; // Attempts of a single 'eth_getLogs' or block number query before giving up
 pub const PROCESSED_LOGS_RETAIN_BLOCKS: u64 = 50000; // Blocks for which processed logs are remembered to skip duplicates
+                                                     // Default number of blocks before the head read for 'JobCreated' logs when the executor resumes as registered.
+                                                     // A job can be answered until its deadline plus the execution buffer time after it was created, which is
+                                                     // 50s + 60s with the parameters of the serverless deploy script. 2400 blocks are 10 minutes at the fastest
+                                                     // block rate of Arbitrum (4 blocks per second), and more time when blocks are slower.
+pub const DEFAULT_JOB_LOOKBACK_BLOCKS: u64 = 2400;
