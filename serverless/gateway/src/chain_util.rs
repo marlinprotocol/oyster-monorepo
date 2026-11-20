@@ -11,6 +11,7 @@ use alloy::transports::http::{Client, Http};
 use anyhow::Result;
 use futures_core::stream::Stream;
 use log::{error, info};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -19,8 +20,8 @@ use tokio::time::{sleep, timeout, Duration};
 
 use crate::constant::{
     LOGS_BLOCK_RANGE, LOGS_CHUNK_MAX_ATTEMPTS, LOGS_CHUNK_RETRY_BACKOFF_MS,
-    LOGS_CHUNK_RETRY_MAX_BACKOFF_MS, LOGS_CHUNK_TIMEOUT, MAX_RETRY_ON_PROVIDER_ERROR,
-    MAX_TX_RECEIPT_RETRIES, WAIT_BEFORE_HTTP_RPC_CALL,
+    LOGS_CHUNK_RETRY_MAX_BACKOFF_MS, LOGS_CHUNK_TIMEOUT, LOGS_DEDUPE_BLOCK_WINDOW,
+    MAX_RETRY_ON_PROVIDER_ERROR, MAX_TX_RECEIPT_RETRIES, WAIT_BEFORE_HTTP_RPC_CALL,
 };
 use crate::error::ServerlessError;
 use crate::model::{Job, JobMode, RequestChainData};
@@ -182,43 +183,166 @@ pub async fn get_logs_till_latest_block<P: HttpProviderLogs>(
     filter: &Filter,
     from_block: u64,
 ) -> Result<Vec<Log>, ServerlessError> {
-    let mut latest_block = None;
+    let latest_block = get_latest_block_number(provider).await?;
+
+    let mut scan = LogsScan::new(from_block, latest_block);
+    get_logs_in_chunks(provider, filter, &mut scan).await?;
+    Ok(scan.logs)
+}
+
+// Call f until it succeeds, with a timeout for each call and a backoff between the calls.
+// After LOGS_CHUNK_MAX_ATTEMPTS failed calls the last error is returned.
+pub async fn retry_with_backoff<T, F, Fut>(
+    description: &str,
+    timeout_error: fn(String) -> ServerlessError,
+    mut f: F,
+) -> Result<T, ServerlessError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, ServerlessError>>,
+{
+    let mut attempt: u8 = 1;
     let mut backoff = LOGS_CHUNK_RETRY_BACKOFF_MS;
-    for attempt in 1..=LOGS_CHUNK_MAX_ATTEMPTS {
-        let res = timeout(
-            Duration::from_secs(LOGS_CHUNK_TIMEOUT),
-            provider.get_latest_block_number(),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(ServerlessError::BlockNumberFetchFailure(format!(
-                "timed out after {} seconds",
-                LOGS_CHUNK_TIMEOUT
-            )))
-        });
+    loop {
+        let res = timeout(Duration::from_secs(LOGS_CHUNK_TIMEOUT), f())
+            .await
+            .unwrap_or_else(|_| {
+                Err(timeout_error(format!(
+                    "timed out after {} seconds",
+                    LOGS_CHUNK_TIMEOUT
+                )))
+            });
 
         match res {
-            Ok(block_number) => {
-                latest_block = Some(block_number);
-                break;
-            }
+            Ok(value) => return Ok(value),
             Err(err) => {
                 error!(
-                    "Failed to get the latest block number (attempt {} of {}) - Error: {}",
-                    attempt, LOGS_CHUNK_MAX_ATTEMPTS, err
+                    "Failed to {} (attempt {} of {}) - Error: {}",
+                    description, attempt, LOGS_CHUNK_MAX_ATTEMPTS, err
                 );
-                if attempt == LOGS_CHUNK_MAX_ATTEMPTS {
+                if attempt >= LOGS_CHUNK_MAX_ATTEMPTS {
                     return Err(err);
                 }
+                attempt += 1;
                 sleep(Duration::from_millis(backoff)).await;
                 backoff = std::cmp::min(backoff * 2, LOGS_CHUNK_RETRY_MAX_BACKOFF_MS);
             }
         }
     }
+}
 
-    let mut scan = LogsScan::new(from_block, latest_block.unwrap());
-    get_logs_in_chunks(provider, filter, &mut scan).await?;
-    Ok(scan.logs)
+// Get the latest block number, with a timeout and retries.
+pub async fn get_latest_block_number<P: HttpProviderLogs>(
+    provider: &P,
+) -> Result<u64, ServerlessError> {
+    retry_with_backoff(
+        "get the latest block number",
+        ServerlessError::BlockNumberFetchFailure,
+        || provider.get_latest_block_number(),
+    )
+    .await
+}
+
+// Position of an event stream, kept across reconnects of its websocket.
+// The logs of all the blocks before next_block have been read with eth_getLogs.
+// The websocket subscription delivers new logs only, and it can miss logs without ending:
+// the websocket reconnects inside the provider and a lagging receiver drops logs. So the logs
+// from next_block on are also read with eth_getLogs regularly (see backfill_logs), and a log
+// delivered both ways is processed once, by its (block number, log index).
+#[derive(Debug)]
+pub struct LogsCursor {
+    pub next_block: u64,
+    seen: BTreeSet<(u64, u64)>,
+}
+
+impl LogsCursor {
+    pub fn new(next_block: u64) -> Self {
+        Self {
+            next_block,
+            seen: BTreeSet::new(),
+        }
+    }
+
+    // Returns true if the log has not been processed before and is to be processed now.
+    // Logs of blocks more than LOGS_DEDUPE_BLOCK_WINDOW blocks before next_block have been
+    // read with eth_getLogs and are not processed again.
+    pub fn accept(&mut self, log: &Log) -> bool {
+        let (Some(block_number), Some(log_index)) = (log.block_number, log.log_index) else {
+            return true;
+        };
+        if block_number.saturating_add(LOGS_DEDUPE_BLOCK_WINDOW) < self.next_block {
+            return false;
+        }
+        self.seen.insert((block_number, log_index))
+    }
+
+    // The logs of all the blocks before next_block have been read
+    pub fn advance(&mut self, next_block: u64) {
+        if next_block <= self.next_block {
+            return;
+        }
+        self.next_block = next_block;
+        let keep_from = next_block.saturating_sub(LOGS_DEDUPE_BLOCK_WINDOW);
+        self.seen = self.seen.split_off(&(keep_from, 0));
+    }
+}
+
+// Blocks to read with eth_getLogs: from the cursor to the latest block that has the given
+// number of confirmations. None if there is nothing to read.
+pub fn backfill_range(
+    next_block: u64,
+    latest_block: u64,
+    confirmation_blocks: u64,
+) -> Option<(u64, u64)> {
+    let to_block = latest_block.checked_sub(confirmation_blocks)?;
+    if to_block < next_block {
+        return None;
+    }
+    Some((next_block, to_block))
+}
+
+// Read the logs matching the filter from the cursor to the confirmed head with eth_getLogs, in
+// chunks, and return the ones that were not processed before, in chain order. The cursor is
+// advanced over the chunks that were read, also when a later chunk fails; the blocks left are
+// read on the next call.
+pub async fn backfill_logs<P: HttpProviderLogs>(
+    provider: &P,
+    filter: &Filter,
+    cursor: &mut LogsCursor,
+    confirmation_blocks: u64,
+) -> Vec<Log> {
+    let latest_block = match get_latest_block_number(provider).await {
+        Ok(latest_block) => latest_block,
+        Err(err) => {
+            error!(
+                "Failed to get the latest block number for reading the missed logs - Error: {}",
+                err
+            );
+            return Vec::new();
+        }
+    };
+
+    let Some((from_block, to_block)) =
+        backfill_range(cursor.next_block, latest_block, confirmation_blocks)
+    else {
+        return Vec::new();
+    };
+
+    let mut scan = LogsScan::new(from_block, to_block);
+    if let Err(err) = get_logs_in_chunks(provider, filter, &mut scan).await {
+        error!(
+            "Failed to read the logs of blocks {} to {}, continuing from block {} later - Error: {}",
+            from_block, to_block, scan.next_block, err
+        );
+    }
+
+    let logs = scan
+        .logs
+        .into_iter()
+        .filter(|log| !log.removed && cursor.accept(log))
+        .collect();
+    cursor.advance(scan.next_block);
+    logs
 }
 
 pub async fn get_block_number_by_timestamp(
@@ -676,6 +800,7 @@ mod chain_util_tests {
             }
             Ok(vec![Log {
                 block_number: Some(from_block),
+                log_index: Some(0),
                 ..Default::default()
             }])
         }
@@ -795,5 +920,106 @@ mod chain_util_tests {
             .map(|log| log.block_number.unwrap())
             .collect();
         assert_eq!(log_blocks, vec![0, LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE]);
+    }
+
+    fn log_at(block_number: u64, log_index: u64) -> Log {
+        Log {
+            block_number: Some(block_number),
+            log_index: Some(log_index),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_logs_cursor_dedupes_by_block_and_log_index() {
+        let mut cursor = LogsCursor::new(100);
+
+        assert!(cursor.accept(&log_at(100, 0)));
+        assert!(!cursor.accept(&log_at(100, 0)));
+        assert!(cursor.accept(&log_at(100, 1)));
+        assert!(cursor.accept(&log_at(101, 0)));
+        // a log without position is never treated as a duplicate
+        assert!(cursor.accept(&Log::default()));
+        assert!(cursor.accept(&Log::default()));
+
+        // logs of blocks already read are still deduplicated inside the window
+        cursor.advance(102);
+        assert_eq!(cursor.next_block, 102);
+        assert!(!cursor.accept(&log_at(100, 1)));
+        assert!(cursor.accept(&log_at(100, 2)));
+
+        // the cursor does not move back
+        cursor.advance(50);
+        assert_eq!(cursor.next_block, 102);
+
+        // logs of blocks before the window have been read with eth_getLogs
+        cursor.advance(101 + LOGS_DEDUPE_BLOCK_WINDOW);
+        assert!(!cursor.accept(&log_at(100, 3)));
+        assert!(cursor.accept(&log_at(101, 1)));
+        assert!(!cursor.accept(&log_at(101, 1)));
+        // the entries before the window are dropped
+        assert!(cursor.seen.iter().all(|(block, _)| *block >= 101));
+    }
+
+    #[test]
+    fn test_backfill_range() {
+        assert_eq!(backfill_range(10, 100, 0), Some((10, 100)));
+        assert_eq!(backfill_range(10, 100, 5), Some((10, 95)));
+        assert_eq!(backfill_range(95, 100, 5), Some((95, 95)));
+        // nothing new with enough confirmations
+        assert_eq!(backfill_range(96, 100, 5), None);
+        assert_eq!(backfill_range(101, 100, 0), None);
+        // chain shorter than the confirmations
+        assert_eq!(backfill_range(0, 3, 5), None);
+    }
+
+    #[tokio::test]
+    async fn test_backfill_logs_reads_from_the_cursor_to_the_confirmed_head() {
+        let provider = RangeRecordingProvider::new(vec![]);
+        let mut cursor = LogsCursor::new(10);
+        // a log of the first block was delivered by the subscription already
+        assert!(cursor.accept(&log_at(10, 0)));
+
+        let logs = backfill_logs(&provider, &Filter::new(), &mut cursor, 5).await;
+
+        assert_eq!(
+            *provider.queries.lock().unwrap(),
+            vec![
+                (10, LOGS_BLOCK_RANGE + 9),
+                (LOGS_BLOCK_RANGE + 10, LOGS_BLOCK_RANGE + 95),
+            ]
+        );
+        let log_blocks: Vec<u64> = logs.iter().map(|log| log.block_number.unwrap()).collect();
+        assert_eq!(log_blocks, vec![LOGS_BLOCK_RANGE + 10]);
+        assert_eq!(cursor.next_block, LOGS_BLOCK_RANGE + 96);
+
+        // nothing new to read
+        let logs = backfill_logs(&provider, &Filter::new(), &mut cursor, 5).await;
+        assert!(logs.is_empty());
+        assert_eq!(provider.queries.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_backfill_logs_keeps_the_progress_of_a_failed_backfill() {
+        // the second chunk fails all its attempts
+        let max_attempts = LOGS_CHUNK_MAX_ATTEMPTS as usize;
+        let provider = RangeRecordingProvider::new((1..=max_attempts).collect());
+        let mut cursor = LogsCursor::new(10);
+
+        let logs = backfill_logs(&provider, &Filter::new(), &mut cursor, 0).await;
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(cursor.next_block, LOGS_BLOCK_RANGE + 10);
+
+        // the next backfill continues from the failed chunk
+        let logs = backfill_logs(&provider, &Filter::new(), &mut cursor, 0).await;
+        let log_blocks: Vec<u64> = logs.iter().map(|log| log.block_number.unwrap()).collect();
+        assert_eq!(log_blocks, vec![LOGS_BLOCK_RANGE + 10]);
+        assert_eq!(cursor.next_block, LOGS_BLOCK_RANGE + 101);
+        let queries = provider.queries.lock().unwrap();
+        assert_eq!(
+            queries[1 + max_attempts..],
+            [(LOGS_BLOCK_RANGE + 10, LOGS_BLOCK_RANGE + 100)]
+        );
     }
 }

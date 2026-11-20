@@ -69,3 +69,10 @@ pub const REGISTRATION_CHECK_RETRY_MAX_BACKOFF_MS: u64 = 60000;
 // wait before reconnecting a websocket event stream, in milliseconds, doubled on every failure
 pub const WS_RECONNECT_BACKOFF_MS: u64 = 500;
 pub const WS_RECONNECT_MAX_BACKOFF_MS: u64 = 30000;
+
+// interval of reading the logs of an event stream with eth_getLogs, in seconds, for the logs the
+// websocket subscription missed
+pub const LOGS_BACKFILL_INTERVAL: u64 = 10;
+// blocks before the read range within which logs delivered by a subscription are still
+// deduplicated against the logs read with eth_getLogs
+pub const LOGS_DEDUPE_BLOCK_WINDOW: u64 = 1000;
