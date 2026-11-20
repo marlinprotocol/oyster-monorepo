@@ -564,12 +564,14 @@ fn new_contracts_client(
     let subscription_job_instance_heap = Arc::new(RwLock::new(BinaryHeap::new()));
     let subscription_jobs = Arc::new(RwLock::new(HashMap::new()));
 
-    // the gas key can be updated while the request chains data is fetched
-    if gas_wallet_hex != app_state.wallet.read().unwrap().as_str() {
+    // The gas key can be updated while the request chains data is fetched, the request chain
+    // txn managers were created with the key from before and the update did not reach them.
+    let current_gas_wallet_hex = app_state.wallet.read().unwrap().clone();
+    if gas_wallet_hex != current_gas_wallet_hex {
         for request_chain_data in request_chains_data.values_mut() {
             let res = request_chain_data
                 .request_chain_txn_manager
-                .update_private_signer(gas_wallet_hex.to_string());
+                .update_private_signer(current_gas_wallet_hex.clone());
             if let Err(e) = res {
                 return Err(format!(
                     "Failed to update the private signer for the request chain txn manager: {}\n",
@@ -582,7 +584,7 @@ fn new_contracts_client(
     let common_chain_txn_manager = TxnManager::new(
         app_state.common_chain_http_url.clone(),
         app_state.common_chain_id,
-        app_state.wallet.read().unwrap().clone(),
+        current_gas_wallet_hex,
         None,
         None,
         None,
@@ -1750,5 +1752,65 @@ mod api_impl_tests {
             .await;
         resp.assert_status_ok();
         assert!(app_state.registration_check_started.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn new_contracts_client_uses_the_gas_key_updated_meanwhile() {
+        let app_state = generate_app_state().await;
+        let old_gas_key = PrivateKeySigner::random();
+        let old_gas_key_hex = hex::encode(old_gas_key.to_bytes());
+        // the gas key injected while the request chains data was fetched
+        *app_state.wallet.write().unwrap() = GAS_WALLET_KEY.to_owned();
+
+        let request_chain_txn_manager = TxnManager::new(
+            "http://127.0.0.1:8545".to_owned(),
+            CHAIN_ID,
+            old_gas_key_hex.clone(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let request_chains_data = HashMap::from([(
+            CHAIN_ID,
+            RequestChainData {
+                chain_id: CHAIN_ID,
+                relay_address: Address::ZERO,
+                relay_subscriptions_address: Address::ZERO,
+                ws_rpc_url: "ws://127.0.0.1:8545/".to_owned(),
+                http_rpc_url: "http://127.0.0.1:8545".to_owned(),
+                request_chain_start_block_number: 0,
+                confirmation_blocks: 5,
+                last_seen_block: Arc::new(0.into()),
+                request_chain_txn_manager,
+            },
+        )]);
+
+        let contracts_client = new_contracts_client(
+            &app_state,
+            Address::from_str(OWNER_ADDRESS).unwrap(),
+            &HashSet::from([CHAIN_ID]),
+            request_chains_data,
+            &old_gas_key_hex,
+            0,
+        )
+        .unwrap();
+
+        let gas_address = Address::from_str(GAS_WALLET_PUBLIC_ADDRESS).unwrap();
+        assert_eq!(
+            contracts_client
+                .common_chain_txn_manager
+                .get_private_signer()
+                .address(),
+            gas_address
+        );
+        assert_eq!(
+            contracts_client.request_chains_data.read().unwrap()[&CHAIN_ID]
+                .request_chain_txn_manager
+                .get_private_signer()
+                .address(),
+            gas_address
+        );
     }
 }
