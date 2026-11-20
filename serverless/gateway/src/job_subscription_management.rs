@@ -139,14 +139,15 @@ pub async fn process_historic_subscription_jobs_on_request_chain<'a, P: HttpProv
                 "Processing Historic Job Subscription - Subscription Started - Subscription ID: {}",
                 U256::from_be_slice(&topics[1].as_slice())
             );
-            let sub_id = add_subscription_job(
+            let Ok(sub_id) = add_subscription_job(
                 contracts_client,
                 log,
                 request_chain_id,
                 req_chain_tx.clone(),
                 true,
-            )
-            .unwrap();
+            ) else {
+                continue;
+            };
             if sub_id == U256::from(0) {
                 continue;
             }

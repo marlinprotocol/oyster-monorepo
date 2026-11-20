@@ -116,6 +116,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         immutable_params_injected: Arc::new(Mutex::new(false)),
         mutable_params_injected: Arc::new(AtomicBool::new(false)),
         registration_events_listener_active: Arc::new(Mutex::new(false)),
+        registration_check_started: Arc::new(AtomicBool::new(false)),
+        registration_check_lock: Arc::new(tokio::sync::Mutex::new(())),
         contracts_client: Arc::new(Mutex::new(None)),
         ws_api_key: Arc::new(RwLock::new(String::new())),
     };

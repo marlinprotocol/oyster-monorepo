@@ -64,6 +64,14 @@ Supported outputs:
 
 - Verify the addresses on the gateway by checking the output of above command
 
+## Restarts
+
+The owner address, the gas wallet key and the web socket api key are only kept in memory, they are not written to disk. After the gateway process restarts, inject them again with the same command as above. The enclave key does not change when only the gateway process restarts, so the enclave is still registered on chain.
+
+Once both configs are injected, the gateway reads the registration of its enclave address from the `Gateways` contract on the common chain (owner and request chain ids) and from the `Relay` contract on each request chain. If the enclave is registered with the injected owner on all of them, the gateway starts serving again without a new registration. `/signed-registration-message` runs the same check first, so the command above, which requests a registration message after injecting the configs, gets the answer that the enclave is already registered. A draining state set on chain applies as before, it is read from the `Gateways` contract like the state of the other gateways. If the enclave is not registered, or is registered with another owner or only on some of the chains, the gateway logs it and waits for a registration as on a fresh start. RPC errors during this check are retried with a backoff.
+
+The host can do the injection automatically, for example with a service that waits for the vsock server of the gateway to answer and then runs the `gateway-vsock-client` command above with the same owner address, gas key and api key, and that runs again whenever the gateway process restarts. The gas key then has to be available on the host to that service. This repository does not include such a service.
+
 # Running Tests
 
 ```shell

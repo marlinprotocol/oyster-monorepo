@@ -59,3 +59,13 @@ pub const LOGS_CHUNK_RETRY_BACKOFF_MS: u64 = 1;
 pub const LOGS_CHUNK_RETRY_MAX_BACKOFF_MS: u64 = 8000;
 // wait before continuing a gateways logs scan after a chunk failed all its attempts, in seconds
 pub const LOGS_SCAN_RETRY_WAIT: u64 = 10;
+
+// timeout of reading the registration of the enclave from the contracts at start-up, in seconds
+pub const REGISTRATION_CHECK_TIMEOUT: u64 = 60;
+// wait before retrying to read the registration, in milliseconds, doubled on every retry
+pub const REGISTRATION_CHECK_RETRY_BACKOFF_MS: u64 = 1000;
+pub const REGISTRATION_CHECK_RETRY_MAX_BACKOFF_MS: u64 = 60000;
+
+// wait before reconnecting a websocket event stream, in milliseconds, doubled on every failure
+pub const WS_RECONNECT_BACKOFF_MS: u64 = 500;
+pub const WS_RECONNECT_MAX_BACKOFF_MS: u64 = 30000;

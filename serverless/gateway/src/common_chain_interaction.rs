@@ -34,7 +34,8 @@ use crate::constant::{
     REQUEST_CHAIN_JOB_RELAYED_EVENT, REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
-    REQUEST_CHAIN_TXN_CALL_TIMEOUT, REQUEST_RELAY_TIMEOUT,
+    REQUEST_CHAIN_TXN_CALL_TIMEOUT, REQUEST_RELAY_TIMEOUT, WS_RECONNECT_BACKOFF_MS,
+    WS_RECONNECT_MAX_BACKOFF_MS,
 };
 use crate::contract_abi::{GatewayJobsContract, RelayContract, RelaySubscriptionsContract};
 use crate::error::ServerlessError;
@@ -342,6 +343,7 @@ impl ContractsClient {
         request_chain_data: RequestChainData,
         job_subscription_tx: Sender<JobSubscriptionChannelType>,
     ) {
+        let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
             let ws_api_key = self.ws_api_key.read().unwrap().clone();
             let req_chain_ws_client = match ProviderBuilder::new()
@@ -353,17 +355,32 @@ impl ContractsClient {
                 Ok(req_chain_ws_client) => req_chain_ws_client,
                 Err(err) => {
                     error!(
-                        "Failed to connect to the request chain websocket provider: {}",
-                        err
+                        "Request Chain ID: {:?}, Failed to connect to the websocket provider, retrying in {} ms - Error: {}",
+                        request_chain_data.chain_id, backoff, err
                     );
+                    sleep(Duration::from_millis(backoff)).await;
+                    backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
                     continue;
                 }
             };
 
-            let mut stream = self
+            let mut stream = match self
                 .req_chain_jobs(&req_chain_ws_client, &request_chain_data)
                 .await
-                .unwrap();
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!(
+                        "Request Chain ID: {:?}, Failed to subscribe to the events, retrying in {} ms - Error: {:?}",
+                        request_chain_data.chain_id, backoff, err
+                    );
+                    sleep(Duration::from_millis(backoff)).await;
+                    backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
+                    continue;
+                }
+            };
+            backoff = WS_RECONNECT_BACKOFF_MS;
+
             while let Some(log) = stream.next().await {
                 let topics = log.topics();
                 if log.removed {
@@ -464,6 +481,12 @@ impl ContractsClient {
                     );
                 }
             }
+
+            error!(
+                "Request Chain ID: {:?}, Event stream ended, reconnecting",
+                request_chain_data.chain_id
+            );
+            sleep(Duration::from_millis(backoff)).await;
         }
     }
 
@@ -874,6 +897,7 @@ impl ContractsClient {
         com_chain_tx: Sender<ResponseJob>,
         req_chain_tx: Sender<Job>,
     ) {
+        let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
             let ws_api_key = self.ws_api_key.read().unwrap().clone();
             let common_chain_ws_provider = match ProviderBuilder::new()
@@ -885,16 +909,27 @@ impl ContractsClient {
                 Ok(common_chain_ws_provider) => common_chain_ws_provider,
                 Err(err) => {
                     error!(
-                        "Failed to connect to the common chain websocket provider: {}",
-                        err
+                        "Failed to connect to the common chain websocket provider, retrying in {} ms - Error: {}",
+                        backoff, err
                     );
+                    sleep(Duration::from_millis(backoff)).await;
+                    backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
                     continue;
                 }
             };
-            let mut stream = self
-                .common_chain_jobs(&common_chain_ws_provider)
-                .await
-                .unwrap();
+            let mut stream = match self.common_chain_jobs(&common_chain_ws_provider).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!(
+                        "Failed to subscribe to the events on the Common Chain, retrying in {} ms - Error: {:?}",
+                        backoff, err
+                    );
+                    sleep(Duration::from_millis(backoff)).await;
+                    backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
+                    continue;
+                }
+            };
+            backoff = WS_RECONNECT_BACKOFF_MS;
 
             while let Some(log) = stream.next().await {
                 let ref topics = log.topics();
@@ -944,6 +979,9 @@ impl ContractsClient {
                     error!("Unknown event: {:?}", log);
                 }
             }
+
+            error!("Common Chain event stream ended, reconnecting");
+            sleep(Duration::from_millis(backoff)).await;
         }
     }
 
@@ -1320,8 +1358,7 @@ impl LogsProvider for ContractsClient {
         let subscription = common_chain_ws_provider
             .subscribe_logs(&event_filter)
             .await
-            .context("failed to subscribe to events on the Common Chain")
-            .unwrap();
+            .context("failed to subscribe to events on the Common Chain")?;
 
         let stream = subscription.into_stream();
 
@@ -1358,8 +1395,7 @@ impl LogsProvider for ContractsClient {
             .context(format!(
                 "failed to subscribe to events on Request Chain: {}",
                 req_chain_client.chain_id
-            ))
-            .unwrap();
+            ))?;
 
         let stream = subscription.into_stream();
 
