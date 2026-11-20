@@ -2041,6 +2041,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "clap",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-retry",
