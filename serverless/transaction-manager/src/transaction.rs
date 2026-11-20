@@ -77,6 +77,7 @@ pub struct TxnManager {
     pub(crate) nonce_to_send_private_signer: Arc<RwLock<PrivateKeySigner>>,
     pub(crate) transactions: Arc<RwLock<HashMap<String, Transaction>>>,
     pub(crate) gas_price_increment_percent: u128,
+    pub(crate) max_gas_price: RwLock<Option<u128>>,
     pub(crate) gas_limit_increment_amount: u64,
     pub(crate) transaction_ids_queue: Arc<RwLock<VecDeque<String>>>,
     pub(crate) garbage_collect_interval_sec: u64,
@@ -135,6 +136,7 @@ impl TxnManager {
             transactions: Arc::new(RwLock::new(HashMap::new())),
             gas_price_increment_percent: gas_price_increment_percent
                 .unwrap_or(RESEND_GAS_PRICE_INCREMENT_PERCENT),
+            max_gas_price: RwLock::new(None),
             gas_limit_increment_amount: gas_limit_increment_amount.unwrap_or(GAS_INCREMENT_AMOUNT),
             transaction_ids_queue: Arc::new(RwLock::new(VecDeque::new())),
             garbage_collect_interval_sec: garbage_collect_interval_sec
@@ -239,6 +241,36 @@ impl TxnManager {
     /// * `PrivateKeySigner` - The current private signer
     pub fn get_private_signer(self: &Arc<Self>) -> PrivateKeySigner {
         self.private_signer.read().unwrap().clone()
+    }
+
+    /// Sets the maximum gas price in wei for the transactions sent by the transaction manager.
+    ///
+    /// The gas price of a transaction is raised on every resend, up to this maximum. A
+    /// transaction at the maximum is still resent and monitored until its deadline. With `None`,
+    /// the default, the gas price is not limited.
+    ///
+    /// # Arguments
+    /// * `max_gas_price` - The maximum gas price in wei, or `None` for no maximum
+    pub fn set_max_gas_price(self: &Arc<Self>, max_gas_price: Option<u128>) {
+        *self.max_gas_price.write().unwrap() = max_gas_price;
+    }
+
+    /// Limits a gas price to the maximum gas price.
+    fn _cap_gas_price(self: &Arc<Self>, gas_price: u128) -> u128 {
+        match *self.max_gas_price.read().unwrap() {
+            Some(max_gas_price) => min(gas_price, max_gas_price),
+            None => gas_price,
+        }
+    }
+
+    /// Returns the gas price raised by the gas price increment, limited to the maximum gas price.
+    fn _increase_gas_price(self: &Arc<Self>, gas_price: u128) -> u128 {
+        self._cap_gas_price(gas_price.saturating_mul(100 + self.gas_price_increment_percent) / 100)
+    }
+
+    /// Whether a gas price is at the maximum gas price.
+    fn _is_gas_price_at_max(self: &Arc<Self>, gas_price: u128) -> bool {
+        matches!(*self.max_gas_price.read().unwrap(), Some(max_gas_price) if gas_price >= max_gas_price)
     }
 
     /// Sends a transaction to the network.
@@ -379,9 +411,19 @@ impl TxnManager {
                             continue;
                         }
                         TxnManagerSendError::GasPriceLow(_) => {
-                            transaction.gas_price = transaction.gas_price
-                                * (100 + self.gas_price_increment_percent)
-                                / 100;
+                            if self._is_gas_price_at_max(transaction.gas_price) {
+                                eprintln!(
+                                    "Transaction {}: gas price {} is at the maximum and too low, \
+                                     retrying in {}s until the deadline. {}",
+                                    transaction.id,
+                                    transaction.gas_price,
+                                    RESEND_INTERVAL_SEC,
+                                    failure_reason
+                                );
+                                sleep(Duration::from_secs(RESEND_INTERVAL_SEC)).await;
+                                continue;
+                            }
+                            transaction.gas_price = self._increase_gas_price(transaction.gas_price);
                             continue;
                         }
                         TxnManagerSendError::InsufficientBalance(_) => {
@@ -597,20 +639,23 @@ impl TxnManager {
         let pending_gas_price = transaction.gas_price;
         let pending_estimated_gas = transaction.estimated_gas;
 
-        transaction.estimated_gas += self.gas_limit_increment_amount;
-        transaction.gas_price =
-            transaction.gas_price * (100 + self.gas_price_increment_percent) / 100;
-
-        let transaction_request = TransactionRequest::default()
-            .with_to(transaction.contract_address)
-            .with_input(transaction.transaction_data.clone())
-            .with_nonce(transaction.nonce.unwrap())
-            .with_gas_limit(transaction.estimated_gas)
-            .with_gas_price(transaction.gas_price);
+        // At the maximum gas price, the same transaction is sent again, so that it stays in the
+        // mempool. Otherwise the gas price and limit are raised.
+        if !self._is_gas_price_at_max(transaction.gas_price) {
+            transaction.estimated_gas += self.gas_limit_increment_amount;
+            transaction.gas_price = self._increase_gas_price(transaction.gas_price);
+        }
 
         let mut failure_reason = String::new();
 
         while Instant::now() < transaction.timeout {
+            let transaction_request = TransactionRequest::default()
+                .with_to(transaction.contract_address)
+                .with_input(transaction.transaction_data.clone())
+                .with_nonce(transaction.nonce.unwrap())
+                .with_gas_limit(transaction.estimated_gas)
+                .with_gas_price(transaction.gas_price);
+
             let provider = self._create_provider(&transaction, false);
             let provider = match provider {
                 Ok(provider) => provider,
@@ -631,7 +676,7 @@ impl TxnManager {
                 }
             };
 
-            let pending_txn = provider.send_transaction(transaction_request.clone()).await;
+            let pending_txn = provider.send_transaction(transaction_request).await;
             let pending_txn = match pending_txn {
                 Ok(pending_txn) => pending_txn,
                 Err(err) => {
@@ -670,10 +715,26 @@ impl TxnManager {
                             transaction.estimated_gas += self.gas_limit_increment_amount;
                             continue;
                         }
+                        // The pending transaction can not be replaced at the maximum gas price, it
+                        // can still be included, keep waiting for it
+                        TxnManagerSendError::GasPriceLow(_)
+                            if self._is_gas_price_at_max(transaction.gas_price) =>
+                        {
+                            eprintln!(
+                                "Transaction {}: gas price is at the maximum {}, waiting for the \
+                                 pending transaction {}. {}",
+                                transaction.id,
+                                transaction.gas_price,
+                                transaction.txn_hash.clone().unwrap_or_default(),
+                                failure_reason
+                            );
+                            transaction.gas_price = pending_gas_price;
+                            transaction.estimated_gas = pending_estimated_gas;
+                            self._keep_waiting_for_pending_transaction(transaction);
+                            return Ok(());
+                        }
                         TxnManagerSendError::GasPriceLow(_) => {
-                            transaction.gas_price = transaction.gas_price
-                                * (100 + self.gas_price_increment_percent)
-                                / 100;
+                            transaction.gas_price = self._increase_gas_price(transaction.gas_price);
                             continue;
                         }
                         // The same transaction is already in the mempool
@@ -757,6 +818,7 @@ impl TxnManager {
     ///
     /// This method is used to fill nonce gaps when a transaction permanently fails.
     async fn _send_dummy_transaction(self: &Arc<Self>, mut transaction: Transaction) {
+        let mut gas_estimated = false;
         loop {
             let dummy_txn = TransactionRequest::default()
                 .with_to(transaction.private_signer.address())
@@ -775,12 +837,21 @@ impl TxnManager {
                 }
             };
 
-            let res = self
-                ._estimate_gas_limit_and_price(&provider, &mut transaction, dummy_txn.clone(), true)
-                .await;
-            if res.is_err() {
-                sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
-                continue;
+            // Estimated once, so that the gas price and limit raised on errors are kept
+            if !gas_estimated {
+                let res = self
+                    ._estimate_gas_limit_and_price(
+                        &provider,
+                        &mut transaction,
+                        dummy_txn.clone(),
+                        true,
+                    )
+                    .await;
+                if res.is_err() {
+                    sleep(Duration::from_millis(HTTP_SLEEP_TIME_MS)).await;
+                    continue;
+                }
+                gas_estimated = true;
             }
 
             let dummy_txn = dummy_txn
@@ -811,9 +882,21 @@ impl TxnManager {
                         transaction.estimated_gas += self.gas_limit_increment_amount;
                         continue;
                     }
-                    TxnManagerSendError::GasPriceLow(_) => {
-                        transaction.gas_price =
-                            transaction.gas_price * (100 + self.gas_price_increment_percent) / 100;
+                    TxnManagerSendError::GasPriceLow(err) => {
+                        if self._is_gas_price_at_max(transaction.gas_price) {
+                            eprintln!(
+                                "Transaction {}: gas price {} of the transaction filling nonce {} \
+                                 is at the maximum and too low, retrying in {}s. {}",
+                                transaction.id,
+                                transaction.gas_price,
+                                transaction.nonce.unwrap(),
+                                RESEND_INTERVAL_SEC,
+                                err
+                            );
+                            sleep(Duration::from_secs(RESEND_INTERVAL_SEC)).await;
+                            continue;
+                        }
+                        transaction.gas_price = self._increase_gas_price(transaction.gas_price);
                         continue;
                     }
                     _ => {
@@ -1029,7 +1112,7 @@ impl TxnManager {
             return Err(TxnManagerSendError::Timeout(failure_reason));
         }
 
-        transaction.gas_price = gas_price;
+        transaction.gas_price = self._cap_gas_price(gas_price);
         transaction.estimated_gas = estimated_gas;
 
         Ok(())
@@ -1119,6 +1202,42 @@ mod tests {
         let transactions = txn_manager.transactions.read().unwrap();
         assert!(transactions.contains_key("queued"));
         assert!(!transactions.contains_key("monitored"));
+    }
+
+    #[test]
+    fn gas_price_is_not_limited_by_default() {
+        let txn_manager = new_txn_manager(600);
+
+        assert_eq!(txn_manager._increase_gas_price(1_000), 1_100);
+        assert_eq!(txn_manager._cap_gas_price(u128::MAX), u128::MAX);
+        assert!(!txn_manager._is_gas_price_at_max(u128::MAX));
+        // No overflow
+        assert_eq!(txn_manager._increase_gas_price(u128::MAX), u128::MAX / 100);
+    }
+
+    #[test]
+    fn gas_price_is_limited_to_the_maximum() {
+        let txn_manager = new_txn_manager(600);
+        txn_manager.set_max_gas_price(Some(1_250));
+
+        assert_eq!(txn_manager._cap_gas_price(5_000), 1_250);
+        assert_eq!(txn_manager._cap_gas_price(1_000), 1_000);
+
+        // 1_000 -> 1_100 -> 1_210 -> 1_250 -> 1_250
+        let mut gas_price = 1_000;
+        let mut gas_prices = vec![];
+        for _ in 0..100 {
+            gas_price = txn_manager._increase_gas_price(gas_price);
+            gas_prices.push(gas_price);
+        }
+        assert_eq!(gas_prices[..4], [1_100, 1_210, 1_250, 1_250]);
+        assert!(gas_prices.iter().all(|gas_price| *gas_price <= 1_250));
+
+        assert!(!txn_manager._is_gas_price_at_max(1_210));
+        assert!(txn_manager._is_gas_price_at_max(1_250));
+
+        txn_manager.set_max_gas_price(None);
+        assert_eq!(txn_manager._increase_gas_price(1_250), 1_375);
     }
 
     #[tokio::test]
