@@ -613,6 +613,8 @@ fn new_contracts_client(
         time_interval: app_state.time_interval,
         offset_for_epoch: app_state.offset_for_epoch,
         gateways_start_block: app_state.gateways_start_block,
+        multicall3_address: app_state.multicall3_addr,
+        subscriptions_batch_size: app_state.subscriptions_batch_size,
         gateway_epoch_state_waitlist,
         common_chain_start_block_number: Arc::new(Mutex::new(common_chain_block_number)),
         subscription_job_instance_heap,

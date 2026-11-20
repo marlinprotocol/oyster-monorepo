@@ -54,6 +54,8 @@ Supported outputs:
   ```
   `gateways_start_block` is the block the gateway starts reading the `Gateways` contract events from. Set it to the block the `Gateways` contract was deployed at. The events are read in queries of 50,000 blocks, so with `0` on a public chain the gateway has to make several thousand queries before it can relay jobs, and it logs a warning at start-up.
 
+  Two optional fields set how the gateway reads the subscriptions of the `RelaySubscriptions` contracts when it starts serving. A gateway serves the subscriptions started before it, so they are read from the contract state, not from the events: `multicall3_addr` (default `0xcA11bde05977b3631167028862bE2a173976CA11`, the address Multicall3 is deployed at on Arbitrum One and Arbitrum Sepolia) and `subscriptions_batch_size` (default `500`), the number of subscriptions read in one call. When no contract is deployed at `multicall3_addr` on a request chain, as on a local chain, the subscriptions are read with one call each.
+
 # Dev Run
 
 - Initialize the gateway with owner address, gas wallet private key, web socket api key, list of request chain ID and generate the signatures for registration. For generating `gateway-vsock-client`, follow the [README](../http-on-vsock-client/README.md)
