@@ -567,7 +567,8 @@ fn insert_subscription_job(
         .unwrap()
         .as_secs();
 
-    if is_historic_log && subscription_job.termination_time < current_timestamp {
+    // also for a JobSubscriptionStarted event handled again after the subscription ended
+    if subscription_job.termination_time < current_timestamp {
         info!(
             "Subscription Job is complete - Subscription ID: {}",
             subscription_job.subscription_id

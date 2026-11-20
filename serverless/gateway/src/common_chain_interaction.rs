@@ -333,9 +333,9 @@ impl ContractsClient {
     ) {
         let request_chain_id = request_chain_data.chain_id;
 
-        // The subscriptions active now are read from the contract state, the events continue
-        // from the block before the state was read. The subscription events are handled after
-        // the state is loaded, so that an update is not applied to a subscription not added yet.
+        // The subscriptions active now are read from the contract state. The subscription events
+        // are handled after the state is loaded, so that an update is not applied to a
+        // subscription not added yet.
         let state_block_number = loop {
             match load_active_subscription_jobs(
                 self,
@@ -358,7 +358,10 @@ impl ContractsClient {
 
         let http_provider = HttpProvider::new(request_chain_data.http_rpc_url.clone());
         let event_filter = self.req_chain_jobs_filter(&request_chain_data);
-        let mut cursor = LogsCursor::new(state_block_number + 1);
+        let mut cursor = LogsCursor::new(request_chain_events_start_block(
+            request_chain_data.request_chain_start_block_number,
+            state_block_number,
+        ));
 
         let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
@@ -1443,6 +1446,21 @@ impl ContractsClient {
     }
 }
 
+// First block of the request chain events the gateway handles: the block at which the
+// registration message was exported (or the gateway resumed), so that jobs relayed while it
+// registered are not lost, and at the latest the block after the subscription state was read.
+// The subscription events of the blocks before the state read are part of the state; handling
+// them again adds a subscription once and applies its updates in order.
+pub fn request_chain_events_start_block(
+    request_chain_start_block_number: u64,
+    state_block_number: u64,
+) -> u64 {
+    std::cmp::min(
+        request_chain_start_block_number,
+        state_block_number.saturating_add(1),
+    )
+}
+
 impl LogsProvider for ContractsClient {
     async fn common_chain_jobs<'a>(
         &'a self,
@@ -2218,4 +2236,83 @@ mod common_chain_interaction_tests {
     }
 
     // TODO: tests for gateway_epoch_state_service
+
+    #[test]
+    fn test_request_chain_events_start_block() {
+        // registration exported before the state read
+        assert_eq!(request_chain_events_start_block(100, 150), 100);
+        // state read before the start block
+        assert_eq!(request_chain_events_start_block(200, 150), 151);
+        assert_eq!(request_chain_events_start_block(151, 150), 151);
+    }
+
+    // Provider returning the given logs that are in the queried block range
+    struct FixedLogsProvider {
+        logs: Vec<Log>,
+        latest_block: u64,
+    }
+
+    impl HttpProviderLogs for FixedLogsProvider {
+        async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
+            let from_block = filter.get_from_block().unwrap();
+            let to_block = filter.get_to_block().unwrap();
+            Ok(self
+                .logs
+                .iter()
+                .filter(|log| {
+                    let block_number = log.block_number.unwrap();
+                    block_number >= from_block && block_number <= to_block
+                })
+                .cloned()
+                .collect())
+        }
+
+        async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+            Ok(self.latest_block)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_job_relayed_between_export_and_state_read_is_handled_once() {
+        let contracts_client = generate_contracts_client().await;
+        let request_chain_data = contracts_client
+            .request_chains_data
+            .read()
+            .unwrap()
+            .get(&CHAIN_ID)
+            .unwrap()
+            .clone();
+
+        // registration exported at block 100, subscription state read after block 150
+        let start_block = request_chain_events_start_block(100, 150);
+        let mut job_relayed_log = generate_job_relayed_log(None, 0).await;
+        job_relayed_log.block_number = Some(120);
+        job_relayed_log.log_index = Some(3);
+        let provider = FixedLogsProvider {
+            logs: vec![job_relayed_log.clone()],
+            latest_block: 160,
+        };
+        let filter = contracts_client.req_chain_jobs_filter(&request_chain_data);
+        let mut cursor = LogsCursor::new(start_block);
+
+        let logs = backfill_logs(
+            &provider,
+            &filter,
+            &mut cursor,
+            request_chain_data.confirmation_blocks,
+        )
+        .await;
+        assert_eq!(logs, vec![job_relayed_log.clone()]);
+        assert_eq!(cursor.next_block, 156);
+
+        // delivered again by the subscription or by the next backfill, it is not handled again
+        assert!(!cursor.accept(&job_relayed_log));
+        let logs = backfill_logs(&provider, &filter, &mut cursor, 0).await;
+        assert!(logs.is_empty());
+
+        // starting after the state read, as before, would have missed it
+        let mut cursor = LogsCursor::new(151);
+        let logs = backfill_logs(&provider, &filter, &mut cursor, 0).await;
+        assert!(logs.is_empty());
+    }
 }
