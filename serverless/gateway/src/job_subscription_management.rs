@@ -1,7 +1,9 @@
 use alloy::{
-    primitives::{keccak256, Address, U256},
+    primitives::{Address, U256},
+    providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::Log,
-    sol_types::SolEvent,
+    sol_types::{SolCall, SolEvent},
+    transports::http::{reqwest::Url, Client, Http},
 };
 use log::{error, info};
 use std::{
@@ -10,18 +12,16 @@ use std::{
 };
 use tokio::{
     sync::mpsc::{Receiver, Sender},
-    time::{sleep, sleep_until, Instant},
+    time::{sleep_until, Instant},
 };
 
 use crate::{
-    chain_util::{HttpProvider, HttpProviderLogs, LogsProvider},
-    constant::{
-        GATEWAY_BLOCK_STATES_TO_MAINTAIN, LOGS_SCAN_RETRY_WAIT,
-        REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
-        REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
-        REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
+    chain_util::{get_latest_block_number, retry_with_backoff, HttpProvider},
+    constant::GATEWAY_BLOCK_STATES_TO_MAINTAIN,
+    contract_abi::{
+        IMulticall3,
+        RelaySubscriptionsContract::{self, jobSubscriptionsCall, jobSubscriptionsReturn},
     },
-    contract_abi::RelaySubscriptionsContract,
     error::ServerlessError,
     model::{
         ContractsClient, GatewayJobType, Job, JobMode, JobSubscriptionAction,
@@ -76,103 +76,346 @@ impl Ord for SubscriptionJobInstanceHeap {
     }
 }
 
-pub async fn process_historic_job_subscriptions(
-    contracts_client: &Arc<ContractsClient>,
-    req_chain_tx: Sender<Job>,
-    job_sub_tx: Sender<JobSubscriptionChannelType>,
-) {
-    info!("Processing Historic Job Subscriptions on Request Chains");
+// Ids of the subscriptions started on a RelaySubscriptions contract, from its jobSubsCount.
+// jobSubsCount is | chain id (64 bits) | 1 (1 bit) | sub_id (64 bits) | 0 (127 bits) |, it starts
+// with sub_id 0 and sub_id is incremented before each new subscription is stored, so the ids in
+// use have sub_id 1 to the sub_id of jobSubsCount. After sub_id 2^64 - 1 the contract starts
+// again from sub_id 1; the range then covers the ids written since, an older subscription with a
+// higher sub_id would not be found. That needs 2^64 subscriptions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubscriptionIdRange {
+    prefix: U256,
+    // last sub_id in use, 0 if there is none
+    last_sub_id: u64,
+}
 
-    let request_chains_data = contracts_client.request_chains_data.read().unwrap().clone();
+impl SubscriptionIdRange {
+    pub fn from_job_subs_count(job_subs_count: U256) -> Self {
+        let prefix = (job_subs_count >> 191usize) << 191usize;
+        let last_sub_id: U256 = (job_subs_count >> 127usize) & U256::from(u64::MAX);
+        let last_sub_id = last_sub_id.to::<u64>();
+        Self {
+            prefix,
+            last_sub_id,
+        }
+    }
 
-    for request_chain_id in contracts_client.request_chain_ids.clone() {
-        let contracts_client_clone = contracts_client.clone();
-        let req_chain_tx_clone = req_chain_tx.clone();
+    pub fn id(&self, sub_id: u64) -> U256 {
+        self.prefix | (U256::from(sub_id) << 127usize)
+    }
 
-        let job_sub_tx_clone = job_sub_tx.clone();
-        let request_chain_data = request_chains_data.get(&request_chain_id).unwrap().clone();
-        tokio::spawn(async move {
-            let http_provider = HttpProvider::new(request_chain_data.http_rpc_url.clone());
-            process_historic_subscription_jobs_on_request_chain(
-                &contracts_client_clone,
-                &request_chain_data,
-                req_chain_tx_clone,
-                job_sub_tx_clone,
-                http_provider,
-            )
-            .await;
-        });
+    pub fn len(&self) -> u64 {
+        self.last_sub_id
+    }
+
+    // The ids in batches of at most batch_size ids, in order
+    pub fn batches(&self, batch_size: u64) -> impl Iterator<Item = Vec<U256>> + '_ {
+        let batch_size = batch_size.max(1);
+        let mut next_sub_id = (self.last_sub_id >= 1).then_some(1u64);
+        std::iter::from_fn(move || {
+            let first = next_sub_id?;
+            let last = std::cmp::min(first.saturating_add(batch_size - 1), self.last_sub_id);
+            next_sub_id = (last < self.last_sub_id).then(|| last + 1);
+            Some((first..=last).map(|sub_id| self.id(sub_id)).collect())
+        })
     }
 }
 
-pub async fn process_historic_subscription_jobs_on_request_chain<'a, P: HttpProviderLogs>(
+// Reads the state of a RelaySubscriptions contract
+pub trait JobSubscriptionsReader {
+    async fn job_subs_count(&self) -> Result<U256, ServerlessError>;
+    // jobSubscriptions(id) for each of the ids, in the same order
+    async fn job_subscriptions(
+        &self,
+        ids: &[U256],
+    ) -> Result<Vec<jobSubscriptionsReturn>, ServerlessError>;
+}
+
+pub struct RelaySubscriptionsStateReader {
+    provider: RootProvider<Http<Client>>,
+    relay_subscriptions_address: Address,
+    // None if Multicall3 is not deployed on the chain, the subscriptions are then read one by one
+    multicall3_address: Option<Address>,
+}
+
+impl RelaySubscriptionsStateReader {
+    pub async fn new(
+        http_rpc_url: &str,
+        relay_subscriptions_address: Address,
+        multicall3_address: Address,
+    ) -> Result<Self, ServerlessError> {
+        let url = Url::parse(http_rpc_url)
+            .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))?;
+        let provider = ProviderBuilder::new().on_http(url);
+
+        let code = retry_with_backoff(
+            "get the code of the Multicall3 contract",
+            ServerlessError::ContractCallFailure,
+            || async {
+                provider
+                    .get_code_at(multicall3_address)
+                    .await
+                    .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))
+            },
+        )
+        .await?;
+        let multicall3_address = if code.is_empty() {
+            info!(
+                "Multicall3 is not deployed at {:?} on {}, the subscriptions are read one by one",
+                multicall3_address, http_rpc_url
+            );
+            None
+        } else {
+            Some(multicall3_address)
+        };
+
+        Ok(Self {
+            provider,
+            relay_subscriptions_address,
+            multicall3_address,
+        })
+    }
+}
+
+impl JobSubscriptionsReader for RelaySubscriptionsStateReader {
+    async fn job_subs_count(&self) -> Result<U256, ServerlessError> {
+        RelaySubscriptionsContract::new(self.relay_subscriptions_address, &self.provider)
+            .jobSubsCount()
+            .call()
+            .await
+            .map(|res| res._0)
+            .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))
+    }
+
+    async fn job_subscriptions(
+        &self,
+        ids: &[U256],
+    ) -> Result<Vec<jobSubscriptionsReturn>, ServerlessError> {
+        let Some(multicall3_address) = self.multicall3_address else {
+            let contract =
+                RelaySubscriptionsContract::new(self.relay_subscriptions_address, &self.provider);
+            let mut job_subscriptions = Vec::with_capacity(ids.len());
+            for id in ids {
+                let job_subscription = contract
+                    .jobSubscriptions(*id)
+                    .call()
+                    .await
+                    .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))?;
+                job_subscriptions.push(job_subscription);
+            }
+            return Ok(job_subscriptions);
+        };
+
+        let calls = job_subscriptions_calls(self.relay_subscriptions_address, ids);
+        let results = IMulticall3::new(multicall3_address, &self.provider)
+            .aggregate3(calls)
+            .call()
+            .await
+            .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))?
+            .returnData;
+        decode_job_subscriptions_results(&results)
+    }
+}
+
+// Multicall3 calls of jobSubscriptions(id) for each of the ids
+pub fn job_subscriptions_calls(
+    relay_subscriptions_address: Address,
+    ids: &[U256],
+) -> Vec<IMulticall3::Call3> {
+    ids.iter()
+        .map(|id| IMulticall3::Call3 {
+            target: relay_subscriptions_address,
+            allowFailure: false,
+            callData: jobSubscriptionsCall { _0: *id }.abi_encode().into(),
+        })
+        .collect()
+}
+
+pub fn decode_job_subscriptions_results(
+    results: &[IMulticall3::Call3Result],
+) -> Result<Vec<jobSubscriptionsReturn>, ServerlessError> {
+    results
+        .iter()
+        .map(|result| {
+            if !result.success {
+                return Err(ServerlessError::ContractCallFailure(
+                    "jobSubscriptions call failed in the multicall".to_owned(),
+                ));
+            }
+            jobSubscriptionsCall::abi_decode_returns(&result.returnData, true)
+                .map_err(|err| ServerlessError::ContractCallFailure(err.to_string()))
+        })
+        .collect()
+}
+
+// The subscription as JobSubscriptionStarted describes it, if it is active at the given time.
+// The state reflects the later JobSubscriptionJobParamsUpdated and
+// JobSubscriptionTerminationParamsUpdated events. A subscription that was refunded is deleted,
+// its job owner is zero.
+fn subscription_job_from_state(
+    subscription_id: U256,
+    request_chain_id: u64,
+    job_subscription: &jobSubscriptionsReturn,
+    current_timestamp: u64,
+) -> Option<SubscriptionJob> {
+    let job = &job_subscription.job;
+    if job.jobOwner == Address::ZERO {
+        return None;
+    }
+
+    let termination_time = job_subscription.terminationTimestamp.saturating_to::<u64>();
+    if termination_time < current_timestamp {
+        return None;
+    }
+
+    Some(SubscriptionJob {
+        subscription_id,
+        request_chain_id,
+        subscriber: job.jobOwner,
+        interval: job_subscription.periodicGap.saturating_to::<u64>(),
+        termination_time,
+        user_timeout: job_subscription.userTimeout,
+        tx_hash: job.codehash,
+        code_input: job.codeInputs.clone(),
+        starttime: job.startTime.saturating_to::<u64>(),
+        env: job.env,
+    })
+}
+
+// Read the subscriptions that are active at the given time from the contract state, in batches
+// of batch_size subscriptions. Each read is retried with a backoff.
+pub async fn read_active_subscription_jobs<R: JobSubscriptionsReader>(
+    reader: &R,
+    request_chain_id: u64,
+    batch_size: u64,
+    current_timestamp: u64,
+) -> Result<Vec<SubscriptionJob>, ServerlessError> {
+    let job_subs_count = retry_with_backoff(
+        "read jobSubsCount",
+        ServerlessError::ContractCallFailure,
+        || reader.job_subs_count(),
+    )
+    .await?;
+    let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+    info!(
+        "Reading {} subscriptions on request chain {}",
+        ids.len(),
+        request_chain_id
+    );
+
+    let mut subscription_jobs = Vec::new();
+    for batch in ids.batches(batch_size) {
+        let job_subscriptions = retry_with_backoff(
+            "read jobSubscriptions",
+            ServerlessError::ContractCallFailure,
+            || reader.job_subscriptions(&batch),
+        )
+        .await?;
+        if job_subscriptions.len() != batch.len() {
+            return Err(ServerlessError::ContractCallFailure(format!(
+                "{} subscriptions read for {} ids",
+                job_subscriptions.len(),
+                batch.len()
+            )));
+        }
+
+        subscription_jobs.extend(batch.iter().zip(job_subscriptions.iter()).filter_map(
+            |(id, job_subscription)| {
+                subscription_job_from_state(
+                    *id,
+                    request_chain_id,
+                    job_subscription,
+                    current_timestamp,
+                )
+            },
+        ));
+    }
+
+    Ok(subscription_jobs)
+}
+
+// Add the active subscriptions read from the contract state as the JobSubscriptionStarted event
+// would. A gateway serves subscriptions started before it, which can run for years, so they are
+// not read from the logs.
+pub async fn add_subscription_jobs_from_state<R: JobSubscriptionsReader>(
+    contracts_client: &Arc<ContractsClient>,
+    reader: &R,
+    request_chain_id: u64,
+    req_chain_tx: Sender<Job>,
+    job_sub_tx: Sender<JobSubscriptionChannelType>,
+) -> Result<(), ServerlessError> {
+    let current_timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let subscription_jobs = read_active_subscription_jobs(
+        reader,
+        request_chain_id,
+        contracts_client.subscriptions_batch_size,
+        current_timestamp,
+    )
+    .await?;
+    info!(
+        "Loaded {} active subscriptions on request chain {}",
+        subscription_jobs.len(),
+        request_chain_id
+    );
+
+    for subscription_job in subscription_jobs {
+        let Ok(sub_id) = insert_subscription_job(
+            contracts_client,
+            subscription_job,
+            req_chain_tx.clone(),
+            true,
+        ) else {
+            continue;
+        };
+        if sub_id == U256::from(0) {
+            continue;
+        }
+        job_sub_tx
+            .send(JobSubscriptionChannelType {
+                subscription_action: JobSubscriptionAction::Add,
+                subscription_id: sub_id,
+            })
+            .await
+            .unwrap();
+    }
+
+    Ok(())
+}
+
+// Load the active subscriptions of a request chain from the RelaySubscriptions contract state.
+// Returns the latest block before the state was read, the event stream of the request chain
+// continues from the next block. Events of the blocks after it can be part of the state read
+// already; handling them again gives the same result, a started subscription is added once and
+// the updates are applied in order.
+pub async fn load_active_subscription_jobs(
     contracts_client: &Arc<ContractsClient>,
     request_chain_data: &RequestChainData,
     req_chain_tx: Sender<Job>,
     job_sub_tx: Sender<JobSubscriptionChannelType>,
-    http_provider: P,
-) {
-    // the gateway does not learn about these subscriptions any other way, so keep trying
-    let logs = loop {
-        match contracts_client
-            .request_chain_historic_subscription_jobs(&request_chain_data, &http_provider)
-            .await
-        {
-            Ok(logs) => break logs,
-            Err(err) => {
-                error!(
-                    "Failed to get the historic job subscription logs on request chain {}, retrying in {} seconds - Error: {:?}",
-                    request_chain_data.chain_id, LOGS_SCAN_RETRY_WAIT, err
-                );
-                sleep(Duration::from_secs(LOGS_SCAN_RETRY_WAIT)).await;
-            }
-        }
-    };
+) -> Result<u64, ServerlessError> {
+    let http_provider = HttpProvider::new(request_chain_data.http_rpc_url.clone());
+    let block_number = get_latest_block_number(&http_provider).await?;
 
-    let request_chain_id = request_chain_data.chain_id;
+    let reader = RelaySubscriptionsStateReader::new(
+        &request_chain_data.http_rpc_url,
+        request_chain_data.relay_subscriptions_address,
+        contracts_client.multicall3_address,
+    )
+    .await?;
 
-    for log in logs {
-        let topics = log.topics();
+    add_subscription_jobs_from_state(
+        contracts_client,
+        &reader,
+        request_chain_data.chain_id,
+        req_chain_tx,
+        job_sub_tx,
+    )
+    .await?;
 
-        if topics[0] == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT) {
-            info!(
-                "Processing Historic Job Subscription - Subscription Started - Subscription ID: {}",
-                U256::from_be_slice(&topics[1].as_slice())
-            );
-            let sub_id = add_subscription_job(
-                contracts_client,
-                log,
-                request_chain_id,
-                req_chain_tx.clone(),
-                true,
-            )
-            .unwrap();
-            if sub_id == U256::from(0) {
-                continue;
-            }
-            job_sub_tx
-                .send(JobSubscriptionChannelType {
-                    subscription_action: JobSubscriptionAction::Add,
-                    subscription_id: sub_id,
-                })
-                .await
-                .unwrap();
-        } else if topics[0] == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT) {
-            info!(
-                "Processing Historic Job Subscription - Subscription Params Updated - Subscription ID: {}",
-                U256::from_be_slice(&topics[1].as_slice())
-            );
-            let _ = update_subscription_job_params(contracts_client, log);
-        } else if topics[0]
-            == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT)
-        {
-            info!(
-                "Processing Historic Job Subscription - Subscription Termination Params Updated - Subscription ID: {}",
-                U256::from_be_slice(&topics[1].as_slice())
-            );
-            let _ = update_subscription_job_termination_params(contracts_client, log);
-        }
-    }
+    Ok(block_number)
 }
 
 pub async fn job_subscription_manager(
@@ -303,12 +546,29 @@ pub fn add_subscription_job(
         env: U256::from_be_slice(&subscription_job_topics[2].as_slice()).to::<u8>(),
     };
 
+    insert_subscription_job(
+        contracts_client,
+        subscription_job,
+        req_chain_tx,
+        is_historic_log,
+    )
+}
+
+// Add the subscription and schedule its instances. is_historic_log is set for a subscription
+// that started before the gateway learnt about it.
+fn insert_subscription_job(
+    contracts_client: &Arc<ContractsClient>,
+    subscription_job: SubscriptionJob,
+    req_chain_tx: Sender<Job>,
+    is_historic_log: bool,
+) -> Result<U256, ServerlessError> {
     let current_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    if is_historic_log && subscription_job.termination_time < current_timestamp {
+    // also for a JobSubscriptionStarted event handled again after the subscription ended
+    if subscription_job.termination_time < current_timestamp {
         info!(
             "Subscription Job is complete - Subscription ID: {}",
             subscription_job.subscription_id
@@ -624,18 +884,24 @@ pub fn update_subscription_job_termination_params(
 mod job_subscription_management_tests {
     use alloy::{
         dyn_abi::DynSolValue,
-        primitives::{Bytes, Log as InnerLog, LogData},
+        primitives::{keccak256, Bytes, Log as InnerLog, LogData},
         signers::local::PrivateKeySigner,
     };
     use serde_json::json;
+    use std::{collections::HashMap, sync::Mutex};
+
+    use crate::constant::{
+        REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
+        REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
+        REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
+    };
 
     use super::*;
 
     use crate::test_util::{
         add_gateway_epoch_state, generate_contracts_client, generate_generic_subscription_job,
         generate_job_subscription_job_params_updated, generate_job_subscription_started_log,
-        generate_job_subscription_termination_params_updated, MockHttpProvider, CHAIN_ID,
-        CODE_HASH,
+        generate_job_subscription_termination_params_updated, CHAIN_ID, CODE_HASH,
     };
 
     #[test]
@@ -1657,128 +1923,363 @@ mod job_subscription_management_tests {
         }
     }
 
+    // jobSubsCount after initialize, as RelaySubscriptions sets it
+    fn initial_job_subs_count(chain_id: u64) -> U256 {
+        (U256::from(chain_id) << 192usize) | (U256::from(1) << 191usize)
+    }
+
+    // RelaySubscriptions._updateJobSubsCount, called before each new subscription is stored
+    fn update_job_subs_count(job_subs_count: U256, chain_id: u64) -> U256 {
+        let sub_id: U256 = (job_subs_count >> 127usize) & U256::from(u64::MAX);
+        let mut job_subs_count = job_subs_count;
+        if sub_id == U256::from(u64::MAX) {
+            job_subs_count = initial_job_subs_count(chain_id);
+        }
+        job_subs_count + (U256::from(1) << 127usize)
+    }
+
+    #[test]
+    fn test_subscription_id_range() {
+        // no subscription yet
+        let job_subs_count = initial_job_subs_count(CHAIN_ID);
+        let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+        assert_eq!(ids.len(), 0);
+        assert_eq!(ids.batches(500).count(), 0);
+
+        // the ids the contract stores the subscriptions at
+        let mut job_subs_count = job_subs_count;
+        let mut stored_ids = Vec::new();
+        for _ in 0..5 {
+            job_subs_count = update_job_subs_count(job_subs_count, CHAIN_ID);
+            stored_ids.push(job_subs_count);
+        }
+
+        let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+        assert_eq!(ids.len(), 5);
+        assert_eq!(
+            ids.id(1),
+            initial_job_subs_count(CHAIN_ID) | (U256::from(1) << 127usize)
+        );
+        let batches: Vec<Vec<U256>> = ids.batches(2).collect();
+        assert_eq!(
+            batches,
+            vec![
+                stored_ids[0..2].to_vec(),
+                stored_ids[2..4].to_vec(),
+                stored_ids[4..5].to_vec()
+            ]
+        );
+        assert_eq!(ids.batches(5).collect::<Vec<_>>(), vec![stored_ids.clone()]);
+        assert_eq!(
+            ids.batches(500).collect::<Vec<_>>(),
+            vec![stored_ids.clone()]
+        );
+        // a batch size of 0 reads one subscription per call
+        assert_eq!(ids.batches(0).count(), 5);
+    }
+
+    #[test]
+    fn test_subscription_id_range_wrap_around() {
+        // the last two sub ids before the contract starts again from sub_id 1
+        let job_subs_count =
+            initial_job_subs_count(CHAIN_ID) | (U256::from(u64::MAX - 2) << 127usize);
+        let job_subs_count = update_job_subs_count(job_subs_count, CHAIN_ID);
+        let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+        assert_eq!(ids.len(), u64::MAX - 1);
+        assert_eq!(ids.batches(3).next().unwrap().len(), 3);
+
+        let job_subs_count = update_job_subs_count(job_subs_count, CHAIN_ID);
+        let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+        assert_eq!(ids.len(), u64::MAX);
+        assert_eq!(ids.id(u64::MAX), job_subs_count);
+
+        // wrapped around, the next subscription is stored at sub_id 1
+        let job_subs_count = update_job_subs_count(job_subs_count, CHAIN_ID);
+        let ids = SubscriptionIdRange::from_job_subs_count(job_subs_count);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(
+            ids.batches(500).collect::<Vec<_>>(),
+            vec![vec![job_subs_count]]
+        );
+        // the chain id prefix is kept
+        assert_eq!(
+            ids.id(1) >> 191usize,
+            initial_job_subs_count(CHAIN_ID) >> 191usize
+        );
+    }
+
+    // ABI encoded return data of jobSubscriptions(id)
+    fn encode_job_subscription(
+        job_owner: Address,
+        start_time: u64,
+        periodic_gap: u64,
+        termination_timestamp: u64,
+        code_inputs: &[u8],
+    ) -> Bytes {
+        DynSolValue::Tuple(vec![
+            DynSolValue::Uint(U256::from(periodic_gap), 256),
+            DynSolValue::Uint(U256::from(termination_timestamp), 256),
+            DynSolValue::Uint(U256::from(3), 256),
+            DynSolValue::Uint(U256::from(start_time + periodic_gap), 256),
+            DynSolValue::Uint(U256::from(2000), 256),
+            DynSolValue::Address(job_owner),
+            DynSolValue::Tuple(vec![
+                DynSolValue::Uint(U256::from(start_time), 256),
+                DynSolValue::Uint(U256::from(1000), 256),
+                DynSolValue::Uint(U256::from(500000), 256),
+                DynSolValue::Uint(U256::from(10000), 256),
+                DynSolValue::Uint(U256::from(100000), 256),
+                DynSolValue::Address(job_owner),
+                DynSolValue::Address(Address::ZERO),
+                DynSolValue::Uint(U256::from(1), 8),
+                DynSolValue::FixedBytes(*CODE_HASH, 32),
+                DynSolValue::Bytes(code_inputs.to_vec()),
+            ]),
+        ])
+        .abi_encode_params()
+        .into()
+    }
+
+    #[test]
+    fn test_job_subscriptions_multicall_encoding() {
+        let relay_subscriptions_address = PrivateKeySigner::random().address();
+        let ids = vec![U256::from(1), U256::from(2)];
+
+        let calls = job_subscriptions_calls(relay_subscriptions_address, &ids);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].target, relay_subscriptions_address);
+        assert!(!calls[1].allowFailure);
+        let mut expected_call_data = keccak256("jobSubscriptions(uint256)")[..4].to_vec();
+        expected_call_data.extend_from_slice(&U256::from(2).to_be_bytes::<32>());
+        assert_eq!(calls[1].callData.to_vec(), expected_call_data);
+        assert_eq!(
+            IMulticall3::aggregate3Call::SELECTOR,
+            keccak256("aggregate3((address,bool,bytes)[])")[..4]
+        );
+
+        let owner = PrivateKeySigner::random().address();
+        let results = vec![
+            IMulticall3::Call3Result {
+                success: true,
+                returnData: encode_job_subscription(owner, 100, 10, 1000, b"input"),
+            },
+            IMulticall3::Call3Result {
+                success: true,
+                returnData: encode_job_subscription(Address::ZERO, 0, 0, 0, b""),
+            },
+        ];
+        let decoded = decode_job_subscriptions_results(&results).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].periodicGap, U256::from(10));
+        assert_eq!(decoded[0].terminationTimestamp, U256::from(1000));
+        assert_eq!(decoded[0].userTimeout, U256::from(2000));
+        assert_eq!(decoded[0].job.jobOwner, owner);
+        assert_eq!(decoded[0].job.startTime, U256::from(100));
+        assert_eq!(decoded[0].job.env, 1);
+        assert_eq!(decoded[0].job.codehash, *CODE_HASH);
+        assert_eq!(decoded[0].job.codeInputs, Bytes::from_static(b"input"));
+        assert_eq!(decoded[1].job.jobOwner, Address::ZERO);
+
+        let failed = vec![IMulticall3::Call3Result {
+            success: false,
+            returnData: Bytes::new(),
+        }];
+        assert!(decode_job_subscriptions_results(&failed).is_err());
+    }
+
+    // Reader of a contract state given as the return data of jobSubscriptions by sub_id
+    struct MockJobSubscriptionsReader {
+        job_subs_count: U256,
+        job_subscriptions: HashMap<U256, Bytes>,
+        batch_sizes: Mutex<Vec<usize>>,
+        failing_calls: Mutex<usize>,
+    }
+
+    impl JobSubscriptionsReader for MockJobSubscriptionsReader {
+        async fn job_subs_count(&self) -> Result<U256, ServerlessError> {
+            Ok(self.job_subs_count)
+        }
+
+        async fn job_subscriptions(
+            &self,
+            ids: &[U256],
+        ) -> Result<Vec<jobSubscriptionsReturn>, ServerlessError> {
+            {
+                let mut failing_calls = self.failing_calls.lock().unwrap();
+                if *failing_calls > 0 {
+                    *failing_calls -= 1;
+                    return Err(ServerlessError::ContractCallFailure(
+                        "mock failure".to_owned(),
+                    ));
+                }
+            }
+            self.batch_sizes.lock().unwrap().push(ids.len());
+            Ok(ids
+                .iter()
+                .map(|id| {
+                    let data =
+                        self.job_subscriptions.get(id).cloned().unwrap_or_else(|| {
+                            encode_job_subscription(Address::ZERO, 0, 0, 0, b"")
+                        });
+                    jobSubscriptionsCall::abi_decode_returns(&data, true).unwrap()
+                })
+                .collect())
+        }
+    }
+
+    // 5 subscriptions: 1, 3 and 5 active, 2 deleted after its refund, 4 terminated
+    fn mock_reader(now: u64, owner: Address) -> MockJobSubscriptionsReader {
+        let mut job_subs_count = initial_job_subs_count(CHAIN_ID);
+        let mut job_subscriptions = HashMap::new();
+        for sub_id in 1..=5u64 {
+            job_subs_count = update_job_subs_count(job_subs_count, CHAIN_ID);
+            let data = match sub_id {
+                2 => encode_job_subscription(Address::ZERO, 0, 0, 0, b""),
+                4 => encode_job_subscription(owner, now - 1000, 10, now - 1, b"old"),
+                _ => encode_job_subscription(owner, now - 100_000, 20, now + 1500, b"input"),
+            };
+            job_subscriptions.insert(job_subs_count, data);
+        }
+        MockJobSubscriptionsReader {
+            job_subs_count,
+            job_subscriptions,
+            batch_sizes: Mutex::new(Vec::new()),
+            failing_calls: Mutex::new(0),
+        }
+    }
+
     #[tokio::test]
-    async fn test_process_historic_subscription_jobs_on_request_chain() {
-        let contracts_client = generate_contracts_client().await;
-        add_gateway_epoch_state(contracts_client.clone(), None, None, Some(-2)).await;
-        add_gateway_epoch_state(contracts_client.clone(), None, None, Some(-3)).await;
-        add_gateway_epoch_state(contracts_client.clone(), None, None, Some(-4)).await;
-        let request_chains_data = contracts_client.request_chains_data.read().unwrap().clone();
-        let request_chain_data = request_chains_data.get(&CHAIN_ID).unwrap();
-        let (req_chain_tx, _com_chain_rx) = tokio::sync::mpsc::channel::<Job>(100);
-        let (job_sub_tx, mut job_sub_rx) =
-            tokio::sync::mpsc::channel::<JobSubscriptionChannelType>(100);
-        let mock_http_provider =
-            MockHttpProvider::new(None, request_chain_data.request_chain_start_block_number);
-
-        process_historic_subscription_jobs_on_request_chain(
-            &contracts_client,
-            request_chain_data,
-            req_chain_tx,
-            job_sub_tx,
-            mock_http_provider,
-        )
-        .await;
-
-        // Sleep for 2s to allow all async tasks to complete
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        if let Some(rx_job) = job_sub_rx.recv().await {
-            if rx_job.subscription_action == JobSubscriptionAction::Add {
-                assert_eq!(rx_job.subscription_id, U256::from(1));
-            } else {
-                assert!(false);
-            }
-        } else {
-            assert!(false);
-        }
-
-        if let Some(rx_job) = job_sub_rx.recv().await {
-            if rx_job.subscription_action == JobSubscriptionAction::Add {
-                assert_eq!(rx_job.subscription_id, U256::from(3));
-            } else {
-                assert!(false);
-            }
-        } else {
-            assert!(false);
-        }
-
-        let subscription_job_one: Option<SubscriptionJob>;
-        // Scope for read lock on subscription_jobs
-        {
-            let subscription_jobs = contracts_client.subscription_jobs.read().unwrap();
-            subscription_job_one = subscription_jobs.get(&U256::from(1)).cloned();
-        }
-
-        assert!(subscription_job_one.is_some());
-
-        let subscription_job_one = subscription_job_one.unwrap();
-        assert_eq!(
-            subscription_job_one.tx_hash,
-            keccak256("9468bb6a8e85ed11e292c8cac0c1539df691c8d8ec62e7dbfa9f1bd7f504e7d8"),
-        );
-        assert_eq!(
-            subscription_job_one.code_input,
-            Bytes::from(
-                serde_json::to_vec(&json!({
-                    "num": 108
-                }))
-                .unwrap(),
-            )
-        );
-
-        let system_time = SystemTime::now()
+    async fn test_read_active_subscription_jobs() {
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        assert!(subscription_job_one.termination_time >= system_time + 1490);
-        assert!(subscription_job_one.termination_time <= system_time + 1510);
+        let owner = PrivateKeySigner::random().address();
+        let reader = mock_reader(now, owner);
+        // the first read of a batch fails and is retried
+        *reader.failing_calls.lock().unwrap() = 1;
+
+        let jobs = read_active_subscription_jobs(&reader, CHAIN_ID, 2, now)
+            .await
+            .unwrap();
+
+        assert_eq!(*reader.batch_sizes.lock().unwrap(), vec![2, 2, 1]);
+        let ids = SubscriptionIdRange::from_job_subs_count(reader.job_subs_count);
+        assert_eq!(
+            jobs.iter()
+                .map(|job| job.subscription_id)
+                .collect::<Vec<_>>(),
+            vec![ids.id(1), ids.id(3), ids.id(5)]
+        );
+        assert_eq!(
+            jobs[0],
+            SubscriptionJob {
+                subscription_id: ids.id(1),
+                request_chain_id: CHAIN_ID,
+                subscriber: owner,
+                interval: 20,
+                termination_time: now + 1500,
+                user_timeout: U256::from(2000),
+                tx_hash: *CODE_HASH,
+                code_input: Bytes::from_static(b"input"),
+                starttime: now - 100_000,
+                env: 1,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_active_subscription_jobs_returns_the_error() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let reader = mock_reader(now, PrivateKeySigner::random().address());
+        *reader.failing_calls.lock().unwrap() = usize::MAX;
+
+        let res = read_active_subscription_jobs(&reader, CHAIN_ID, 500, now).await;
+
+        assert_eq!(
+            res,
+            Err(ServerlessError::ContractCallFailure(
+                "mock failure".to_owned()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_subscription_jobs_from_state() {
+        let contracts_client = generate_contracts_client().await;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let owner = PrivateKeySigner::random().address();
+        let reader = mock_reader(now, owner);
+        let ids = SubscriptionIdRange::from_job_subs_count(reader.job_subs_count);
+        let (req_chain_tx, _req_chain_rx) = tokio::sync::mpsc::channel::<Job>(100);
+        let (job_sub_tx, mut job_sub_rx) =
+            tokio::sync::mpsc::channel::<JobSubscriptionChannelType>(100);
+
+        add_subscription_jobs_from_state(
+            &contracts_client,
+            &reader,
+            CHAIN_ID,
+            req_chain_tx.clone(),
+            job_sub_tx.clone(),
+        )
+        .await
+        .unwrap();
+
+        for sub_id in [1, 3, 5] {
+            let rx_job = job_sub_rx.recv().await.unwrap();
+            assert_eq!(rx_job.subscription_action, JobSubscriptionAction::Add);
+            assert_eq!(rx_job.subscription_id, ids.id(sub_id));
+        }
+        assert!(job_sub_rx.try_recv().is_err());
 
         {
             let subscription_jobs = contracts_client.subscription_jobs.read().unwrap();
-            let subscription_job_two = subscription_jobs.get(&U256::from(2));
-
-            assert!(subscription_job_two.is_none());
+            assert_eq!(subscription_jobs.len(), 3);
+            assert!(subscription_jobs.contains_key(&ids.id(1)));
+            assert!(!subscription_jobs.contains_key(&ids.id(2)));
+            assert!(!subscription_jobs.contains_key(&ids.id(4)));
         }
 
-        assert!(job_sub_rx.recv().await.is_none());
-
-        // Scope for read lock on subscription_job_instance_heap
+        // the instances are scheduled from the maintained block states on, not from the start
         {
-            let subscription_job_instance_heap_guard = contracts_client
+            let minimum_timestamp_for_job = get_minimum_timestamp_for_job(&contracts_client);
+            let heap = contracts_client
                 .subscription_job_instance_heap
                 .read()
                 .unwrap();
-            let subscription_job_instance = subscription_job_instance_heap_guard.peek().unwrap();
-
-            assert_eq!(subscription_job_instance.subscription_id, U256::from(1));
-            assert_eq!(
-                subscription_job_instance.next_trigger_time,
-                subscription_job_one.starttime + subscription_job_one.interval
-            );
+            assert_eq!(heap.len(), 3);
+            for instance in heap.iter() {
+                assert!(instance.next_trigger_time >= minimum_timestamp_for_job);
+                assert!(instance.next_trigger_time < minimum_timestamp_for_job + 20 + 1);
+            }
         }
 
-        let mut expected_job = subscription_job_to_relay_job(
-            subscription_job_one.clone(),
-            subscription_job_one.starttime,
+        // loading again, as after a replay of the events, does not add them twice
+        add_subscription_jobs_from_state(
+            &contracts_client,
+            &reader,
+            CHAIN_ID,
+            req_chain_tx,
+            job_sub_tx,
+        )
+        .await
+        .unwrap();
+        assert!(job_sub_rx.try_recv().is_err());
+        assert_eq!(contracts_client.subscription_jobs.read().unwrap().len(), 3);
+        assert_eq!(
+            contracts_client
+                .subscription_job_instance_heap
+                .read()
+                .unwrap()
+                .len(),
+            3
         );
-        expected_job.gateway_address = Some(contracts_client.enclave_address);
-        expected_job.tx_hash = *CODE_HASH;
-        expected_job.code_input = Bytes::from(
-            serde_json::to_vec(&json!({
-                "num": 10
-            }))
-            .unwrap(),
-        );
-
-        // Scope for read lock on active_jobs
-        {
-            let active_jobs = contracts_client.active_jobs.read().unwrap();
-            let active_job = active_jobs.get(&U256::from(1));
-
-            assert!(active_job.is_some());
-            assert_eq!(active_job.unwrap(), &expected_job);
-        }
     }
 
     #[tokio::test]

@@ -54,6 +54,8 @@ Supported outputs:
   ```
   `gateways_start_block` is the block the gateway starts reading the `Gateways` contract events from. Set it to the block the `Gateways` contract was deployed at. The events are read in queries of 50,000 blocks, so with `0` on a public chain the gateway has to make several thousand queries before it can relay jobs, and it logs a warning at start-up.
 
+  Two optional fields set how the gateway reads the subscriptions of the `RelaySubscriptions` contracts when it starts serving. A gateway serves the subscriptions started before it, so they are read from the contract state, not from the events: `multicall3_addr` (default `0xcA11bde05977b3631167028862bE2a173976CA11`, the address Multicall3 is deployed at on Arbitrum One and Arbitrum Sepolia) and `subscriptions_batch_size` (default `500`), the number of subscriptions read in one call. When no contract is deployed at `multicall3_addr` on a request chain, as on a local chain, the subscriptions are read with one call each.
+
 # Dev Run
 
 - Initialize the gateway with owner address, gas wallet private key, web socket api key, list of request chain ID and generate the signatures for registration. For generating `gateway-vsock-client`, follow the [README](../http-on-vsock-client/README.md)
@@ -63,6 +65,14 @@ Supported outputs:
 - Use the signature from the above output to register on the commmon chain and request chain
 
 - Verify the addresses on the gateway by checking the output of above command
+
+## Restarts
+
+The owner address, the gas wallet key and the web socket api key are only kept in memory, they are not written to disk. After the gateway process restarts, inject them again with the same command as above. The enclave key does not change when only the gateway process restarts, so the enclave is still registered on chain.
+
+Once both configs are injected, the gateway reads the registration of its enclave address from the `Gateways` contract on the common chain (owner and request chain ids) and from the `Relay` contract on each request chain. If the enclave is registered with the injected owner on all of them, the gateway starts serving again without a new registration. `/signed-registration-message` runs the same check first, so the command above, which requests a registration message after injecting the configs, gets the answer that the enclave is already registered. A draining state set on chain applies as before, it is read from the `Gateways` contract like the state of the other gateways. If the enclave is not registered, or is registered with another owner or only on some of the chains, the gateway logs it and waits for a registration as on a fresh start. RPC errors during this check are retried with a backoff.
+
+The host can do the injection automatically, for example with a service that waits for the vsock server of the gateway to answer and then runs the `gateway-vsock-client` command above with the same owner address, gas key and api key, and that runs again whenever the gateway process restarts. The gas key then has to be available on the host to that service. This repository does not include such a service.
 
 # Running Tests
 

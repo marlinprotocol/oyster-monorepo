@@ -19,6 +19,8 @@ pub enum ServerlessError {
     LogsFetchFailure(String),
     #[error("Failed to get the block number: {0}")]
     BlockNumberFetchFailure(String),
+    #[error("Failed to call the contract: {0}")]
+    ContractCallFailure(String),
 
     #[cfg(test)]
     #[error("Invalid topic")]

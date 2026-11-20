@@ -13,6 +13,7 @@ use http_on_vsock_server::{VsockAddrParser, VsockServer};
 use tokio::fs;
 
 use serverless::cgroups::Cgroups;
+use serverless::events::ProcessedLogs;
 use serverless::model::{AppState, ConfigManager};
 use serverless::server::{
     export_signed_registration_message, get_tee_details, index, inject_immutable_config,
@@ -99,6 +100,10 @@ async fn main() -> Result<()> {
         enclave_draining: Arc::new(AtomicBool::new(false)),
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         last_block_seen: Arc::new(AtomicU64::new(0)),
+        logs_backfill_chunk_size: config.logs_backfill_chunk_size,
+        job_lookback_blocks: config.job_lookback_blocks,
+        catch_up_until_block: Arc::new(AtomicU64::new(0)),
+        processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
         http_rpc_txn_manager: Arc::new(Mutex::new(None)),
         job_requests_running: Arc::new(Mutex::new(HashSet::new())),
     };
