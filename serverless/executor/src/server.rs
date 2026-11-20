@@ -16,7 +16,6 @@ use crate::events::events_listener;
 use crate::model::{
     AppState, ImmutableConfig, MutableConfig, Register, RegistrationMessage, TeeConfig,
 };
-use crate::utils::get_latest_block_number;
 
 pub async fn index() {}
 
@@ -57,6 +56,9 @@ pub async fn inject_immutable_config(
     // Initialize owner address for the enclave
     *app_state.enclave_owner.lock().unwrap() = Address::from_slice(&owner_address);
     *immutable_params_injected_guard = true;
+    drop(immutable_params_injected_guard);
+
+    start_events_listener(&app_state);
 
     (
         StatusCode::OK,
@@ -145,6 +147,9 @@ pub async fn inject_mutable_config(
         *app_state.http_rpc_txn_manager.lock().unwrap() = Some(http_rpc_txn_manager);
         *mutable_params_injected_guard = true;
         drop(mutable_params_injected_guard);
+        drop(ws_rpc_url);
+
+        start_events_listener(&app_state);
     } else {
         if let Err(err) = app_state
             .http_rpc_txn_manager
@@ -166,6 +171,29 @@ pub async fn inject_mutable_config(
     }
 
     (StatusCode::OK, "Mutable params configured!\n").into_response()
+}
+
+// Start the events listener once both the immutable and the mutable params are configured, unless it is
+// already running. The listener reads the registration of the enclave from the Executors contract, so an
+// executor that is already registered (e.g. after a restart) resumes without a new registration.
+fn start_events_listener(app_state: &State<AppState>) {
+    if !*app_state.immutable_params_injected.lock().unwrap()
+        || !*app_state.mutable_params_injected.lock().unwrap()
+    {
+        return;
+    }
+
+    let mut events_listener_active_guard = app_state.events_listener_active.lock().unwrap();
+    if *events_listener_active_guard {
+        return;
+    }
+    *events_listener_active_guard = true;
+    drop(events_listener_active_guard);
+
+    let app_state = app_state.clone();
+    tokio::spawn(async move {
+        events_listener(app_state).await;
+    });
 }
 
 // Endpoint exposed to retrieve executor enclave details
@@ -255,24 +283,7 @@ pub async fn export_signed_registration_message(app_state: State<AppState>) -> R
     };
     let signature = hex::encode(sig.as_bytes());
 
-    let current_block_number = get_latest_block_number(&app_state.http_rpc_url).await;
-
-    let mut events_listener_active_guard = app_state.events_listener_active.lock().unwrap();
-    if *events_listener_active_guard == false {
-        let Ok(current_block_number) = current_block_number else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!(
-                "Failed to fetch the latest block number of the common chain for initiating event listening: {:?}\n",
-                current_block_number.unwrap_err()
-            )).into_response();
-        };
-
-        *events_listener_active_guard = true;
-        drop(events_listener_active_guard);
-
-        tokio::spawn(async move {
-            events_listener(app_state, current_block_number).await;
-        });
-    }
+    start_events_listener(&app_state);
 
     let response_body = RegistrationMessage {
         job_capacity,
