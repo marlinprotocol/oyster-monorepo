@@ -108,23 +108,17 @@ pub async fn events_listener(app_state: State<AppState>) {
                     }
                     _ = registration_check.tick() => {
                         match read_registration(&web_socket_client, &app_state).await {
-                            Ok((OnChainRegistration::Registered { draining }, block)) => {
+                            Ok((OnChainRegistration::Registered { owner, draining }, block)) => {
                                 println!(
                                     "Executor found registered on the common chain (draining: {})",
                                     draining
                                 );
+                                adopt_onchain_owner(&app_state, owner);
                                 if mark_registered(&app_state, draining, block).await {
                                     break;
                                 }
                             }
                             Ok((OnChainRegistration::NotRegistered, _)) => {}
-                            Ok((OnChainRegistration::OwnerMismatch(owner), _)) => {
-                                eprintln!(
-                                    "Executor is registered on the common chain with owner {:?}, which is not the injected owner {:?}",
-                                    owner,
-                                    *app_state.enclave_owner.lock().unwrap()
-                                );
-                            }
                             Err(err) => {
                                 eprintln!("Failed to read the executor registration from the Executors contract: {:?}", err);
                             }
@@ -255,8 +249,7 @@ fn next_retry_delay(current: Duration) -> Duration {
 #[derive(Debug, PartialEq)]
 pub(crate) enum OnChainRegistration {
     NotRegistered,
-    Registered { draining: bool },
-    OwnerMismatch(Address),
+    Registered { owner: Address, draining: bool },
 }
 
 // Decide the registration state from the 'executors' entry of the enclave, an entry with a zero owner
@@ -264,17 +257,35 @@ pub(crate) enum OnChainRegistration {
 pub(crate) fn registration_status(
     onchain_owner: Address,
     onchain_draining: bool,
-    expected_owner: Address,
 ) -> OnChainRegistration {
     if onchain_owner == Address::ZERO {
         OnChainRegistration::NotRegistered
-    } else if onchain_owner != expected_owner {
-        OnChainRegistration::OwnerMismatch(onchain_owner)
     } else {
         OnChainRegistration::Registered {
+            owner: onchain_owner,
             draining: onchain_draining,
         }
     }
+}
+
+// The owner of the enclave is set on chain at registration (the enclave signs the injected owner) and the
+// Executors contract cannot change it, so a different injected owner after a restart is a host config
+// error. Use the owner from the contract, so that the event filters match the registration. Returns false
+// if the injected owner was different.
+pub(crate) fn adopt_onchain_owner(app_state: &AppState, onchain_owner: Address) -> bool {
+    let mut owner = app_state.enclave_owner.lock().unwrap();
+    if *owner == onchain_owner {
+        return true;
+    }
+
+    eprintln!(
+        "WARNING: Executor is registered on the common chain with owner {:?}, but the injected owner is {:?}. \
+        The owner cannot change after registration, continuing with the on chain owner {:?}. Fix the owner \
+        address in the host config.",
+        onchain_owner, *owner, onchain_owner
+    );
+    *owner = onchain_owner;
+    false
 }
 
 // Read the registration of the enclave from the Executors contract at the latest block, returns the state and
@@ -302,11 +313,7 @@ async fn read_registration(
     .context("Failed to read the executor from the Executors contract")?;
 
     Ok((
-        registration_status(
-            executor.owner,
-            executor.draining,
-            *app_state.enclave_owner.lock().unwrap(),
-        ),
+        registration_status(executor.owner, executor.draining),
         block,
     ))
 }
@@ -780,25 +787,87 @@ mod unit_tests {
         let other = Address::repeat_byte(0x22);
 
         assert_eq!(
-            registration_status(Address::ZERO, false, owner),
+            registration_status(Address::ZERO, false),
             OnChainRegistration::NotRegistered
         );
         assert_eq!(
-            registration_status(Address::ZERO, true, owner),
+            registration_status(Address::ZERO, true),
             OnChainRegistration::NotRegistered
         );
         assert_eq!(
-            registration_status(owner, false, owner),
-            OnChainRegistration::Registered { draining: false }
+            registration_status(owner, false),
+            OnChainRegistration::Registered {
+                owner,
+                draining: false
+            }
         );
         assert_eq!(
-            registration_status(owner, true, owner),
-            OnChainRegistration::Registered { draining: true }
+            registration_status(owner, true),
+            OnChainRegistration::Registered {
+                owner,
+                draining: true
+            }
         );
         assert_eq!(
-            registration_status(other, false, owner),
-            OnChainRegistration::OwnerMismatch(other)
+            registration_status(other, false),
+            OnChainRegistration::Registered {
+                owner: other,
+                draining: false
+            }
         );
+    }
+
+    // App state for the tests that do not run jobs
+    fn test_app_state(jobs: Address, executors: Address) -> AppState {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        use std::sync::{Arc, Mutex, RwLock};
+
+        use crate::cgroups::Cgroups;
+        use alloy::signers::local::PrivateKeySigner;
+
+        AppState {
+            cgroups: Arc::new(Mutex::new(Cgroups { free: vec![] })),
+            job_capacity: 1,
+            workerd_runtime_path: String::new(),
+            secret_store_path: String::new(),
+            execution_buffer_time: 10,
+            common_chain_id: 31337,
+            http_rpc_url: String::new(),
+            ws_rpc_url: Arc::new(RwLock::new(String::new())),
+            executors_contract_addr: executors,
+            jobs_contract_addr: jobs,
+            code_contract_addr: String::new(),
+            num_selected_executors: 1,
+            enclave_signer: PrivateKeySigner::random(),
+            immutable_params_injected: Arc::new(Mutex::new(true)),
+            mutable_params_injected: Arc::new(Mutex::new(true)),
+            enclave_registered: Arc::new(AtomicBool::new(true)),
+            events_listener_active: Arc::new(Mutex::new(true)),
+            enclave_draining: Arc::new(AtomicBool::new(false)),
+            enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
+            http_rpc_txn_manager: Arc::new(Mutex::new(None)),
+            last_block_seen: Arc::new(AtomicU64::new(0)),
+            logs_backfill_chunk_size: 10000,
+            processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
+            job_requests_running: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    #[test]
+    fn adopt_onchain_owner_test() {
+        let injected = Address::repeat_byte(0x11);
+        let onchain = Address::repeat_byte(0x22);
+        let app_state = test_app_state(Address::ZERO, Address::ZERO);
+        *app_state.enclave_owner.lock().unwrap() = injected;
+
+        // Same owner, nothing changes
+        assert!(adopt_onchain_owner(&app_state, injected));
+        assert_eq!(*app_state.enclave_owner.lock().unwrap(), injected);
+
+        // Different owner on chain, the on chain owner is used from now on
+        assert!(!adopt_onchain_owner(&app_state, onchain));
+        assert_eq!(*app_state.enclave_owner.lock().unwrap(), onchain);
+        assert!(adopt_onchain_owner(&app_state, onchain));
     }
 
     #[test]
@@ -934,13 +1003,8 @@ mod unit_tests {
         use alloy::network::{EthereumWallet, TransactionBuilder};
         use alloy::primitives::Bytes;
         use alloy::rpc::types::TransactionRequest;
-        use alloy::sol_types::SolValue;
-        use std::collections::HashSet;
-        use std::sync::atomic::{AtomicBool, AtomicU64};
-        use std::sync::{Arc, Mutex, RwLock};
-
-        use crate::cgroups::Cgroups;
         use alloy::signers::local::PrivateKeySigner;
+        use alloy::sol_types::SolValue;
 
         let anvil_bin = std::env::var("ANVIL_BIN").unwrap_or(String::from("anvil"));
         let port = 20000 + (std::process::id() % 20000) as u16;
@@ -999,32 +1063,14 @@ mod unit_tests {
         let other_enclave = Address::repeat_byte(0x44);
 
         let app_state = State(AppState {
-            cgroups: Arc::new(Mutex::new(Cgroups { free: vec![] })),
-            job_capacity: 1,
-            workerd_runtime_path: String::new(),
-            secret_store_path: String::new(),
-            execution_buffer_time: 10,
-            common_chain_id: 31337,
-            http_rpc_url: String::new(),
-            ws_rpc_url: Arc::new(RwLock::new(String::new())),
-            executors_contract_addr: executors,
-            jobs_contract_addr: jobs,
-            code_contract_addr: String::new(),
-            num_selected_executors: 1,
             enclave_signer,
-            immutable_params_injected: Arc::new(Mutex::new(true)),
-            mutable_params_injected: Arc::new(Mutex::new(true)),
-            enclave_registered: Arc::new(AtomicBool::new(true)),
-            events_listener_active: Arc::new(Mutex::new(true)),
-            enclave_draining: Arc::new(AtomicBool::new(false)),
-            enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
-            http_rpc_txn_manager: Arc::new(Mutex::new(None)),
-            last_block_seen: Arc::new(AtomicU64::new(provider.get_block_number().await.unwrap())),
             // Small chunks so that every sweep spans several 'eth_getLogs' queries
             logs_backfill_chunk_size: 2,
-            processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
-            job_requests_running: Arc::new(Mutex::new(HashSet::new())),
+            ..test_app_state(jobs, executors)
         });
+        app_state
+            .last_block_seen
+            .store(provider.get_block_number().await.unwrap(), Ordering::SeqCst);
         let (tx, _rx) = channel::<JobsTransaction>(10);
 
         let emit = |to: Address, topics: [B256; 3], data: Vec<u8>| {
