@@ -362,7 +362,7 @@ impl TxnManager {
                 Ok(pending_txn) => pending_txn,
                 Err(err) => {
                     failure_reason = err.to_string();
-                    let txn_manager_err = parse_send_error(failure_reason.clone());
+                    let txn_manager_err = parse_send_error(&err);
                     match txn_manager_err {
                         TxnManagerSendError::NonceTooLow(_) => {
                             update_nonce = true;
@@ -382,6 +382,18 @@ impl TxnManager {
                             transaction.gas_price = transaction.gas_price
                                 * (100 + self.gas_price_increment_percent)
                                 / 100;
+                            continue;
+                        }
+                        TxnManagerSendError::InsufficientBalance(_) => {
+                            eprintln!(
+                                "Transaction {}: gas wallet {} has insufficient funds, retrying \
+                                 in {}s until the deadline. {}",
+                                transaction.id,
+                                transaction.private_signer.address(),
+                                RESEND_INTERVAL_SEC,
+                                failure_reason
+                            );
+                            sleep(Duration::from_secs(RESEND_INTERVAL_SEC)).await;
                             continue;
                         }
                         // Break in case the contract execution is failing for this txn
@@ -581,6 +593,10 @@ impl TxnManager {
     ) -> Result<(), TxnManagerSendError> {
         transaction.status = TxnStatus::Sending;
 
+        // Gas parameters of the transaction that is already pending
+        let pending_gas_price = transaction.gas_price;
+        let pending_estimated_gas = transaction.estimated_gas;
+
         transaction.estimated_gas += self.gas_limit_increment_amount;
         transaction.gas_price =
             transaction.gas_price * (100 + self.gas_price_increment_percent) / 100;
@@ -620,7 +636,7 @@ impl TxnManager {
                 Ok(pending_txn) => pending_txn,
                 Err(err) => {
                     failure_reason = err.to_string();
-                    let err = parse_send_error(failure_reason.clone());
+                    let err = parse_send_error(&err);
                     match err {
                         TxnManagerSendError::NonceTooLow(_) => {
                             let txn_receipt = self
@@ -660,6 +676,29 @@ impl TxnManager {
                                 / 100;
                             continue;
                         }
+                        // The same transaction is already in the mempool
+                        TxnManagerSendError::AlreadyKnown(_) => {
+                            transaction.gas_price = pending_gas_price;
+                            transaction.estimated_gas = pending_estimated_gas;
+                            self._keep_waiting_for_pending_transaction(transaction);
+                            return Ok(());
+                        }
+                        // The pending transaction can not be replaced with a higher price, it can
+                        // still be included, keep waiting for it
+                        TxnManagerSendError::InsufficientBalance(_) => {
+                            eprintln!(
+                                "Transaction {}: gas wallet {} has insufficient funds to raise \
+                                 the gas price, waiting for the pending transaction {}. {}",
+                                transaction.id,
+                                transaction.private_signer.address(),
+                                transaction.txn_hash.clone().unwrap_or_default(),
+                                failure_reason
+                            );
+                            transaction.gas_price = pending_gas_price;
+                            transaction.estimated_gas = pending_estimated_gas;
+                            self._keep_waiting_for_pending_transaction(transaction);
+                            return Ok(());
+                        }
                         // Break in case the contract execution is failing for this txn
                         // Or the gas required is way high compared to block gas limit
                         TxnManagerSendError::GasTooHigh(_)
@@ -692,6 +731,23 @@ impl TxnManager {
         }
 
         Err(TxnManagerSendError::Timeout(failure_reason))
+    }
+
+    /// Puts a transaction back in the queue to be monitored again with its current transaction
+    /// hash, without replacing it.
+    fn _keep_waiting_for_pending_transaction(self: &Arc<Self>, transaction: &mut Transaction) {
+        transaction.status = TxnStatus::Pending;
+        transaction.last_monitored = Instant::now();
+
+        self.transactions
+            .write()
+            .unwrap()
+            .insert(transaction.id.clone(), transaction.clone());
+
+        self.transaction_ids_queue
+            .write()
+            .unwrap()
+            .push_front(transaction.id.clone());
     }
 
     /// Sends a dummy transaction to handle nonce gaps.
@@ -733,10 +789,23 @@ impl TxnManager {
 
             let pending_txn = provider.send_transaction(dummy_txn).await;
             let Ok(pending_txn) = pending_txn else {
-                let err = parse_send_error(pending_txn.err().unwrap().to_string());
+                let err = parse_send_error(&pending_txn.err().unwrap());
                 match err {
                     TxnManagerSendError::NonceTooLow(_) => {
                         break;
+                    }
+                    TxnManagerSendError::InsufficientBalance(err) => {
+                        eprintln!(
+                            "Transaction {}: gas wallet {} has insufficient funds for the \
+                             transaction filling nonce {}, retrying in {}s. {}",
+                            transaction.id,
+                            transaction.private_signer.address(),
+                            transaction.nonce.unwrap(),
+                            RESEND_INTERVAL_SEC,
+                            err
+                        );
+                        sleep(Duration::from_secs(RESEND_INTERVAL_SEC)).await;
+                        continue;
                     }
                     TxnManagerSendError::OutOfGas(_) => {
                         transaction.estimated_gas += self.gas_limit_increment_amount;
@@ -925,11 +994,24 @@ impl TxnManager {
             estimated_gas = match estimated_gas_res {
                 Ok(estimated_gas) => estimated_gas,
                 Err(err) => {
-                    let err = parse_send_error(err.to_string());
+                    let err = parse_send_error(&err);
                     match err {
                         TxnManagerSendError::GasTooHigh(_)
                         | TxnManagerSendError::ContractExecution(_) => {
                             return Err(err);
+                        }
+                        TxnManagerSendError::InsufficientBalance(err) => {
+                            eprintln!(
+                                "Transaction {}: gas wallet {} has insufficient funds to \
+                                 estimate gas, retrying in {}s. {}",
+                                transaction.id,
+                                transaction.private_signer.address(),
+                                RESEND_INTERVAL_SEC,
+                                err
+                            );
+                            failure_reason = err;
+                            sleep(Duration::from_secs(RESEND_INTERVAL_SEC)).await;
+                            continue;
                         }
                         err => {
                             failure_reason = err.to_string();

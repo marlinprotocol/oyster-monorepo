@@ -20,6 +20,8 @@ pub enum TxnManagerSendError {
     GasPriceLow(String),
     #[error("Contract execution failed. Error: {0}")]
     ContractExecution(String),
+    #[error("Transaction already known. Error: {0}")]
+    AlreadyKnown(String),
     #[error("Network connectivity issue. Error: {0}")]
     NetworkConnectivity(String),
     #[error("Other retryable error. Error: {0}")]
