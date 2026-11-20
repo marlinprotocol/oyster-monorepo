@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy::eips::BlockId;
 use alloy::hex;
@@ -102,7 +102,7 @@ pub async fn events_listener(app_state: State<AppState>) {
                         let block = event
                             .block_number
                             .unwrap_or(app_state.last_block_seen.load(Ordering::SeqCst));
-                        if mark_registered(&app_state, false, block).await {
+                        if mark_registered(&app_state, false, block, false).await {
                             break;
                         }
                     }
@@ -114,7 +114,7 @@ pub async fn events_listener(app_state: State<AppState>) {
                                     draining
                                 );
                                 adopt_onchain_owner(&app_state, owner);
-                                if mark_registered(&app_state, draining, block).await {
+                                if mark_registered(&app_state, draining, block, true).await {
                                     break;
                                 }
                             }
@@ -318,15 +318,33 @@ async fn read_registration(
     ))
 }
 
-// Mark the enclave as registered and start the transaction manager, returns false if that is not possible yet
-async fn mark_registered(app_state: &State<AppState>, draining: bool, block: u64) -> bool {
+// Mark the enclave as registered at the given block and start the transaction manager, returns false if that
+// is not possible yet. With 'resumed' (the registration was read from the contract, e.g. after a restart),
+// the logs sweep starts 'job_lookback_blocks' before that block to find the jobs created while the executor
+// was not listening.
+async fn mark_registered(
+    app_state: &State<AppState>,
+    draining: bool,
+    block: u64,
+    resumed: bool,
+) -> bool {
     let Some(txn_manager) = app_state.http_rpc_txn_manager.lock().unwrap().clone() else {
         eprintln!("Executor registered but the gas key is not configured yet!");
         return false;
     };
 
     app_state.enclave_draining.store(draining, Ordering::SeqCst);
-    app_state.last_block_seen.store(block, Ordering::SeqCst);
+    if resumed {
+        app_state
+            .catch_up_until_block
+            .store(block, Ordering::SeqCst);
+        app_state.last_block_seen.store(
+            block.saturating_sub(app_state.job_lookback_blocks),
+            Ordering::SeqCst,
+        );
+    } else {
+        app_state.last_block_seen.store(block, Ordering::SeqCst);
+    }
     app_state.enclave_registered.store(true, Ordering::SeqCst);
 
     txn_manager.run().await;
@@ -442,6 +460,14 @@ fn process_log(
         return true;
     }
 
+    // The registration and draining state were read from the Executors contract at the block the executor
+    // resumed from, the older 'Executors' logs found by the lookback are already part of that state
+    if kind == LogKind::Executors
+        && current_block <= app_state.catch_up_until_block.load(Ordering::SeqCst)
+    {
+        return true;
+    }
+
     match kind {
         LogKind::Executors => handle_executors_log(event, app_state),
         LogKind::JobCreated => {
@@ -516,12 +542,21 @@ fn handle_job_created_log(
         return;
     };
 
-    // Mark the current job as under execution
-    app_state
+    // A job created before the executor resumed may have been answered or may be too old already
+    let missed = event
+        .block_number
+        .is_some_and(|block| block <= app_state.catch_up_until_block.load(Ordering::SeqCst));
+
+    // Mark the current job as under execution, a missed job that is already in flight is skipped
+    if !app_state
         .job_requests_running
         .lock()
         .unwrap()
-        .insert(job_id);
+        .insert(job_id)
+        && missed
+    {
+        return;
+    }
 
     // Check if the executor has been selected for the job execution
     let is_node_selected = event_decoded
@@ -529,17 +564,37 @@ fn handle_job_created_log(
         .clone()
         .into_iter()
         .any(|addr| addr == app_state.enclave_signer.address());
+    let code_hash = format!("0x{}", hex::encode(event_decoded.codehash.as_slice()));
+
+    if missed {
+        let job = MissedJob {
+            job_id,
+            block: event.block_number.unwrap_or_default(),
+            selected: is_node_selected,
+            code_hash,
+            code_inputs: event_decoded.codeInputs.clone().into(),
+        };
+        let app_state_clone = app_state.clone();
+        let tx_clone = tx_sender.clone();
+        tokio::spawn(async move {
+            handle_missed_job(job, app_state_clone, tx_clone).await;
+        });
+        return;
+    }
 
     let app_state_clone = app_state.clone();
     let user_deadline = event_decoded.deadline.clone().as_limbs()[0];
+    let timeout_delay = Duration::from_millis(
+        user_deadline
+            .saturating_add(app_state.execution_buffer_time.saturating_mul(1000))
+            .saturating_add(TIMEOUT_TXN_SEND_BUFFER_MS),
+    );
     let tx_clone = tx_sender.clone();
     tokio::spawn(async move {
-        handle_timeout(job_id, user_deadline, app_state_clone, tx_clone).await;
+        handle_timeout(job_id, timeout_delay, app_state_clone, tx_clone).await;
     });
 
     if is_node_selected {
-        let code_hash =
-            String::from("0x".to_owned() + &hex::encode(event_decoded.codehash.as_slice()));
         let app_state_clone = app_state.clone();
         let tx_clone = tx_sender.clone();
 
@@ -741,17 +796,243 @@ async fn periodic_sweep(
     }
 }
 
-// Start task to handle the execution timeout scenario for a job request
-async fn handle_timeout(
+// A 'JobCreated' log emitted before the executor resumed
+#[derive(Debug, Clone)]
+pub(crate) struct MissedJob {
     job_id: U256,
-    timeout: u64,
+    block: u64,
+    selected: bool,
+    code_hash: String,
+    code_inputs: Vec<u8>,
+}
+
+// Time left for a job created at 'exec_start_secs' (block timestamp) with the given deadline
+#[derive(Debug, PartialEq)]
+pub(crate) struct MissedJobTiming {
+    // Until the job deadline, the time a live job would have had left to execute
+    pub execution_left_ms: u64,
+    // Until the execution timeout can be reported to the Jobs contract (deadline plus the execution buffer)
+    pub timeout_in_ms: u64,
+}
+
+// The Jobs contract accepts outputs until 'execStartTime * 1000 + deadline + EXECUTION_BUFFER_TIME * 1000'
+// (milliseconds) and the execution timeout can be reported after that
+pub(crate) fn missed_job_timing(
+    now_ms: u64,
+    exec_start_secs: u64,
+    deadline_ms: u64,
+    execution_buffer_secs: u64,
+) -> MissedJobTiming {
+    let execution_end_ms = exec_start_secs
+        .saturating_mul(1000)
+        .saturating_add(deadline_ms);
+    let submission_end_ms =
+        execution_end_ms.saturating_add(execution_buffer_secs.saturating_mul(1000));
+
+    MissedJobTiming {
+        execution_left_ms: execution_end_ms.saturating_sub(now_ms),
+        timeout_in_ms: submission_end_ms
+            .saturating_sub(now_ms)
+            .saturating_add(TIMEOUT_TXN_SEND_BUFFER_MS),
+    }
+}
+
+// Run a missed job only if the executor is selected for it, has not submitted an output for it yet and there
+// is execution time left before its deadline. The execution then gets the time left, so that the output is
+// submitted within the execution buffer time as for a live job.
+pub(crate) fn should_run_missed_job(
+    selected: bool,
+    timing: &MissedJobTiming,
+    output_submitted: bool,
+) -> bool {
+    selected && timing.execution_left_ms > 0 && !output_submitted
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|now| now.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn saturating_u64(value: U256) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+// Whether 'executor' has submitted an output for the job, from the 'JobResponded' logs emitted since the job
+// was created. The Jobs contract keeps this in 'hasExecutedJob', which has no getter, and emits
+// 'JobResponded' with the executor as an indexed topic in the same call that sets it.
+pub(crate) async fn executor_submitted_output(
+    provider: &impl Provider,
+    jobs_contract_addr: Address,
+    job_id: U256,
+    executor: Address,
+    from_block: u64,
+    chunk_size: u64,
+) -> Result<bool> {
+    let latest_block = rpc_with_retries("fetch the latest block number", || {
+        provider.get_block_number()
+    })
+    .await?;
+
+    let filter = Filter::new()
+        .address(jobs_contract_addr)
+        .event_signature(JobsContract::JobResponded::SIGNATURE_HASH)
+        .topic1(B256::from(job_id))
+        .topic2(executor.into_word());
+
+    for (start, end) in block_ranges(from_block, latest_block, chunk_size) {
+        let range_filter = filter.clone().from_block(start).to_block(end);
+        let logs = rpc_with_retries(
+            &format!(
+                "fetch the 'JobResponded' logs of blocks {} to {}",
+                start, end
+            ),
+            || provider.get_logs(&range_filter),
+        )
+        .await?;
+        if logs.iter().any(|log| !log.removed) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+// Check a missed job against the Jobs contract, run it if it can still be answered and track its execution
+// timeout like a live job
+async fn handle_missed_job(
+    job: MissedJob,
     app_state: State<AppState>,
     tx_sender: Sender<JobsTransaction>,
 ) {
-    sleep(Duration::from_millis(
-        timeout + app_state.execution_buffer_time * 1000 + TIMEOUT_TXN_SEND_BUFFER_MS,
-    ))
+    let job_id = job.job_id;
+    let result = match app_state.http_rpc_url.parse::<reqwest::Url>() {
+        Ok(url) => {
+            let provider = ProviderBuilder::new().on_http(url);
+            resume_missed_job(&provider, job, &app_state, &tx_sender).await
+        }
+        Err(err) => Err(anyhow!("Invalid http rpc url: {:?}", err)),
+    };
+
+    if let Err(err) = result {
+        eprintln!(
+            "Failed to check the job {} created while the executor was not listening, not running it: {:?}",
+            job_id, err
+        );
+        app_state
+            .job_requests_running
+            .lock()
+            .unwrap()
+            .remove(&job_id);
+    }
+}
+
+pub(crate) async fn resume_missed_job(
+    provider: &impl Provider,
+    job: MissedJob,
+    app_state: &State<AppState>,
+    tx_sender: &Sender<JobsTransaction>,
+) -> Result<()> {
+    let job_id = job.job_id;
+    let jobs_contract = JobsContract::new(app_state.jobs_contract_addr, provider);
+    let onchain_job = rpc_with_retries("read the job from the Jobs contract", || async {
+        jobs_contract.jobs(job_id).call().await
+    })
+    .await?;
+
+    // The contract deletes the job once all the outputs are submitted or the timeout is reported
+    if onchain_job.execStartTime.is_zero() {
+        app_state
+            .job_requests_running
+            .lock()
+            .unwrap()
+            .remove(&job_id);
+        return Ok(());
+    }
+
+    let exec_start_secs = saturating_u64(onchain_job.execStartTime);
+    let deadline_ms = saturating_u64(onchain_job.deadline);
+    let timing = missed_job_timing(
+        now_ms(),
+        exec_start_secs,
+        deadline_ms,
+        app_state.execution_buffer_time,
+    );
+
+    let app_state_clone = app_state.clone();
+    let tx_clone = tx_sender.clone();
+    let timeout_delay = Duration::from_millis(timing.timeout_in_ms);
+    tokio::spawn(async move {
+        handle_timeout(job_id, timeout_delay, app_state_clone, tx_clone).await;
+    });
+
+    if !should_run_missed_job(job.selected, &timing, false) {
+        if job.selected {
+            println!(
+                "Not running job {} created while the executor was not listening, its deadline has passed",
+                job_id
+            );
+        }
+        return Ok(());
+    }
+
+    let output_submitted = executor_submitted_output(
+        provider,
+        app_state.jobs_contract_addr,
+        job_id,
+        app_state.enclave_signer.address(),
+        job.block,
+        app_state.logs_backfill_chunk_size,
+    )
+    .await?;
+
+    // Time has passed while reading the logs
+    let timing = missed_job_timing(
+        now_ms(),
+        exec_start_secs,
+        deadline_ms,
+        app_state.execution_buffer_time,
+    );
+    if !should_run_missed_job(job.selected, &timing, output_submitted) {
+        println!(
+            "Not running job {} created while the executor was not listening (output already submitted: {})",
+            job_id, output_submitted
+        );
+        return Ok(());
+    }
+
+    if app_state.enclave_draining.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    println!(
+        "Running job {} created while the executor was not listening, {} ms left",
+        job_id, timing.execution_left_ms
+    );
+    handle_job(
+        job_id,
+        U256::ZERO,
+        job.code_hash,
+        job.code_inputs,
+        timing.execution_left_ms,
+        app_state.clone(),
+        tx_sender.clone(),
+    )
     .await;
+
+    Ok(())
+}
+
+// Start task to handle the execution timeout scenario for a job request, 'delay' is the time until the
+// timeout can be reported to the Jobs contract
+async fn handle_timeout(
+    job_id: U256,
+    delay: Duration,
+    app_state: State<AppState>,
+    tx_sender: Sender<JobsTransaction>,
+) {
+    sleep(delay).await;
 
     // If the job request had been executed then don't send anything
     if !app_state
@@ -848,6 +1129,8 @@ mod unit_tests {
             http_rpc_txn_manager: Arc::new(Mutex::new(None)),
             last_block_seen: Arc::new(AtomicU64::new(0)),
             logs_backfill_chunk_size: 10000,
+            job_lookback_blocks: 2400,
+            catch_up_until_block: Arc::new(AtomicU64::new(0)),
             processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
             job_requests_running: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -868,6 +1151,68 @@ mod unit_tests {
         assert!(!adopt_onchain_owner(&app_state, onchain));
         assert_eq!(*app_state.enclave_owner.lock().unwrap(), onchain);
         assert!(adopt_onchain_owner(&app_state, onchain));
+    }
+
+    #[test]
+    fn missed_job_timing_test() {
+        let buffer = TIMEOUT_TXN_SEND_BUFFER_MS;
+        // Created at 1000s with a 5s deadline and a 20s execution buffer
+        let start = 1000;
+        assert_eq!(
+            missed_job_timing(1_000_000, start, 5000, 20),
+            MissedJobTiming {
+                execution_left_ms: 5000,
+                timeout_in_ms: 25000 + buffer
+            }
+        );
+        assert_eq!(
+            missed_job_timing(1_003_000, start, 5000, 20),
+            MissedJobTiming {
+                execution_left_ms: 2000,
+                timeout_in_ms: 22000 + buffer
+            }
+        );
+        // Deadline passed, the output could still be accepted but there is no execution time left
+        assert_eq!(
+            missed_job_timing(1_010_000, start, 5000, 20),
+            MissedJobTiming {
+                execution_left_ms: 0,
+                timeout_in_ms: 15000 + buffer
+            }
+        );
+        // Deadline and execution buffer passed, the timeout can be reported right away
+        assert_eq!(
+            missed_job_timing(1_100_000, start, 5000, 20),
+            MissedJobTiming {
+                execution_left_ms: 0,
+                timeout_in_ms: buffer
+            }
+        );
+        // Huge on chain values do not overflow
+        assert_eq!(
+            missed_job_timing(1_000_000, u64::MAX, u64::MAX, u64::MAX),
+            MissedJobTiming {
+                execution_left_ms: u64::MAX - 1_000_000,
+                timeout_in_ms: u64::MAX - 1_000_000 + buffer
+            }
+        );
+    }
+
+    #[test]
+    fn should_run_missed_job_test() {
+        let open = MissedJobTiming {
+            execution_left_ms: 1,
+            timeout_in_ms: 10000,
+        };
+        let over = MissedJobTiming {
+            execution_left_ms: 0,
+            timeout_in_ms: 10000,
+        };
+        assert!(should_run_missed_job(true, &open, false));
+        assert!(!should_run_missed_job(false, &open, false));
+        assert!(!should_run_missed_job(true, &open, true));
+        assert!(!should_run_missed_job(true, &over, false));
+        assert!(!should_run_missed_job(false, &over, true));
     }
 
     #[test]
@@ -996,67 +1341,113 @@ mod unit_tests {
     const LOG_EMITTER_INITCODE: &str =
         "601a600c600039601a6000f3606036036060600037604035602035600035606036036000a300";
 
-    // Integration test of the 'eth_getLogs' sweep against a local Anvil chain, skipped if 'anvil' is not
-    // available (set ANVIL_BIN to its path or put it on PATH)
-    #[tokio::test]
-    async fn sweep_logs_anvil_test() {
-        use alloy::network::{EthereumWallet, TransactionBuilder};
+    // Local Anvil chain for the integration tests, killed on drop. The tests are skipped if 'anvil' is not
+    // available (set ANVIL_BIN to its path or put it on PATH).
+    struct Anvil {
+        process: std::process::Child,
+        rpc_url: reqwest::Url,
+    }
+
+    impl Anvil {
+        fn start(port_offset: u16) -> Option<Anvil> {
+            let anvil_bin = std::env::var("ANVIL_BIN").unwrap_or(String::from("anvil"));
+            let port = 20000 + (std::process::id() % 20000) as u16 + port_offset;
+            let Ok(process) = std::process::Command::new(&anvil_bin)
+                .args(["--port", &port.to_string(), "--silent"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+            else {
+                println!("Skipping the Anvil test, '{}' not found", anvil_bin);
+                return None;
+            };
+
+            Some(Anvil {
+                process,
+                rpc_url: format!("http://127.0.0.1:{}", port).parse().unwrap(),
+            })
+        }
+
+        // Provider that sends transactions from Anvil's first default account, once Anvil is up
+        async fn provider(&self) -> impl Provider {
+            use alloy::network::EthereumWallet;
+            use alloy::signers::local::PrivateKeySigner;
+
+            let deployer: PrivateKeySigner =
+                "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                    .parse()
+                    .unwrap();
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(deployer))
+                .on_http(self.rpc_url.clone());
+            let mut ready = false;
+            for _ in 0..100 {
+                if provider.get_block_number().await.is_ok() {
+                    ready = true;
+                    break;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+            assert!(ready, "Anvil did not start");
+            provider
+        }
+    }
+
+    impl Drop for Anvil {
+        fn drop(&mut self) {
+            let _ = self.process.kill();
+            let _ = self.process.wait();
+        }
+    }
+
+    // Deploy a contract with the given init code, returns its address
+    async fn deploy(provider: &impl Provider, init_code: Vec<u8>) -> Address {
+        use alloy::network::TransactionBuilder;
+        use alloy::rpc::types::TransactionRequest;
+
+        provider
+            .send_transaction(TransactionRequest::default().with_deploy_code(init_code))
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap()
+            .contract_address
+            .unwrap()
+    }
+
+    // Send a transaction with the given calldata
+    async fn send(provider: &impl Provider, to: Address, calldata: Vec<u8>) {
+        use alloy::network::TransactionBuilder;
         use alloy::primitives::Bytes;
         use alloy::rpc::types::TransactionRequest;
+
+        provider
+            .send_transaction(
+                TransactionRequest::default()
+                    .with_to(to)
+                    .with_input(Bytes::from(calldata)),
+            )
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+    }
+
+    // Integration test of the 'eth_getLogs' sweep against a local Anvil chain
+    #[tokio::test]
+    async fn sweep_logs_anvil_test() {
+        use alloy::primitives::Bytes;
         use alloy::signers::local::PrivateKeySigner;
         use alloy::sol_types::SolValue;
 
-        let anvil_bin = std::env::var("ANVIL_BIN").unwrap_or(String::from("anvil"));
-        let port = 20000 + (std::process::id() % 20000) as u16;
-        let Ok(anvil) = std::process::Command::new(&anvil_bin)
-            .args(["--port", &port.to_string(), "--silent"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-        else {
-            println!("Skipping the Anvil test, '{}' not found", anvil_bin);
+        let Some(anvil) = Anvil::start(0) else {
             return;
         };
-        let mut anvil = scopeguard::guard(anvil, |mut anvil| {
-            let _ = anvil.kill();
-            let _ = anvil.wait();
-        });
-        let _ = &mut anvil;
+        let provider = anvil.provider().await;
 
-        // Anvil's first default account
-        let deployer: PrivateKeySigner =
-            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-                .parse()
-                .unwrap();
-        let rpc_url: reqwest::Url = format!("http://127.0.0.1:{}", port).parse().unwrap();
-        let provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::from(deployer))
-            .on_http(rpc_url);
-        let mut ready = false;
-        for _ in 0..100 {
-            if provider.get_block_number().await.is_ok() {
-                ready = true;
-                break;
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-        assert!(ready, "Anvil did not start");
-
-        let deploy = || async {
-            provider
-                .send_transaction(
-                    TransactionRequest::default()
-                        .with_deploy_code(hex::decode(LOG_EMITTER_INITCODE).unwrap()),
-                )
-                .await
-                .unwrap()
-                .get_receipt()
-                .await
-                .unwrap()
-                .contract_address
-                .unwrap()
-        };
-        let jobs = deploy().await;
-        let executors = deploy().await;
+        let jobs = deploy(&provider, hex::decode(LOG_EMITTER_INITCODE).unwrap()).await;
+        let executors = deploy(&provider, hex::decode(LOG_EMITTER_INITCODE).unwrap()).await;
 
         let enclave_signer = PrivateKeySigner::random();
         let enclave = enclave_signer.address();
@@ -1078,17 +1469,7 @@ mod unit_tests {
             async move {
                 let mut calldata = topics.concat();
                 calldata.extend(data);
-                provider
-                    .send_transaction(
-                        TransactionRequest::default()
-                            .with_to(to)
-                            .with_input(Bytes::from(calldata)),
-                    )
-                    .await
-                    .unwrap()
-                    .get_receipt()
-                    .await
-                    .unwrap();
+                send(provider, to, calldata).await;
             }
         };
         let job_responded = |job_id: u64| {
@@ -1180,6 +1561,19 @@ mod unit_tests {
         ));
         assert!(!app_state.enclave_draining.load(Ordering::SeqCst));
 
+        // After a resume, the 'Executors' logs up to the block the state was read at are not applied again
+        emit(
+            executors,
+            executor_event(ExecutorsContract::ExecutorDrained::SIGNATURE_HASH, enclave),
+            vec![],
+        )
+        .await;
+        let head = provider.get_block_number().await.unwrap();
+        app_state.catch_up_until_block.store(head, Ordering::SeqCst);
+        assert!(sweep_logs(&provider, &app_state, &tx).await.unwrap());
+        assert!(!app_state.enclave_draining.load(Ordering::SeqCst));
+        app_state.catch_up_until_block.store(0, Ordering::SeqCst);
+
         // Deregistration stops the sweep
         emit(
             executors,
@@ -1192,5 +1586,156 @@ mod unit_tests {
         .await;
         assert!(!sweep_logs(&provider, &app_state, &tx).await.unwrap());
         assert!(!app_state.enclave_registered.load(Ordering::SeqCst));
+    }
+    // Init code of a stand-in for the Jobs contract: a call with 36 bytes of calldata ('jobs(uint256)') returns
+    // the given 'jobs' entry for any job, any other call emits a log like LOG_EMITTER_INITCODE
+    fn jobs_stand_in_initcode(deadline_ms: u64, exec_start_secs: u64, output_count: u8) -> Vec<u8> {
+        use alloy::sol_types::SolValue;
+
+        let entry = (
+            U256::from(deadline_ms),
+            U256::from(exec_start_secs),
+            U256::ZERO,
+            Address::repeat_byte(0x55),
+            U256::from(EXECUTION_ENV_ID),
+            U256::from(output_count),
+        )
+            .abi_encode_params();
+        assert_eq!(entry.len(), 0xc0);
+
+        // CALLDATASIZE 0x24 EQ PUSH1 0x21 JUMPI, the log emitter, JUMPDEST at 0x21,
+        // CODECOPY(0, 0x2e, 0xc0) RETURN(0, 0xc0), the entry at 0x2e
+        let runtime = [
+            hex::decode("36602414602157").unwrap(),
+            hex::decode(LOG_EMITTER_INITCODE).unwrap()[12..].to_vec(),
+            hex::decode("5b60c0602e60003960c06000f3").unwrap(),
+            entry,
+        ]
+        .concat();
+        assert_eq!(runtime.len(), 0xee);
+
+        // CODECOPY(0, 0x0c, 0xee) RETURN(0, 0xee)
+        [hex::decode("60ee600c60003960ee6000f3").unwrap(), runtime].concat()
+    }
+
+    // Integration test of the checks of the jobs created while the executor was not listening, against a
+    // local Anvil chain
+    #[tokio::test]
+    async fn resume_missed_job_anvil_test() {
+        use alloy::sol_types::SolValue;
+
+        let Some(anvil) = Anvil::start(1) else {
+            return;
+        };
+        let provider = anvil.provider().await;
+
+        let now_secs = now_ms() / 1000;
+        // Job created now with a minute to execute, one past its deadline and execution buffer and one
+        // deleted from the contract
+        let open_jobs = deploy(&provider, jobs_stand_in_initcode(60000, now_secs, 0)).await;
+        let expired_jobs =
+            deploy(&provider, jobs_stand_in_initcode(1000, now_secs - 1000, 0)).await;
+        let deleted_jobs = deploy(&provider, jobs_stand_in_initcode(0, 0, 0)).await;
+
+        let app_state = State(AppState {
+            http_rpc_url: anvil.rpc_url.to_string(),
+            logs_backfill_chunk_size: 2,
+            ..test_app_state(open_jobs, Address::ZERO)
+        });
+        let enclave = app_state.enclave_signer.address();
+        let (tx, mut rx) = channel::<JobsTransaction>(10);
+
+        // The executor already answered job 2, another executor answered job 3
+        let responded = |job_id: u64, executor: Address| {
+            let mut calldata = [
+                JobsContract::JobResponded::SIGNATURE_HASH,
+                B256::from(U256::from(job_id)),
+                executor.into_word(),
+            ]
+            .concat();
+            calldata.extend(
+                (
+                    alloy::primitives::Bytes::new(),
+                    U256::ONE,
+                    U256::ZERO,
+                    U256::ONE,
+                )
+                    .abi_encode_params(),
+            );
+            calldata
+        };
+        send(&provider, open_jobs, responded(2, enclave)).await;
+        send(
+            &provider,
+            open_jobs,
+            responded(3, Address::repeat_byte(0x66)),
+        )
+        .await;
+        assert!(
+            executor_submitted_output(&provider, open_jobs, U256::from(2), enclave, 0, 2)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !executor_submitted_output(&provider, open_jobs, U256::from(3), enclave, 0, 2)
+                .await
+                .unwrap()
+        );
+
+        let missed = |job_id: u64, selected: bool| MissedJob {
+            job_id: U256::from(job_id),
+            block: 0,
+            selected,
+            code_hash: format!("0x{}", hex::encode(B256::repeat_byte(0x77))),
+            code_inputs: vec![],
+        };
+        let resume = |job: MissedJob, jobs: Address| {
+            let state = State(AppState {
+                jobs_contract_addr: jobs,
+                ..app_state.0.clone()
+            });
+            let provider = &provider;
+            let tx = tx.clone();
+            async move {
+                state
+                    .job_requests_running
+                    .lock()
+                    .unwrap()
+                    .insert(job.job_id);
+                resume_missed_job(provider, job, &state, &tx).await.unwrap();
+            }
+        };
+
+        // Jobs 1 and 3 run: the code transaction does not exist on Anvil, so the output has error code 1
+        resume(missed(1, true), open_jobs).await;
+        resume(missed(3, true), open_jobs).await;
+        // Already answered, not selected, past the deadline (the timeout is reported) and deleted
+        resume(missed(2, true), open_jobs).await;
+        resume(missed(4, false), open_jobs).await;
+        resume(missed(5, true), expired_jobs).await;
+        resume(missed(6, true), deleted_jobs).await;
+
+        let mut outputs = vec![];
+        let mut timeouts = vec![];
+        while let Ok(Some(txn)) = timeout(Duration::from_secs(5), rx.recv()).await {
+            match txn {
+                JobsTransaction::OUTPUT(call, deadline) => {
+                    assert_eq!(call._errorCode, 1);
+                    assert!(deadline > 0 && deadline <= 60000);
+                    outputs.push(call._jobId);
+                }
+                JobsTransaction::TIMEOUT(call) => timeouts.push(call._jobId),
+            }
+        }
+        outputs.sort();
+        assert_eq!(outputs, vec![U256::from(1), U256::from(3)]);
+        assert_eq!(timeouts, vec![U256::from(5)]);
+
+        let running = app_state.job_requests_running.lock().unwrap().clone();
+        assert_eq!(
+            running,
+            HashSet::from([1, 2, 3, 4].map(U256::from)),
+            "jobs with a pending timeout are still tracked"
+        );
     }
 }

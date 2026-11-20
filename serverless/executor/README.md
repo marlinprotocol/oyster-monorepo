@@ -90,7 +90,8 @@ Configuration file parameters required for running an executor node:
   "enclave_signer_file": // path to enclave secp256k1 private key file,
   "execution_buffer_time": // Execution buffer time as configured on common chain (in seconds),
   "num_selected_executors": // Number of executors selected at a time to execute a job as configured on common chain,
-  "logs_backfill_chunk_size": // (Optional, default 10000) Maximum block range of a single 'eth_getLogs' query, lower it if the RPC provider limits the range
+  "logs_backfill_chunk_size": // (Optional, default 10000) Maximum block range of a single 'eth_getLogs' query, lower it if the RPC provider limits the range,
+  "job_lookback_blocks": // (Optional, default 2400) Blocks before the latest block searched for jobs created while the executor was down, when it resumes as registered. It should cover the longest job deadline plus the execution buffer time
 }
 ```
 Example command to run the executor locally:
@@ -110,7 +111,7 @@ This will also start the listening of registration event notifications on the co
 
 <b> Restarts of the executor process </b>
 
-The owner address and the gas wallet private key are kept in memory only, the executor never writes them to disk. After the executor process restarts (for example `supervisord` restarting it inside the enclave), it does not listen to job requests until the host injects them again. Run the same `executor-vsock-client` command again for that. Once both are injected, the executor reads its entry in the **Executors** contract: if the enclave is already registered, it resumes listening to job requests right away (in draining mode if the executor is draining on chain) instead of waiting for a new registration. The registration signature printed by the client is not needed in that case. The owner is set on chain at registration and cannot change, so if the injected owner differs from the owner in the **Executors** contract, the executor logs a warning with both addresses and continues with the owner from the contract. Fix the owner address in the host config in that case.
+The owner address and the gas wallet private key are kept in memory only, the executor never writes them to disk. After the executor process restarts (for example `supervisord` restarting it inside the enclave), it does not listen to job requests until the host injects them again. Run the same `executor-vsock-client` command again for that. Once both are injected, the executor reads its entry in the **Executors** contract: if the enclave is already registered, it resumes listening to job requests right away (in draining mode if the executor is draining on chain) instead of waiting for a new registration. The registration signature printed by the client is not needed in that case. The owner is set on chain at registration and cannot change, so if the injected owner differs from the owner in the **Executors** contract, the executor logs a warning with both addresses and continues with the owner from the contract. Fix the owner address in the host config in that case. After resuming, the executor also reads the jobs created in the last `job_lookback_blocks` blocks: it runs a job it is selected for if the job deadline has not passed and the **Jobs** contract has no output from this executor for it yet, and reports the execution timeout of these jobs like for new jobs.
 
 Running the client again against an executor that is already configured changes nothing: the owner cannot be changed (the request is rejected), and the gas key and web socket api key are replaced by the same values. So the host can re-inject automatically by running the client periodically, for example from a systemd service with `Restart=always` running:
 ```shell

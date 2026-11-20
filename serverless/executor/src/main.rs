@@ -101,6 +101,8 @@ async fn main() -> Result<()> {
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         last_block_seen: Arc::new(AtomicU64::new(0)),
         logs_backfill_chunk_size: config.logs_backfill_chunk_size,
+        job_lookback_blocks: config.job_lookback_blocks,
+        catch_up_until_block: Arc::new(AtomicU64::new(0)),
         processed_logs: Arc::new(Mutex::new(ProcessedLogs::default())),
         http_rpc_txn_manager: Arc::new(Mutex::new(None)),
         job_requests_running: Arc::new(Mutex::new(HashSet::new())),
