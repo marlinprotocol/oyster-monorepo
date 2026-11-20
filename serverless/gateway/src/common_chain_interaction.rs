@@ -17,21 +17,22 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::time::{self, sleep};
+use tokio::time::{self, sleep, MissedTickBehavior};
 
 use crate::chain_util::{
-    confirm_event, get_logs_till_latest_block, sign_job_response_request,
+    backfill_logs, confirm_event, get_logs_till_latest_block, sign_job_response_request,
     sign_reassign_gateway_relay_request, sign_relay_job_request, HttpProvider, HttpProviderLogs,
-    LogsProvider,
+    LogsCursor, LogsProvider,
 };
 use crate::common_chain_gateway_state_service::gateway_epoch_state_service;
 use crate::constant::{
     COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT, COMMON_CHAIN_GATEWAY_REGISTERED_EVENT,
     COMMON_CHAIN_JOB_RELAYED_EVENT, COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT,
     COMMON_CHAIN_JOB_RESPONDED_EVENT, COMMON_CHAIN_TXN_CALL_TIMEOUT,
-    GATEWAY_BLOCK_STATES_TO_MAINTAIN, GATEWAY_STAKE_ADJUSTMENT_FACTOR, MAX_GATEWAY_RETRIES,
-    MIN_GATEWAY_STAKE, REQUEST_CHAIN_GATEWAY_REGISTERED_EVENT, REQUEST_CHAIN_JOB_CANCELLED_EVENT,
-    REQUEST_CHAIN_JOB_RELAYED_EVENT, REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
+    GATEWAY_BLOCK_STATES_TO_MAINTAIN, GATEWAY_STAKE_ADJUSTMENT_FACTOR, LOGS_BACKFILL_INTERVAL,
+    MAX_GATEWAY_RETRIES, MIN_GATEWAY_STAKE, REQUEST_CHAIN_GATEWAY_REGISTERED_EVENT,
+    REQUEST_CHAIN_JOB_CANCELLED_EVENT, REQUEST_CHAIN_JOB_RELAYED_EVENT,
+    REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_TXN_CALL_TIMEOUT, REQUEST_RELAY_TIMEOUT, WS_RECONNECT_BACKOFF_MS,
@@ -343,6 +344,11 @@ impl ContractsClient {
         request_chain_data: RequestChainData,
         job_subscription_tx: Sender<JobSubscriptionChannelType>,
     ) {
+        let request_chain_id = request_chain_data.chain_id;
+        let http_provider = HttpProvider::new(request_chain_data.http_rpc_url.clone());
+        let event_filter = self.req_chain_jobs_filter(&request_chain_data);
+        let mut cursor = LogsCursor::new(request_chain_data.request_chain_start_block_number);
+
         let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
             let ws_api_key = self.ws_api_key.read().unwrap().clone();
@@ -356,7 +362,7 @@ impl ContractsClient {
                 Err(err) => {
                     error!(
                         "Request Chain ID: {:?}, Failed to connect to the websocket provider, retrying in {} ms - Error: {}",
-                        request_chain_data.chain_id, backoff, err
+                        request_chain_id, backoff, err
                     );
                     sleep(Duration::from_millis(backoff)).await;
                     backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
@@ -372,7 +378,7 @@ impl ContractsClient {
                 Err(err) => {
                     error!(
                         "Request Chain ID: {:?}, Failed to subscribe to the events, retrying in {} ms - Error: {:?}",
-                        request_chain_data.chain_id, backoff, err
+                        request_chain_id, backoff, err
                     );
                     sleep(Duration::from_millis(backoff)).await;
                     backoff = std::cmp::min(backoff * 2, WS_RECONNECT_MAX_BACKOFF_MS);
@@ -381,112 +387,138 @@ impl ContractsClient {
             };
             backoff = WS_RECONNECT_BACKOFF_MS;
 
-            while let Some(log) = stream.next().await {
-                let topics = log.topics();
-                if log.removed {
-                    continue;
-                }
+            // The subscription only delivers new logs and can miss some without ending, so the
+            // logs are also read with eth_getLogs, right after subscribing and then regularly.
+            let mut backfill_interval = time::interval(Duration::from_secs(LOGS_BACKFILL_INTERVAL));
+            backfill_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-                if topics[0] == keccak256(REQUEST_CHAIN_JOB_RELAYED_EVENT) {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!(
-                        "Request Chain ID: {:?}, JobPlace jobID: {:?}",
-                        request_chain_data.chain_id, job_id
-                    );
-
-                    let self_clone = Arc::clone(&self);
-                    let req_chain_tx_clone = req_chain_tx.clone();
-                    tokio::spawn(async move {
-                        let job = self_clone
-                            .get_job_from_job_relay_event(log, 1u8, request_chain_data.chain_id)
-                            .await;
-                        if job.is_ok() {
-                            self_clone
-                                .job_relayed_handler(job.unwrap(), req_chain_tx_clone.clone())
-                                .await;
+            loop {
+                tokio::select! {
+                    log = stream.next() => {
+                        let Some(log) = log else {
+                            break;
+                        };
+                        if log.removed || !cursor.accept(&log) {
+                            continue;
                         }
-                    });
-                } else if topics[0] == keccak256(REQUEST_CHAIN_JOB_CANCELLED_EVENT) {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!(
-                        "Request Chain ID: {:?}, JobCancelled jobID: {:?}",
-                        request_chain_data.chain_id, job_id
-                    );
-
-                    let self_clone = Arc::clone(&self);
-                    tokio::spawn(async move {
-                        self_clone.cancel_job_with_job_id(job_id).await;
-                    });
-                } else if topics[0] == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT) {
-                    let subscription_id: U256 = U256::from_be_slice(topics[1].as_slice());
-                    info!(
-                        "Request Chain ID: {:?}, JobSubscriptionStarted jobID: {:?}",
-                        request_chain_data.chain_id, subscription_id
-                    );
-
-                    let self_clone = Arc::clone(&self);
-                    let req_chain_tx_clone = req_chain_tx.clone();
-                    let job_subscription_tx_clone = job_subscription_tx.clone();
-
-                    tokio::spawn(async move {
-                        let res = add_subscription_job(
-                            &self_clone,
+                        self.handle_request_chain_log(
                             log,
-                            request_chain_data.chain_id,
-                            req_chain_tx_clone,
-                            false,
-                        );
-
-                        if res.is_ok() {
-                            job_subscription_tx_clone
-                                .send(JobSubscriptionChannelType {
-                                    subscription_action: JobSubscriptionAction::Add,
-                                    subscription_id,
-                                })
-                                .await
-                                .unwrap();
+                            request_chain_id,
+                            &req_chain_tx,
+                            &job_subscription_tx,
+                        )
+                        .await;
+                    }
+                    _ = backfill_interval.tick() => {
+                        let logs = backfill_logs(
+                            &http_provider,
+                            &event_filter,
+                            &mut cursor,
+                            request_chain_data.confirmation_blocks,
+                        )
+                        .await;
+                        for log in logs {
+                            self.handle_request_chain_log(
+                                log,
+                                request_chain_id,
+                                &req_chain_tx,
+                                &job_subscription_tx,
+                            )
+                            .await;
                         }
-                    });
-                } else if topics[0]
-                    == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT)
-                {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!(
-                        "Request Chain ID: {:?}, JobSubscriptionJobParamsUpdated jobID: {:?}",
-                        request_chain_data.chain_id, job_id
-                    );
-
-                    let self_clone = Arc::clone(&self);
-
-                    tokio::spawn(async move {
-                        let _ = update_subscription_job_params(&self_clone, log);
-                    });
-                } else if topics[0]
-                    == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT)
-                {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!(
-                        "Request Chain ID: {:?}, JobSubscriptionTerminationParamsUpdated jobID: {:?}",
-                        request_chain_data.chain_id, job_id
-                    );
-
-                    let self_clone = Arc::clone(&self);
-                    tokio::spawn(async move {
-                        let _ = update_subscription_job_termination_params(&self_clone, log);
-                    });
-                } else {
-                    error!(
-                        "Request Chain ID: {:?}, Unknown event: {:?}",
-                        request_chain_data.chain_id, log
-                    );
+                    }
                 }
             }
 
             error!(
                 "Request Chain ID: {:?}, Event stream ended, reconnecting",
-                request_chain_data.chain_id
+                request_chain_id
             );
             sleep(Duration::from_millis(backoff)).await;
+        }
+    }
+
+    async fn handle_request_chain_log(
+        self: &Arc<Self>,
+        log: Log,
+        request_chain_id: u64,
+        req_chain_tx: &Sender<Job>,
+        job_subscription_tx: &Sender<JobSubscriptionChannelType>,
+    ) {
+        let topics = log.topics();
+        let event_topic = topics[0];
+        let id = U256::from_be_slice(topics[1].as_slice());
+
+        if event_topic == keccak256(REQUEST_CHAIN_JOB_RELAYED_EVENT) {
+            info!(
+                "Request Chain ID: {:?}, JobPlace jobID: {:?}",
+                request_chain_id, id
+            );
+
+            let self_clone = Arc::clone(&self);
+            let req_chain_tx_clone = req_chain_tx.clone();
+            tokio::spawn(async move {
+                let job = self_clone
+                    .get_job_from_job_relay_event(log, 1u8, request_chain_id)
+                    .await;
+                if job.is_ok() {
+                    self_clone
+                        .job_relayed_handler(job.unwrap(), req_chain_tx_clone.clone())
+                        .await;
+                }
+            });
+        } else if event_topic == keccak256(REQUEST_CHAIN_JOB_CANCELLED_EVENT) {
+            info!(
+                "Request Chain ID: {:?}, JobCancelled jobID: {:?}",
+                request_chain_id, id
+            );
+
+            let self_clone = Arc::clone(&self);
+            tokio::spawn(async move {
+                self_clone.cancel_job_with_job_id(id).await;
+            });
+        } else if event_topic == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT) {
+            info!(
+                "Request Chain ID: {:?}, JobSubscriptionStarted jobID: {:?}",
+                request_chain_id, id
+            );
+
+            // The subscription events are handled in order, an update must not be applied
+            // before the subscription is added or before an earlier update.
+            let res =
+                add_subscription_job(self, log, request_chain_id, req_chain_tx.clone(), false);
+
+            if res.is_ok() {
+                job_subscription_tx
+                    .send(JobSubscriptionChannelType {
+                        subscription_action: JobSubscriptionAction::Add,
+                        subscription_id: id,
+                    })
+                    .await
+                    .unwrap();
+            }
+        } else if event_topic == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT)
+        {
+            info!(
+                "Request Chain ID: {:?}, JobSubscriptionJobParamsUpdated jobID: {:?}",
+                request_chain_id, id
+            );
+
+            let _ = update_subscription_job_params(self, log);
+        } else if event_topic
+            == keccak256(REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT)
+        {
+            info!(
+                "Request Chain ID: {:?}, JobSubscriptionTerminationParamsUpdated jobID: {:?}",
+                request_chain_id, id
+            );
+
+            let _ = update_subscription_job_termination_params(self, log);
+        } else {
+            error!(
+                "Request Chain ID: {:?}, Unknown event: {:?}",
+                request_chain_id, log
+            );
         }
     }
 
@@ -897,6 +929,11 @@ impl ContractsClient {
         com_chain_tx: Sender<ResponseJob>,
         req_chain_tx: Sender<Job>,
     ) {
+        let http_provider = HttpProvider::new(self.common_chain_http_url.clone());
+        let event_filter = self.common_chain_jobs_filter();
+        let start_block_number = *self.common_chain_start_block_number.lock().unwrap();
+        let mut cursor = LogsCursor::new(start_block_number);
+
         let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
             let ws_api_key = self.ws_api_key.read().unwrap().clone();
@@ -931,57 +968,86 @@ impl ContractsClient {
             };
             backoff = WS_RECONNECT_BACKOFF_MS;
 
-            while let Some(log) = stream.next().await {
-                let ref topics = log.topics();
+            // The subscription only delivers new logs and can miss some without ending, so the
+            // logs are also read with eth_getLogs, right after subscribing and then regularly.
+            let mut backfill_interval = time::interval(Duration::from_secs(LOGS_BACKFILL_INTERVAL));
+            backfill_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-                if topics[0] == keccak256(COMMON_CHAIN_JOB_RESPONDED_EVENT) {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!("JobResponded event triggered for Job ID: {:?}", job_id);
-
-                    let self_clone = Arc::clone(&self);
-                    let com_chain_tx = com_chain_tx.clone();
-                    tokio::spawn(async move {
-                        let response_job_result =
-                            self_clone.get_job_from_job_responded_event(log).await;
-                        match response_job_result {
-                            Ok(response_job) => {
-                                self_clone
-                                    .job_responded_handler(response_job, com_chain_tx)
-                                    .await;
-                            }
-                            Err(ServerlessError::JobDoesNotBelongToEnclave) => {
-                                info!("Job does not belong to the enclave");
-                            }
-                            Err(err) => {
-                                error!("Error while getting job from JobResponded event: {}", err);
-                            }
+            loop {
+                tokio::select! {
+                    log = stream.next() => {
+                        let Some(log) = log else {
+                            break;
+                        };
+                        if log.removed || !cursor.accept(&log) {
+                            continue;
                         }
-                    });
-                } else if topics[0] == keccak256(COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT) {
-                    info!("JobResourceUnavailable event triggered");
-
-                    let self_clone = Arc::clone(&self);
-                    tokio::spawn(async move {
-                        self_clone.job_resource_unavailable_handler(log).await;
-                    });
-                } else if topics[0] == keccak256(COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT) {
-                    let job_id = U256::from_be_slice(topics[1].as_slice());
-                    info!("GatewayReassigned for Job ID: {:?}", job_id);
-
-                    let self_clone = Arc::clone(&self);
-                    let req_chain_tx = req_chain_tx.clone();
-                    tokio::spawn(async move {
-                        self_clone
-                            .gateway_reassigned_handler(log, req_chain_tx)
-                            .await;
-                    });
-                } else {
-                    error!("Unknown event: {:?}", log);
+                        self.handle_common_chain_log(log, &com_chain_tx, &req_chain_tx);
+                    }
+                    _ = backfill_interval.tick() => {
+                        let logs = backfill_logs(&http_provider, &event_filter, &mut cursor, 0).await;
+                        for log in logs {
+                            self.handle_common_chain_log(log, &com_chain_tx, &req_chain_tx);
+                        }
+                    }
                 }
             }
 
             error!("Common Chain event stream ended, reconnecting");
             sleep(Duration::from_millis(backoff)).await;
+        }
+    }
+
+    fn handle_common_chain_log(
+        self: &Arc<Self>,
+        log: Log,
+        com_chain_tx: &Sender<ResponseJob>,
+        req_chain_tx: &Sender<Job>,
+    ) {
+        let ref topics = log.topics();
+
+        if topics[0] == keccak256(COMMON_CHAIN_JOB_RESPONDED_EVENT) {
+            let job_id = U256::from_be_slice(topics[1].as_slice());
+            info!("JobResponded event triggered for Job ID: {:?}", job_id);
+
+            let self_clone = Arc::clone(&self);
+            let com_chain_tx = com_chain_tx.clone();
+            tokio::spawn(async move {
+                let response_job_result = self_clone.get_job_from_job_responded_event(log).await;
+                match response_job_result {
+                    Ok(response_job) => {
+                        self_clone
+                            .job_responded_handler(response_job, com_chain_tx)
+                            .await;
+                    }
+                    Err(ServerlessError::JobDoesNotBelongToEnclave) => {
+                        info!("Job does not belong to the enclave");
+                    }
+                    Err(err) => {
+                        error!("Error while getting job from JobResponded event: {}", err);
+                    }
+                }
+            });
+        } else if topics[0] == keccak256(COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT) {
+            info!("JobResourceUnavailable event triggered");
+
+            let self_clone = Arc::clone(&self);
+            tokio::spawn(async move {
+                self_clone.job_resource_unavailable_handler(log).await;
+            });
+        } else if topics[0] == keccak256(COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT) {
+            let job_id = U256::from_be_slice(topics[1].as_slice());
+            info!("GatewayReassigned for Job ID: {:?}", job_id);
+
+            let self_clone = Arc::clone(&self);
+            let req_chain_tx = req_chain_tx.clone();
+            tokio::spawn(async move {
+                self_clone
+                    .gateway_reassigned_handler(log, req_chain_tx)
+                    .await;
+            });
+        } else {
+            error!("Unknown event: {:?}", log);
         }
     }
 
@@ -1335,6 +1401,35 @@ impl ContractsClient {
         let mut active_jobs = self.active_jobs.write().unwrap();
         active_jobs.remove(&job_id);
     }
+
+    // Events of the common chain that the gateway handles, used for the subscription and for
+    // reading the missed logs. The block range of a subscription is ignored by the RPC.
+    fn common_chain_jobs_filter(&self) -> Filter {
+        Filter::new()
+            .address(self.gateway_jobs_contract_address)
+            .events(vec![
+                COMMON_CHAIN_JOB_RESPONDED_EVENT,
+                COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT,
+                COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT,
+            ])
+    }
+
+    // Events of a request chain that the gateway handles, used for the subscription and for
+    // reading the missed logs.
+    fn req_chain_jobs_filter(&self, req_chain_client: &RequestChainData) -> Filter {
+        Filter::new()
+            .address(vec![
+                req_chain_client.relay_address,
+                req_chain_client.relay_subscriptions_address,
+            ])
+            .events(vec![
+                REQUEST_CHAIN_JOB_RELAYED_EVENT,
+                REQUEST_CHAIN_JOB_CANCELLED_EVENT,
+                REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
+                REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
+                REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
+            ])
+    }
 }
 
 impl LogsProvider for ContractsClient {
@@ -1344,16 +1439,7 @@ impl LogsProvider for ContractsClient {
     ) -> Result<SubscriptionStream<Log>> {
         info!("Subscribing to events for Common Chain");
 
-        let common_chain_start_block_number =
-            self.common_chain_start_block_number.lock().unwrap().clone();
-        let event_filter: Filter = Filter::new()
-            .address(self.gateway_jobs_contract_address)
-            .select(common_chain_start_block_number..)
-            .events(vec![
-                COMMON_CHAIN_JOB_RESPONDED_EVENT,
-                COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT,
-                COMMON_CHAIN_GATEWAY_REASSIGNED_EVENT,
-            ]);
+        let event_filter = self.common_chain_jobs_filter();
 
         let subscription = common_chain_ws_provider
             .subscribe_logs(&event_filter)
@@ -1374,19 +1460,7 @@ impl LogsProvider for ContractsClient {
             "Subscribing to events for Req Chain chain_id: {}",
             req_chain_client.chain_id
         );
-        let event_filter = Filter::new()
-            .address(vec![
-                req_chain_client.relay_address,
-                req_chain_client.relay_subscriptions_address,
-            ])
-            .select(req_chain_client.request_chain_start_block_number..)
-            .events(vec![
-                REQUEST_CHAIN_JOB_RELAYED_EVENT,
-                REQUEST_CHAIN_JOB_CANCELLED_EVENT,
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
-            ]);
+        let event_filter = self.req_chain_jobs_filter(req_chain_client);
 
         // register subscription
         let subscription = req_chain_ws_client
