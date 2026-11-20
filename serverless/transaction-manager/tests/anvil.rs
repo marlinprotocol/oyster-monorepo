@@ -9,7 +9,7 @@ use alloy::primitives::{Address, Bytes};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::http::{Client, Http};
-use multi_block_txns::TxnManager;
+use multi_block_txns::{TxnManager, TxnStatus};
 use tokio::time::sleep;
 
 struct Anvil {
@@ -160,6 +160,93 @@ async fn insufficient_funds_is_retried_until_the_deadline() {
     assert!(start.elapsed() >= Duration::from_secs(7));
 
     // The nonce was filled by the transaction sent once the wallet was funded
+    assert_eq!(
+        anvil
+            .provider
+            .get_transaction_count(signer.address())
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn gas_price_stops_at_the_maximum_and_the_transaction_stays_pending() {
+    let Some(anvil) = start_anvil().await else {
+        return;
+    };
+    let signer = PrivateKeySigner::random();
+    anvil.set_balance(signer.address(), ONE_ETH).await;
+    let contract = Address::repeat_byte(0x44);
+
+    // Keep the transaction pending so that it is resent every 5 s
+    anvil
+        .rpc("evm_setAutomine", serde_json::json!([false]))
+        .await;
+
+    let network_gas_price = anvil.provider.get_gas_price().await.unwrap();
+    let max_gas_price = network_gas_price * 125 / 100;
+
+    let txn_manager = anvil.txn_manager(&signer);
+    txn_manager.set_max_gas_price(Some(max_gas_price));
+    txn_manager.run().await;
+
+    let txn_id = txn_manager
+        .call_contract_function(
+            contract,
+            Bytes::new(),
+            Instant::now() + Duration::from_secs(120),
+        )
+        .await
+        .unwrap();
+
+    // Resent at 1.1x, 1.21x, then at the maximum, then the same transaction again
+    // A monitoring round takes 5 s plus the receipt retries (up to about 13 s). Watch until the
+    // maximum is reached, then for one more round at the maximum.
+    let mut gas_prices = vec![];
+    let start = Instant::now();
+    let mut at_max_since = None;
+    while at_max_since
+        .is_none_or(|at_max_since: Instant| at_max_since.elapsed() < Duration::from_secs(20))
+    {
+        assert!(start.elapsed() < Duration::from_secs(90), "{gas_prices:?}");
+        let pool = anvil.rpc("txpool_content", serde_json::json!([])).await;
+        let pending = &pool["pending"];
+        let txn = pending
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(address, _)| address.parse::<Address>().unwrap() == signer.address())
+            .map(|(_, txns)| txns["0"].clone())
+            .unwrap();
+        let gas_price = u128::from_str_radix(
+            txn["gasPrice"].as_str().unwrap().trim_start_matches("0x"),
+            16,
+        )
+        .unwrap();
+        if gas_prices.last() != Some(&gas_price) {
+            gas_prices.push(gas_price);
+        }
+        if gas_price == max_gas_price && at_max_since.is_none() {
+            at_max_since = Some(Instant::now());
+        }
+        assert!(gas_price <= max_gas_price, "{gas_prices:?}");
+        assert_eq!(
+            txn_manager.get_transaction_status(txn_id.clone()),
+            Some(TxnStatus::Pending)
+        );
+        sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(gas_prices.last(), Some(&max_gas_price), "{gas_prices:?}");
+    assert!(gas_prices.len() >= 3, "{gas_prices:?}");
+
+    // Still monitored at the maximum, confirmed once included
+    anvil.rpc("evm_mine", serde_json::json!([])).await;
+    let start = Instant::now();
+    while txn_manager.get_transaction_status(txn_id.clone()) != Some(TxnStatus::Confirmed) {
+        assert!(start.elapsed() < Duration::from_secs(15));
+        sleep(Duration::from_millis(200)).await;
+    }
     assert_eq!(
         anvil
             .provider
