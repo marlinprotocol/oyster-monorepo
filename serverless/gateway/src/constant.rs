@@ -1,4 +1,4 @@
-use alloy::primitives::U256;
+use alloy::primitives::{address, Address, U256};
 use once_cell::sync::Lazy;
 
 pub const REQUEST_RELAY_TIMEOUT: u64 = 40;
@@ -76,3 +76,8 @@ pub const LOGS_BACKFILL_INTERVAL: u64 = 10;
 // blocks before the read range within which logs delivered by a subscription are still
 // deduplicated against the logs read with eth_getLogs
 pub const LOGS_DEDUPE_BLOCK_WINDOW: u64 = 1000;
+
+// default address of the Multicall3 contract
+pub const MULTICALL3_ADDRESS: Address = address!("cA11bde05977b3631167028862bE2a173976CA11");
+// default number of subscriptions read from the RelaySubscriptions contract in one call
+pub const SUBSCRIPTIONS_BATCH_SIZE: u64 = 500;

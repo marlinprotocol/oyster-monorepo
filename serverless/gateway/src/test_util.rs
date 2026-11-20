@@ -25,10 +25,10 @@ use crate::api_impl::{
 };
 use crate::chain_util::HttpProviderLogs;
 use crate::constant::{
-    COMMON_CHAIN_JOB_RELAYED_EVENT, MIN_GATEWAY_STAKE,
+    COMMON_CHAIN_JOB_RELAYED_EVENT, MIN_GATEWAY_STAKE, MULTICALL3_ADDRESS,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
-    REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
+    REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT, SUBSCRIPTIONS_BATCH_SIZE,
 };
 use crate::error::ServerlessError;
 use crate::model::{AppState, ContractsClient, GatewayData, Job, SubscriptionJob};
@@ -111,6 +111,8 @@ pub async fn generate_app_state() -> AppState {
         time_interval: TIME_INTERVAL,
         offset_for_epoch: OFFSET_FOR_EPCOH,
         gateways_start_block: 0,
+        multicall3_addr: MULTICALL3_ADDRESS,
+        subscriptions_batch_size: SUBSCRIPTIONS_BATCH_SIZE,
         enclave_owner: Arc::new(Mutex::new(Address::ZERO)),
         immutable_params_injected: Arc::new(Mutex::new(false)),
         mutable_params_injected: Arc::new(AtomicBool::new(false)),

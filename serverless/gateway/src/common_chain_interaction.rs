@@ -30,9 +30,9 @@ use crate::constant::{
     COMMON_CHAIN_JOB_RELAYED_EVENT, COMMON_CHAIN_JOB_RESOURCE_UNAVAILABLE_EVENT,
     COMMON_CHAIN_JOB_RESPONDED_EVENT, COMMON_CHAIN_TXN_CALL_TIMEOUT,
     GATEWAY_BLOCK_STATES_TO_MAINTAIN, GATEWAY_STAKE_ADJUSTMENT_FACTOR, LOGS_BACKFILL_INTERVAL,
-    MAX_GATEWAY_RETRIES, MIN_GATEWAY_STAKE, REQUEST_CHAIN_GATEWAY_REGISTERED_EVENT,
-    REQUEST_CHAIN_JOB_CANCELLED_EVENT, REQUEST_CHAIN_JOB_RELAYED_EVENT,
-    REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
+    LOGS_SCAN_RETRY_WAIT, MAX_GATEWAY_RETRIES, MIN_GATEWAY_STAKE,
+    REQUEST_CHAIN_GATEWAY_REGISTERED_EVENT, REQUEST_CHAIN_JOB_CANCELLED_EVENT,
+    REQUEST_CHAIN_JOB_RELAYED_EVENT, REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
     REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
     REQUEST_CHAIN_TXN_CALL_TIMEOUT, REQUEST_RELAY_TIMEOUT, WS_RECONNECT_BACKOFF_MS,
@@ -41,7 +41,7 @@ use crate::constant::{
 use crate::contract_abi::{GatewayJobsContract, RelayContract, RelaySubscriptionsContract};
 use crate::error::ServerlessError;
 use crate::job_subscription_management::{
-    add_subscription_job, job_subscription_manager, process_historic_job_subscriptions,
+    add_subscription_job, job_subscription_manager, load_active_subscription_jobs,
     update_subscription_job_params, update_subscription_job_termination_params,
 };
 use crate::model::{
@@ -254,19 +254,6 @@ impl ContractsClient {
         {
             let contracts_client_clone = self.clone();
             let req_chain_tx_clone = req_chain_tx.clone();
-            let job_subscription_tx_clone = job_subscription_tx.clone();
-
-            tokio::spawn(async move {
-                process_historic_job_subscriptions(
-                    &contracts_client_clone,
-                    req_chain_tx_clone,
-                    job_subscription_tx_clone,
-                )
-                .await;
-            });
-
-            let contracts_client_clone = self.clone();
-            let req_chain_tx_clone = req_chain_tx.clone();
 
             tokio::spawn(async move {
                 let _ = job_subscription_manager(
@@ -345,9 +332,33 @@ impl ContractsClient {
         job_subscription_tx: Sender<JobSubscriptionChannelType>,
     ) {
         let request_chain_id = request_chain_data.chain_id;
+
+        // The subscriptions active now are read from the contract state, the events continue
+        // from the block before the state was read. The subscription events are handled after
+        // the state is loaded, so that an update is not applied to a subscription not added yet.
+        let state_block_number = loop {
+            match load_active_subscription_jobs(
+                self,
+                &request_chain_data,
+                req_chain_tx.clone(),
+                job_subscription_tx.clone(),
+            )
+            .await
+            {
+                Ok(block_number) => break block_number,
+                Err(err) => {
+                    error!(
+                        "Request Chain ID: {:?}, Failed to load the active subscriptions, retrying in {} seconds - Error: {}",
+                        request_chain_id, LOGS_SCAN_RETRY_WAIT, err
+                    );
+                    sleep(Duration::from_secs(LOGS_SCAN_RETRY_WAIT)).await;
+                }
+            }
+        };
+
         let http_provider = HttpProvider::new(request_chain_data.http_rpc_url.clone());
         let event_filter = self.req_chain_jobs_filter(&request_chain_data);
-        let mut cursor = LogsCursor::new(request_chain_data.request_chain_start_block_number);
+        let mut cursor = LogsCursor::new(state_block_number + 1);
 
         let mut backoff = WS_RECONNECT_BACKOFF_MS;
         loop {
@@ -1503,31 +1514,6 @@ impl LogsProvider for ContractsClient {
             common_chain_http_provider,
             &job_relayed_event_filter,
             common_chain_start_block_number,
-        )
-        .await?;
-
-        Ok(logs)
-    }
-
-    async fn request_chain_historic_subscription_jobs<'a, P: HttpProviderLogs>(
-        &'a self,
-        req_chain_data: &'a RequestChainData,
-        http_provider: &'a P,
-    ) -> Result<Vec<Log>> {
-        let event_filter = Filter::new()
-            .address(req_chain_data.relay_subscriptions_address)
-            .events(vec![
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
-                REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
-            ]);
-
-        let logs = get_logs_till_latest_block(
-            http_provider,
-            &event_filter,
-            req_chain_data
-                .request_chain_start_block_number
-                .saturating_sub(1),
         )
         .await?;
 
