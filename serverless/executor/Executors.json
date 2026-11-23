@@ -1,0 +1,72 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "enclaveAddress",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "jobCapacity",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "env",
+        "type": "uint8"
+      }
+    ],
+    "name": "ExecutorRegistered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "enclaveAddress",
+        "type": "address"
+      }
+    ],
+    "name": "ExecutorDrained",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "enclaveAddress",
+        "type": "address"
+      }
+    ],
+    "name": "ExecutorRevived",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "enclaveAddress",
+        "type": "address"
+      }
+    ],
+    "name": "ExecutorDeregistered",
+    "type": "event"
+  }
+]

@@ -17,7 +17,7 @@ use tokio_stream::{Stream, StreamExt};
 use crate::constant::{EXECUTION_ENV_ID, RPC_ERROR_RETRY_DELAY_SECS, TIMEOUT_TXN_SEND_BUFFER_MS};
 use crate::execution::handle_job;
 use crate::model::JobsContract::slashOnExecutionTimeoutCall;
-use crate::model::{AppState, JobsContract, JobsTransaction, TeeManagerContract};
+use crate::model::{AppState, JobsContract, JobsTransaction, ExecutorsContract};
 use crate::transaction::send_transaction;
 use crate::utils::get_byte_slice;
 
@@ -44,17 +44,17 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         };
 
         if !app_state.enclave_registered.load(Ordering::SeqCst) {
-            // Create filter to listen to the 'TeeNodeRegistered' event emitted by the TeeManager contract
+            // Create filter to listen to the 'ExecutorRegistered' event emitted by the Executors contract
             let register_executor_filter = Filter::new()
-                .address(app_state.tee_manager_contract_addr)
-                .event(TeeManagerContract::TeeNodeRegistered::SIGNATURE)
+                .address(app_state.executors_contract_addr)
+                .event(ExecutorsContract::ExecutorRegistered::SIGNATURE)
                 .topic1(B256::from(app_state.enclave_signer.address().into_word()))
                 .topic2(B256::from(
                     *app_state.enclave_owner.lock().unwrap().into_word(),
                 ))
                 .from_block(starting_block);
 
-            // Subscribe to the TeeManager filter through the rpc web socket client
+            // Subscribe to the Executors filter through the rpc web socket client
             let register_stream = match web_socket_client
                 .subscribe_logs(&register_executor_filter)
                 .await
@@ -62,8 +62,8 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
                 Ok(stream) => stream,
                 Err(err) => {
                     eprintln!(
-                        "Failed to subscribe to TeeManager ({:?}) contract 'TeeNodeRegistered' event logs: {:?}",
-                        app_state.tee_manager_contract_addr,
+                        "Failed to subscribe to Executors ({:?}) contract 'ExecutorRegistered' event logs: {:?}",
+                        app_state.executors_contract_addr,
                         err,
                     );
                     sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
@@ -144,23 +144,23 @@ pub async fn events_listener(app_state: State<AppState>, starting_block: u64) {
         };
         let jobs_responded_stream = pin!(jobs_responded_stream.into_stream());
 
-        // Create filter to listen to relevant events emitted by the TeeManager contract
+        // Create filter to listen to relevant events emitted by the Executors contract
         let executors_filter = Filter::new()
-            .address(app_state.tee_manager_contract_addr)
+            .address(app_state.executors_contract_addr)
             .events(vec![
-                TeeManagerContract::TeeNodeDeregistered::SIGNATURE.as_bytes(),
-                TeeManagerContract::TeeNodeDrained::SIGNATURE.as_bytes(),
-                TeeManagerContract::TeeNodeRevived::SIGNATURE.as_bytes(),
+                ExecutorsContract::ExecutorDeregistered::SIGNATURE.as_bytes(),
+                ExecutorsContract::ExecutorDrained::SIGNATURE.as_bytes(),
+                ExecutorsContract::ExecutorRevived::SIGNATURE.as_bytes(),
             ])
             .topic1(B256::from(app_state.enclave_signer.address().into_word()))
             .from_block(app_state.last_block_seen.load(Ordering::SeqCst));
-        // Subscribe to the TeeManager filter through the rpc web socket client
+        // Subscribe to the Executors filter through the rpc web socket client
         let executors_stream = match web_socket_client.subscribe_logs(&executors_filter).await {
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
-                    "Failed to subscribe to TeeManager ({:?}) contract event logs: {:?}",
-                    app_state.tee_manager_contract_addr, err
+                    "Failed to subscribe to Executors ({:?}) contract event logs: {:?}",
+                    app_state.executors_contract_addr, err
                 );
                 sleep(Duration::from_secs(RPC_ERROR_RETRY_DELAY_SECS)).await;
                 continue;
@@ -198,7 +198,7 @@ pub async fn handle_event_logs(
     app_state: State<AppState>,
     tx_sender: Sender<JobsTransaction>,
 ) {
-    println!("Started listening to 'Jobs' and 'TeeManager' events!");
+    println!("Started listening to 'Jobs' and 'Executors' events!");
 
     loop {
         select! {
@@ -217,23 +217,23 @@ pub async fn handle_event_logs(
                 app_state.last_block_seen.store(current_block, Ordering::SeqCst);
 
                 match event.topic0() {
-                    // Capture the Enclave deregistered event emitted by the 'TeeManager' contract
-                    Some(&TeeManagerContract::TeeNodeDeregistered::SIGNATURE_HASH) => {
+                    // Capture the Enclave deregistered event emitted by the 'Executors' contract
+                    Some(&ExecutorsContract::ExecutorDeregistered::SIGNATURE_HASH) => {
                         println!("Executor deregistered from the common chain!");
                         app_state.enclave_registered.store(false, Ordering::SeqCst);
 
                         println!("Stopped listening to 'Jobs' events!");
                         return;
                     }
-                    // Capture the Enclave drained event emitted by the 'TeeManager' contract
-                    Some(&TeeManagerContract::TeeNodeDrained::SIGNATURE_HASH) => {
+                    // Capture the Enclave drained event emitted by the 'Executors' contract
+                    Some(&ExecutorsContract::ExecutorDrained::SIGNATURE_HASH) => {
                         println!("Executor put in draining mode!");
                         app_state.enclave_draining.store(true, Ordering::SeqCst);
                         // Clear the pending jobs map
                         app_state.job_requests_running.lock().unwrap().clear();
                     }
-                    // Capture the Enclave revived event emitted by the 'TeeManager' contract
-                    Some(&TeeManagerContract::TeeNodeRevived::SIGNATURE_HASH) => {
+                    // Capture the Enclave revived event emitted by the 'Executors' contract
+                    Some(&ExecutorsContract::ExecutorRevived::SIGNATURE_HASH) => {
                         println!("Executor revived from draining mode!");
                         app_state.enclave_draining.store(false, Ordering::SeqCst);
                     }
@@ -308,7 +308,7 @@ pub async fn handle_event_logs(
                     tokio::spawn(async move {
                         handle_job(
                             job_id,
-                            event_decoded.secretId,
+                            U256::ZERO,
                             code_hash,
                             event_decoded.codeInputs.clone().into(),
                             event_decoded.deadline.as_limbs()[0],
@@ -364,7 +364,7 @@ pub async fn handle_event_logs(
         }
     }
 
-    println!("Both the 'Jobs' and 'TeeManager' subscription streams have ended!");
+    println!("Both the 'Jobs' and 'Executors' subscription streams have ended!");
 }
 
 // Start task to handle the execution timeout scenario for a job request

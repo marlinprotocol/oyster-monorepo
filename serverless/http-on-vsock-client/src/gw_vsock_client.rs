@@ -38,8 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Err(err) = client.get(cli.url.clone().try_into()?).await {
         if err.is_connect() {
-            println!("{:?}", err);
-            println!("Connection refused, retrying...");
+            eprintln!("{:?}", err);
+            eprintln!("Connection refused, retrying...");
             // sleep for 1 second
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
@@ -56,8 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .header("Content-Type", "application/json")
         .body(Body::from(body))?;
     let mut resp = client.request(request).await?;
-    println!("{:?}", resp.status());
-    println!(
+    eprintln!("{:?}", resp.status());
+    eprintln!(
         "{:?}",
         String::from_utf8(hyper::body::to_bytes(resp.into_body()).await?.to_vec())?
     );
@@ -72,8 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .header("Content-Type", "application/json")
         .body(Body::from(body))?;
     resp = client.request(request).await?;
-    println!("{:?}", resp.status());
-    println!(
+    eprintln!("{:?}", resp.status());
+    eprintln!(
         "{:?}",
         String::from_utf8(hyper::body::to_bytes(resp.into_body()).await?.to_vec())?
     );
@@ -85,28 +85,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let body_str = String::from_utf8(body_bytes.to_vec())?;
     let json: serde_json::Value = serde_json::from_str(&body_str)?;
-    println!("{:?}", json);
+    eprintln!("{:?}", json);
 
     // Start the executor
     let body = json!({
         "chain_ids": cli.chain_ids.clone(),
     })
     .to_string();
-    println!("{:?}", body);
+    eprintln!("{:?}", body);
     let request = Request::post(cli.url.clone() + "signed-registration-message")
         .header("Content-Type", "application/json")
         .body(Body::from(body))?;
     resp = client.request(request).await?;
-    println!("{:?}", resp);
+    eprintln!("{:?}", resp);
     let status = resp.status();
     let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
     let body_str = String::from_utf8(body_bytes.to_vec())?;
 
     if status.is_success() {
         let json: serde_json::Value = serde_json::from_str(&body_str)?;
-        println!("{:?}", json);
+        // print the signed registration message as json on stdout
+        println!("{}", json);
     } else {
-        println!("{:?}", body_str);
+        eprintln!("{:?}", body_str);
     }
 
     Ok(())

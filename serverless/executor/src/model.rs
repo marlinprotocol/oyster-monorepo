@@ -28,8 +28,8 @@ sol!(
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
-    TeeManagerContract,
-    "./TeeManager.json"
+    ExecutorsContract,
+    "./Executors.json"
 );
 
 // Define the EIP-712 struct that matches your Solidity contract
@@ -38,7 +38,6 @@ sol! {
     struct Register {
         address owner;
         uint256 jobCapacity;
-        uint256 storageCapacity;
         uint8 env;
         uint256 signTimestamp;
     }
@@ -60,13 +59,12 @@ pub struct ConfigManager {
 // Config struct containing the executor configuration parameters
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub secret_store_config_port: u16,
     pub workerd_runtime_path: String,
     pub secret_store_path: String,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
     pub web_socket_url: String,
-    pub tee_manager_contract_addr: Address,
+    pub executors_contract_addr: Address,
     pub jobs_contract_addr: Address,
     pub code_contract_addr: String,
     pub enclave_signer_file: String,
@@ -79,14 +77,13 @@ pub struct Config {
 pub struct AppState {
     pub cgroups: Arc<Mutex<Cgroups>>,
     pub job_capacity: usize,
-    pub secret_store_config_port: u16,
     pub workerd_runtime_path: String,
     pub secret_store_path: String,
     pub execution_buffer_time: u64,
     pub common_chain_id: u64,
     pub http_rpc_url: String,
     pub ws_rpc_url: Arc<RwLock<String>>,
-    pub tee_manager_contract_addr: Address,
+    pub executors_contract_addr: Address,
     pub jobs_contract_addr: Address,
     pub code_contract_addr: String,
     pub num_selected_executors: u8,
@@ -110,7 +107,6 @@ pub struct ImmutableConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MutableConfig {
     pub executor_gas_key: String,
-    pub secret_store_gas_key: String,
     pub ws_api_key: String,
 }
 
@@ -120,14 +116,12 @@ pub struct TeeConfig {
     pub enclave_public_key: String,
     pub owner_address: Address,
     pub executor_gas_address: Address,
-    pub secret_store_gas_address: String,
     pub ws_rpc_url: String,
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct RegistrationMessage {
     pub job_capacity: usize,
-    pub storage_capacity: usize,
     pub sign_timestamp: u64,
     pub env: u8,
     pub owner: Address,
