@@ -67,8 +67,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    sync (block) {
+    sync (id) {
         block -> Int8,
+        id -> Int4,
     }
 }
 

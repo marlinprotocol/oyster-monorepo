@@ -1,9 +1,13 @@
 use indexer_framework::schema::providers;
 use alloy::primitives::Address;
+use alloy::primitives::Bytes;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolValue;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::decode_text;
+use super::state_mismatch;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -15,7 +19,8 @@ pub fn handle_provider_updated_with_cp(conn: &mut PgConnection, log: Log) -> Res
     info!(?log, "processing");
 
     let provider = Address::from_word(log.topics()[1]).to_checksum(None);
-    let cp = String::abi_decode(&log.data().data, true)?;
+    // cp is decoded as bytes, the contract does not check that it is valid UTF-8
+    let cp = decode_text(&Bytes::abi_decode(&log.data().data, true)?);
 
     // we want to update if provider is active
     // we want to error out if provider does not exist or is not active
@@ -42,8 +47,8 @@ pub fn handle_provider_updated_with_cp(conn: &mut PgConnection, log: Log) -> Res
         // we should have had exactly one row made inactive
         // if count is 0, that means the provider did not exist or was not active
         // if count is more than 1, there was somehow more than one provider entry
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("count {count} should have been 1"));
+        // reported as a state mismatch, the caller skips the log
+        return Err(state_mismatch(format!("count {count} should have been 1")));
     }
 
     info!(provider, "updated provider");

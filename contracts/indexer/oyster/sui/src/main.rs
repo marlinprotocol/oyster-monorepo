@@ -2,6 +2,8 @@ mod constants;
 mod handlers;
 mod provider;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use anyhow::Result;
 use clap::command;
 use clap::Parser;
@@ -10,7 +12,9 @@ use diesel::PgConnection;
 use diesel_migrations::MigrationHarness;
 use dotenvy::dotenv;
 use handlers::handle_log;
-use indexer_framework::{event_loop, start_from, MIGRATIONS};
+use indexer_framework::{
+    event_loop, set_db_timeouts, start_from, DB_LOCK_TIMEOUT, DB_STATEMENT_TIMEOUT, MIGRATIONS,
+};
 use provider::SuiProvider;
 use tracing::debug;
 use tracing::error;
@@ -40,7 +44,7 @@ struct Args {
     #[arg(short, long)]
     remote_checkpoint_url: String,
 
-    /// Market program package ID
+    /// Original market program package ID, as in the event types
     #[arg(short, long)]
     package_id: String,
 
@@ -60,16 +64,24 @@ struct Args {
 fn run() -> Result<()> {
     let args = Args::parse();
 
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let mut conn = PgConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url));
+    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    // do not print the url on errors, it has the password
+    let mut conn = PgConnection::establish(&database_url).map_err(|e| match e {
+        diesel::ConnectionError::InvalidConnectionUrl(_) => {
+            anyhow!("failed to connect to the database: invalid DATABASE_URL")
+        }
+        e => anyhow!("failed to connect to the database: {e}"),
+    })?;
 
     // apply pending migrations
     info!("Applying pending migrations");
     conn.run_pending_migrations(MIGRATIONS)
         // error is not sized, pain to handle the usual way
-        .expect("failed to apply migrations");
+        .map_err(|e| anyhow!("failed to apply migrations: {e}"))?;
     info!("Applied pending migrations");
+
+    // set after the migrations, which may take longer than the statement timeout
+    set_db_timeouts(&mut conn, DB_LOCK_TIMEOUT, DB_STATEMENT_TIMEOUT)?;
 
     let mut provider = SuiProvider::new(
         args.remote_checkpoint_url,
@@ -99,7 +111,11 @@ fn main() -> Result<()> {
         .with_env_filter(filter)
         .init();
 
-    let _ = run().inspect_err(|e| error!(?e, "run error"));
+    // exit with a failure status on errors so that process supervisors restart the indexer
+    if let Err(e) = run() {
+        error!(?e, "run error");
+        std::process::exit(1);
+    }
 
     Ok(())
 }

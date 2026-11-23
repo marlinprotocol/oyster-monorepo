@@ -11,6 +11,8 @@ use alloy::sol_types::SolValue;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::state_mismatch;
 use bigdecimal::BigDecimal;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
@@ -51,14 +53,15 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         .select(jobs::rate)
         .get_result::<BigDecimal>(conn);
 
-    if rate.is_err() {
-        // !!! should never happen
-        // the only reason this would happen is if the job does not exist or is closed
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("failed to find rate for job"));
-    }
-
-    let rate = rate.unwrap();
+    let rate = match rate {
+        Ok(x) => x,
+        // the job does not exist or is closed
+        // reported as a state mismatch, the caller skips the log
+        Err(diesel::result::Error::NotFound) => {
+            return Err(state_mismatch("failed to find rate for job"));
+        }
+        Err(err) => return Err(err).context("failed to find rate for job"),
+    };
     let duration_removed = if &rate != &BigDecimal::from(0) {
         ((&amount * RATE_SCALING_FACTOR) / &rate).round(0)
     } else {
@@ -89,8 +92,8 @@ pub fn handle_job_withdrew(conn: &mut PgConnection, log: Log) -> Result<()> {
         // !!! should never happen
         // we have failed to make any changes
         // the only real condition is when the job does not exist or is closed
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("could not find job"));
+        // reported as a state mismatch, the caller skips the log
+        return Err(state_mismatch("could not find job"));
     }
 
     // target sql:

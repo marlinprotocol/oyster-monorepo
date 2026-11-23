@@ -3,6 +3,8 @@ use alloy::primitives::Address;
 use alloy::rpc::types::Log;
 use anyhow::Context;
 use anyhow::Result;
+
+use super::state_mismatch;
 use diesel::ExpressionMethods;
 use diesel::PgConnection;
 use diesel::RunQueryDsl;
@@ -40,8 +42,8 @@ pub fn handle_provider_removed(conn: &mut PgConnection, log: Log) -> Result<()> 
         // we should have had exactly one row made inactive
         // if count is 0, that means the row was already inactive
         // if count is more than 1, there was somehow more than one provider entry
-        // we error out for now, can consider just moving on
-        return Err(anyhow::anyhow!("count {count} should have been 1"));
+        // reported as a state mismatch, the caller skips the log
+        return Err(state_mismatch(format!("count {count} should have been 1")));
     }
 
     info!(provider, "removed provider");
