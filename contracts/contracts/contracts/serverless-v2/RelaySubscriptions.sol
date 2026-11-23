@@ -452,14 +452,14 @@ contract RelaySubscriptions is
         jobSubscriptions[jobSubsId].lastRunTimestamp = block.timestamp;
 
         address gatewayOwner = RELAY.gatewayOwners(enclaveAddress);
-        _releaseJobSubsEscrowAmount(jobSubs.job.env, gatewayOwner, _totalTime, jobSubs.job.usdcDeposit);
+        _releaseJobSubsEscrowAmount(jobSubsId, jobSubs.job.env, gatewayOwner, _totalTime, jobSubs.job.usdcDeposit);
 
         (bool success, uint256 callbackGas) = _callBackWithLimit(jobSubsId, jobSubs.job, _output, _errorCode);
 
         // TODO: FIXED_GAS will be different for this function
         uint256 callbackCost = (callbackGas + RELAY.FIXED_GAS()) * tx.gasprice;
 
-        _releaseJobSubsGasCostOnSuccess(gatewayOwner, jobSubs.job.callbackDeposit, callbackCost);
+        _releaseJobSubsGasCostOnSuccess(jobSubsId, gatewayOwner, jobSubs.job.callbackDeposit, callbackCost);
 
         emit JobSubscriptionResponded(
             jobSubsId,
@@ -500,6 +500,7 @@ contract RelaySubscriptions is
     }
 
     function _releaseJobSubsEscrowAmount(
+        uint256 _jobSubsId,
         uint8 _env,
         address _gatewayOwner,
         uint256 _totalTime,
@@ -515,7 +516,7 @@ contract RelaySubscriptions is
         // release escrow to gateway
         RELAY.TOKEN().safeTransfer(_gatewayOwner, gatewayPayoutUsdc);
 
-        jobSubscriptions[jobSubsCount].job.usdcDeposit = jobOwnerPayoutUsdc;
+        jobSubscriptions[_jobSubsId].job.usdcDeposit = jobOwnerPayoutUsdc;
     }
 
     function _callBackWithLimit(
@@ -543,6 +544,7 @@ contract RelaySubscriptions is
     }
 
     function _releaseJobSubsGasCostOnSuccess(
+        uint256 _jobSubsId,
         address _gatewayOwner,
         uint256 _callbackDeposit,
         uint256 _callbackCost
@@ -553,7 +555,7 @@ contract RelaySubscriptions is
         (bool paySuccess, ) = _gatewayOwner.call{value: _callbackCost}("");
 
         // transfer remaining native asset to the jobOwner
-        jobSubscriptions[jobSubsCount].job.callbackDeposit -= _callbackCost;
+        jobSubscriptions[_jobSubsId].job.callbackDeposit -= _callbackCost;
     }
 
     function _depositJobSubscriptionFunds(uint256 _jobSubsId, uint256 _usdcDeposit, uint256 _callbackDeposit) internal {

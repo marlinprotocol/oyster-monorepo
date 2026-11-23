@@ -1,5 +1,5 @@
 use crate::commands::subscription::types::{RelayContract, RelaySubscriptions, TerminateArgs};
-use crate::configs::global::{RELAY_CONTRACT_ADDRESS, RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS};
+use crate::configs::global::{relay_contract_address, relay_subscriptions_contract_address};
 use crate::utils::provider::create_provider;
 use alloy::hex;
 use alloy::primitives::U256;
@@ -26,13 +26,13 @@ pub async fn terminate(args: TerminateArgs) -> Result<()> {
     let subscription_id = data.data().jobSubsId;
     info!("Subscription ID: {:?}", subscription_id);
 
-    let relay_subscription_contract_address = RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS
+    let relay_subscription_contract_address = relay_subscriptions_contract_address()
         .parse()
         .context("Failed to parse relay subscriptions contract address")?;
     let relay_subscription_contract =
         RelaySubscriptions::new(relay_subscription_contract_address, provider.clone());
 
-    let relay_contract_address = RELAY_CONTRACT_ADDRESS
+    let relay_contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
     let relay_contract = RelayContract::new(relay_contract_address, provider.clone());

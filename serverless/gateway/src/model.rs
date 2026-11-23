@@ -21,6 +21,7 @@ pub struct AppState {
     pub epoch: u64,
     pub time_interval: u64,
     pub offset_for_epoch: u64,
+    pub gateways_start_block: u64,
     pub enclave_owner: Arc<Mutex<Address>>,
     pub immutable_params_injected: Arc<Mutex<bool>>,
     pub mutable_params_injected: Arc<AtomicBool>,
@@ -88,6 +89,9 @@ pub struct Config {
     pub epoch: u64,
     pub time_interval: u64,
     pub offset_for_epoch: u64,
+    // block to start reading the gateways contract events from, usually its deployment block
+    #[serde(default)]
+    pub gateways_start_block: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +121,7 @@ pub struct ContractsClient {
     pub epoch: u64,
     pub time_interval: u64,
     pub offset_for_epoch: u64,
+    pub gateways_start_block: u64,
     pub gateway_epoch_state_waitlist: Arc<RwLock<HashMap<u64, Vec<Job>>>>,
     pub common_chain_start_block_number: Arc<Mutex<u64>>,
     pub subscription_job_instance_heap: Arc<RwLock<BinaryHeap<SubscriptionJobInstanceHeap>>>,

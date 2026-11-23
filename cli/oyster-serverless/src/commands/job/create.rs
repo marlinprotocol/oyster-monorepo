@@ -1,5 +1,5 @@
 use crate::commands::job::types::{CreateJobArgs, Relay, USDC};
-use crate::configs::global::{RELAY_CONTRACT_ADDRESS, USDC_ADDRESS};
+use crate::configs::global::{relay_contract_address, usdc_address};
 use crate::utils::conversion::{to_eth, to_usdc};
 use crate::utils::provider::create_provider;
 use crate::utils::usdc::approve_usdc;
@@ -40,7 +40,7 @@ pub async fn create_job(args: CreateJobArgs) -> Result<()> {
     let signer_address = wallet.default_signer_address();
 
     // Parse addresses
-    let contract_address = RELAY_CONTRACT_ADDRESS
+    let contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
     let callback_contract: Address = args.callback_contract_address.parse()?;
@@ -122,7 +122,7 @@ pub async fn create_job(args: CreateJobArgs) -> Result<()> {
 
     let usdc_required = execution_fee_per_ms._0 * user_timeout + gateway_fee_per_job._0;
 
-    let usdc_contract = USDC::new(USDC_ADDRESS.parse()?, &provider);
+    let usdc_contract = USDC::new(usdc_address().parse()?, &provider);
 
     let usdc_balance = usdc_contract.balanceOf(signer_address).call().await?._0;
 

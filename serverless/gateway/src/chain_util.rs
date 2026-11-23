@@ -15,10 +15,12 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 use crate::constant::{
-    MAX_RETRY_ON_PROVIDER_ERROR, MAX_TX_RECEIPT_RETRIES, WAIT_BEFORE_HTTP_RPC_CALL,
+    LOGS_BLOCK_RANGE, LOGS_CHUNK_MAX_ATTEMPTS, LOGS_CHUNK_RETRY_BACKOFF_MS,
+    LOGS_CHUNK_RETRY_MAX_BACKOFF_MS, LOGS_CHUNK_TIMEOUT, MAX_RETRY_ON_PROVIDER_ERROR,
+    MAX_TX_RECEIPT_RETRIES, WAIT_BEFORE_HTTP_RPC_CALL,
 };
 use crate::error::ServerlessError;
 use crate::model::{Job, JobMode, RequestChainData};
@@ -50,6 +52,7 @@ pub trait LogsProvider {
 
 pub trait HttpProviderLogs {
     async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError>;
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError>;
 }
 
 pub struct HttpProvider {
@@ -60,15 +63,162 @@ impl HttpProvider {
     pub fn new(url: String) -> Self {
         Self { url }
     }
+
+    fn provider(&self) -> Result<RootProvider<Http<Client>>, ServerlessError> {
+        let url = Url::parse(&self.url)
+            .map_err(|err| ServerlessError::LogsFetchFailure(err.to_string()))?;
+        Ok(ProviderBuilder::new().on_http(url))
+    }
 }
 
 impl HttpProviderLogs for HttpProvider {
     async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
-        let provider: RootProvider<Http<Client>> =
-            ProviderBuilder::new().on_http(Url::parse(&self.url).unwrap());
-        let logs = provider.get_logs(filter).await.unwrap();
-        Ok(logs)
+        HttpProviderLogs::get_logs(&self.provider()?, filter).await
     }
+
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+        HttpProviderLogs::get_latest_block_number(&self.provider()?).await
+    }
+}
+
+impl HttpProviderLogs for RootProvider<Http<Client>> {
+    async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
+        Provider::get_logs(self, filter)
+            .await
+            .map_err(|err| ServerlessError::LogsFetchFailure(err.to_string()))
+    }
+
+    async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+        Provider::get_block_number(self)
+            .await
+            .map_err(|err| ServerlessError::BlockNumberFetchFailure(err.to_string()))
+    }
+}
+
+// Progress of a log query that is split into chunks of LOGS_BLOCK_RANGE blocks.
+// It is kept by the caller, so a query that failed on one chunk can be continued
+// from that chunk instead of from the first block.
+#[derive(Debug)]
+pub struct LogsScan {
+    pub next_block: u64,
+    pub to_block: u64,
+    pub logs: Vec<Log>,
+}
+
+impl LogsScan {
+    pub fn new(from_block: u64, to_block: u64) -> Self {
+        Self {
+            next_block: from_block,
+            to_block,
+            logs: Vec::new(),
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.next_block > self.to_block
+    }
+}
+
+// Fetch the logs matching the filter for the blocks left in the scan, one chunk at a time,
+// since RPCs limit the block range of a single eth_getLogs query.
+// Each chunk has its own timeout and is retried with a backoff. There is no deadline for
+// the whole scan. If a chunk keeps failing the error is returned and the scan keeps the
+// logs of the completed chunks, calling again with the same scan continues from there.
+pub async fn get_logs_in_chunks<P: HttpProviderLogs>(
+    provider: &P,
+    filter: &Filter,
+    scan: &mut LogsScan,
+) -> Result<(), ServerlessError> {
+    while !scan.is_complete() {
+        let chunk_from = scan.next_block;
+        let chunk_to = std::cmp::min(
+            chunk_from.saturating_add(LOGS_BLOCK_RANGE - 1),
+            scan.to_block,
+        );
+        let chunk_filter = filter.clone().from_block(chunk_from).to_block(chunk_to);
+
+        let mut attempt: u8 = 1;
+        let mut backoff = LOGS_CHUNK_RETRY_BACKOFF_MS;
+        let chunk_logs = loop {
+            let res = timeout(
+                Duration::from_secs(LOGS_CHUNK_TIMEOUT),
+                provider.get_logs(&chunk_filter),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(ServerlessError::LogsFetchFailure(format!(
+                    "timed out after {} seconds",
+                    LOGS_CHUNK_TIMEOUT
+                )))
+            });
+
+            match res {
+                Ok(chunk_logs) => break chunk_logs,
+                Err(err) => {
+                    error!(
+                        "Failed to get logs for blocks {} to {} (attempt {} of {}) - Error: {}",
+                        chunk_from, chunk_to, attempt, LOGS_CHUNK_MAX_ATTEMPTS, err
+                    );
+                    if attempt >= LOGS_CHUNK_MAX_ATTEMPTS {
+                        return Err(err);
+                    }
+                    attempt += 1;
+                    sleep(Duration::from_millis(backoff)).await;
+                    backoff = std::cmp::min(backoff * 2, LOGS_CHUNK_RETRY_MAX_BACKOFF_MS);
+                }
+            }
+        };
+
+        scan.logs.extend(chunk_logs);
+        scan.next_block = chunk_to + 1;
+    }
+
+    Ok(())
+}
+
+// Fetch the logs matching the filter from the given block to the latest block, in chunks.
+pub async fn get_logs_till_latest_block<P: HttpProviderLogs>(
+    provider: &P,
+    filter: &Filter,
+    from_block: u64,
+) -> Result<Vec<Log>, ServerlessError> {
+    let mut latest_block = None;
+    let mut backoff = LOGS_CHUNK_RETRY_BACKOFF_MS;
+    for attempt in 1..=LOGS_CHUNK_MAX_ATTEMPTS {
+        let res = timeout(
+            Duration::from_secs(LOGS_CHUNK_TIMEOUT),
+            provider.get_latest_block_number(),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(ServerlessError::BlockNumberFetchFailure(format!(
+                "timed out after {} seconds",
+                LOGS_CHUNK_TIMEOUT
+            )))
+        });
+
+        match res {
+            Ok(block_number) => {
+                latest_block = Some(block_number);
+                break;
+            }
+            Err(err) => {
+                error!(
+                    "Failed to get the latest block number (attempt {} of {}) - Error: {}",
+                    attempt, LOGS_CHUNK_MAX_ATTEMPTS, err
+                );
+                if attempt == LOGS_CHUNK_MAX_ATTEMPTS {
+                    return Err(err);
+                }
+                sleep(Duration::from_millis(backoff)).await;
+                backoff = std::cmp::min(backoff * 2, LOGS_CHUNK_RETRY_MAX_BACKOFF_MS);
+            }
+        }
+    }
+
+    let mut scan = LogsScan::new(from_block, latest_block.unwrap());
+    get_logs_in_chunks(provider, filter, &mut scan).await?;
+    Ok(scan.logs)
 }
 
 pub async fn get_block_number_by_timestamp(
@@ -489,4 +639,161 @@ pub async fn confirm_event(
         last_seen_block.store(curr_block_number, Ordering::SeqCst);
     }
     log
+}
+
+#[cfg(test)]
+mod chain_util_tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    // Provider that records the block range of every query and fails the given queries
+    struct RangeRecordingProvider {
+        queries: Mutex<Vec<(u64, u64)>>,
+        failing_queries: Vec<usize>,
+    }
+
+    impl RangeRecordingProvider {
+        fn new(failing_queries: Vec<usize>) -> Self {
+            Self {
+                queries: Mutex::new(Vec::new()),
+                failing_queries,
+            }
+        }
+    }
+
+    impl HttpProviderLogs for RangeRecordingProvider {
+        async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ServerlessError> {
+            let from_block = filter.get_from_block().unwrap();
+            let to_block = filter.get_to_block().unwrap();
+            let query_index = {
+                let mut queries = self.queries.lock().unwrap();
+                queries.push((from_block, to_block));
+                queries.len() - 1
+            };
+            if self.failing_queries.contains(&query_index) {
+                return Err(ServerlessError::LogsFetchFailure("mock failure".to_owned()));
+            }
+            Ok(vec![Log {
+                block_number: Some(from_block),
+                ..Default::default()
+            }])
+        }
+
+        async fn get_latest_block_number(&self) -> Result<u64, ServerlessError> {
+            Ok(LOGS_BLOCK_RANGE + 100)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_till_latest_block_splits_the_range() {
+        let provider = RangeRecordingProvider::new(vec![]);
+
+        let logs = get_logs_till_latest_block(&provider, &Filter::new(), 50)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *provider.queries.lock().unwrap(),
+            vec![
+                (50, LOGS_BLOCK_RANGE + 49),
+                (LOGS_BLOCK_RANGE + 50, LOGS_BLOCK_RANGE + 100),
+            ]
+        );
+        assert_eq!(logs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_till_latest_block_returns_the_error() {
+        // the first chunk fails all its attempts
+        let max_attempts = LOGS_CHUNK_MAX_ATTEMPTS as usize;
+        let provider = RangeRecordingProvider::new((0..max_attempts).collect());
+
+        let res = get_logs_till_latest_block(&provider, &Filter::new(), 50).await;
+
+        assert_eq!(
+            res.unwrap_err(),
+            ServerlessError::LogsFetchFailure("mock failure".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_in_chunks_splits_the_range() {
+        let provider = RangeRecordingProvider::new(vec![]);
+        let mut scan = LogsScan::new(10, 2 * LOGS_BLOCK_RANGE + 20);
+
+        let res = get_logs_in_chunks(&provider, &Filter::new(), &mut scan).await;
+
+        assert_eq!(res, Ok(()));
+        assert!(scan.is_complete());
+        assert_eq!(
+            *provider.queries.lock().unwrap(),
+            vec![
+                (10, LOGS_BLOCK_RANGE + 9),
+                (LOGS_BLOCK_RANGE + 10, 2 * LOGS_BLOCK_RANGE + 9),
+                (2 * LOGS_BLOCK_RANGE + 10, 2 * LOGS_BLOCK_RANGE + 20),
+            ]
+        );
+        assert_eq!(scan.logs.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_in_chunks_retries_a_failed_chunk() {
+        // the second chunk fails twice and then succeeds
+        let provider = RangeRecordingProvider::new(vec![1, 2]);
+        let mut scan = LogsScan::new(0, 2 * LOGS_BLOCK_RANGE - 1);
+
+        let res = get_logs_in_chunks(&provider, &Filter::new(), &mut scan).await;
+
+        assert_eq!(res, Ok(()));
+        assert_eq!(
+            *provider.queries.lock().unwrap(),
+            vec![
+                (0, LOGS_BLOCK_RANGE - 1),
+                (LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE - 1),
+                (LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE - 1),
+                (LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE - 1),
+            ]
+        );
+        assert_eq!(scan.logs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_in_chunks_resumes_from_the_failed_chunk() {
+        // the second chunk fails all its attempts
+        let max_attempts = LOGS_CHUNK_MAX_ATTEMPTS as usize;
+        let provider = RangeRecordingProvider::new((1..=max_attempts).collect());
+        let mut scan = LogsScan::new(0, 3 * LOGS_BLOCK_RANGE - 1);
+
+        let res = get_logs_in_chunks(&provider, &Filter::new(), &mut scan).await;
+
+        assert_eq!(
+            res,
+            Err(ServerlessError::LogsFetchFailure("mock failure".to_owned()))
+        );
+        assert!(!scan.is_complete());
+        assert_eq!(scan.next_block, LOGS_BLOCK_RANGE);
+        assert_eq!(scan.logs.len(), 1);
+        assert_eq!(provider.queries.lock().unwrap().len(), 1 + max_attempts);
+
+        // the same scan continues from the second chunk, the first one is not queried again
+        let res = get_logs_in_chunks(&provider, &Filter::new(), &mut scan).await;
+
+        assert_eq!(res, Ok(()));
+        assert!(scan.is_complete());
+        let queries = provider.queries.lock().unwrap();
+        assert_eq!(
+            queries[1 + max_attempts..],
+            [
+                (LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE - 1),
+                (2 * LOGS_BLOCK_RANGE, 3 * LOGS_BLOCK_RANGE - 1),
+            ]
+        );
+        let log_blocks: Vec<u64> = scan
+            .logs
+            .iter()
+            .map(|log| log.block_number.unwrap())
+            .collect();
+        assert_eq!(log_blocks, vec![0, LOGS_BLOCK_RANGE, 2 * LOGS_BLOCK_RANGE]);
+    }
 }

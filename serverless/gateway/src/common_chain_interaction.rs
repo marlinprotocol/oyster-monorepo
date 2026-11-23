@@ -20,8 +20,9 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{self, sleep};
 
 use crate::chain_util::{
-    confirm_event, sign_job_response_request, sign_reassign_gateway_relay_request,
-    sign_relay_job_request, HttpProvider, HttpProviderLogs, LogsProvider,
+    confirm_event, get_logs_till_latest_block, sign_job_response_request,
+    sign_reassign_gateway_relay_request, sign_relay_job_request, HttpProvider, HttpProviderLogs,
+    LogsProvider,
 };
 use crate::common_chain_gateway_state_service::gateway_epoch_state_service;
 use crate::constant::{
@@ -571,11 +572,22 @@ impl ContractsClient {
         // SOLUTION 1 - Wait for the next block.
         //          Problem: Extra time spent here waiting.
 
-        let logs = self
+        // the logs are read in chunks and each chunk is retried, see get_logs_in_chunks
+        let logs = match self
             .gateways_job_relayed_logs(job.clone(), common_chain_http_provider)
             .await
-            .context("Failed to get logs")
-            .unwrap();
+        {
+            Ok(logs) => logs,
+            Err(err) => {
+                // without the logs it is not known if the job was relayed,
+                // so the selected gateway is not slashed
+                error!(
+                    "Job ID: {:?}, Failed to get the JobRelayed logs, skipping the slash check - Error: {:?}",
+                    job.job_id, err
+                );
+                return;
+            }
+        };
 
         for log in logs {
             let topics = log.topics();
@@ -1374,14 +1386,15 @@ impl LogsProvider for ContractsClient {
 
         let job_relayed_event_filter = Filter::new()
             .address(self.gateway_jobs_contract_address)
-            .select(common_chain_start_block_number..)
             .event(COMMON_CHAIN_JOB_RELAYED_EVENT)
             .topic1(B256::from(job.job_id));
 
-        let logs = common_chain_http_provider
-            .get_logs(&job_relayed_event_filter)
-            .await
-            .unwrap();
+        let logs = get_logs_till_latest_block(
+            common_chain_http_provider,
+            &job_relayed_event_filter,
+            common_chain_start_block_number,
+        )
+        .await?;
 
         Ok(logs)
     }
@@ -1393,14 +1406,21 @@ impl LogsProvider for ContractsClient {
     ) -> Result<Vec<Log>> {
         let event_filter = Filter::new()
             .address(req_chain_data.relay_subscriptions_address)
-            .select(req_chain_data.request_chain_start_block_number - 1..)
             .events(vec![
                 REQUEST_CHAIN_JOB_SUBSCRIPTION_STARTED_EVENT,
                 REQUEST_CHAIN_JOB_SUBSCRIPTION_JOB_PARAMS_UPDATED_EVENT,
                 REQUEST_CHAIN_JOB_SUBSCRIPTION_TERMINATION_PARAMS_UPDATED_EVENT,
             ]);
 
-        let logs = http_provider.get_logs(&event_filter).await.unwrap();
+        let logs = get_logs_till_latest_block(
+            http_provider,
+            &event_filter,
+            req_chain_data
+                .request_chain_start_block_number
+                .saturating_sub(1),
+        )
+        .await?;
+
         Ok(logs)
     }
 }
@@ -1859,7 +1879,11 @@ mod common_chain_interaction_tests {
 
         let (req_chain_tx, mut com_chain_rx) = channel::<Job>(100);
 
-        let mock_provider = MockHttpProvider::new(Some(job.clone()));
+        let latest_block = *contracts_client
+            .common_chain_start_block_number
+            .lock()
+            .unwrap();
+        let mock_provider = MockHttpProvider::new(Some(job.clone()), latest_block);
         contracts_client
             .job_relayed_slash_timer(job.clone(), Some(1), req_chain_tx, &mock_provider)
             .await;
@@ -1890,7 +1914,11 @@ mod common_chain_interaction_tests {
 
         let (req_chain_tx, mut com_chain_rx) = channel::<Job>(100);
 
-        let mock_provider = MockHttpProvider::new(Some(job.clone()));
+        let latest_block = *contracts_client
+            .common_chain_start_block_number
+            .lock()
+            .unwrap();
+        let mock_provider = MockHttpProvider::new(Some(job.clone()), latest_block);
 
         contracts_client
             .clone()
@@ -1931,7 +1959,11 @@ mod common_chain_interaction_tests {
 
         let (req_chain_tx, mut com_chain_rx) = channel::<Job>(100);
 
-        let mock_provider = MockHttpProvider::new(Some(job.clone()));
+        let latest_block = *contracts_client
+            .common_chain_start_block_number
+            .lock()
+            .unwrap();
+        let mock_provider = MockHttpProvider::new(Some(job.clone()), latest_block);
         contracts_client
             .clone()
             .job_relayed_slash_timer(job.clone(), Some(1 as u64), req_chain_tx, &mock_provider)

@@ -1,6 +1,6 @@
 use alloy::eips::BlockId;
 use alloy::primitives::{keccak256, Address, U256};
-use alloy::providers::{Provider, ProviderBuilder, RootProvider};
+use alloy::providers::{ProviderBuilder, RootProvider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::reqwest::Url;
@@ -13,11 +13,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 use tokio::time::{self, sleep, Duration, Instant};
 
-use crate::chain_util::get_block_number_by_timestamp;
+use crate::chain_util::{get_block_number_by_timestamp, get_logs_in_chunks, LogsScan};
 use crate::constant::{
     COMMON_CHAIN_GATEWAY_CHAIN_ADDED_EVENT, COMMON_CHAIN_GATEWAY_CHAIN_REMOVED_EVENT,
     COMMON_CHAIN_GATEWAY_DEREGISTERED_EVENT, COMMON_CHAIN_GATEWAY_REGISTERED_EVENT,
-    GATEWAY_BLOCK_STATES_TO_MAINTAIN, MAX_RETRY_ON_PROVIDER_ERROR, WAIT_BEFORE_HTTP_RPC_CALL,
+    GATEWAY_BLOCK_STATES_TO_MAINTAIN, LOGS_SCAN_RETRY_WAIT, MAX_RETRY_ON_PROVIDER_ERROR,
+    WAIT_BEFORE_HTTP_RPC_CALL,
 };
 use crate::contract_abi::GatewaysContract::{self, GatewaysContractInstance};
 use crate::model::{ContractsClient, GatewayData, Job};
@@ -74,6 +75,7 @@ pub async fn gateway_epoch_state_service(
                 cycle_number,
                 contracts_client.epoch,
                 contracts_client.time_interval,
+                contracts_client.gateways_start_block,
             )
             .await;
 
@@ -133,6 +135,7 @@ pub async fn gateway_epoch_state_service(
                 cycle_number,
                 contracts_client.epoch,
                 contracts_client.time_interval,
+                contracts_client.gateways_start_block,
             )
             .await;
 
@@ -181,11 +184,12 @@ pub async fn generate_gateway_epoch_state_for_cycle(
     cycle_number: u64,
     epoch: u64,
     time_interval: u64,
+    start_block: u64,
 ) -> Result<(), Error> {
     // last added cycle will be the cycle number which is less than the current cycle number
     let mut last_added_cycle: Option<u64> = None;
     let mut added_cycles: Vec<u64>;
-    let mut from_block_number: u64 = 0;
+    let mut from_block_number: u64 = start_block;
     // scope for the read lock
     {
         let gateway_epoch_state_guard = gateway_epoch_state.read().unwrap();
@@ -275,30 +279,22 @@ pub async fn generate_gateway_epoch_state_for_cycle(
             COMMON_CHAIN_GATEWAY_CHAIN_REMOVED_EVENT,
         ]);
 
-    let logs;
-    let time_to_wait =
-        Instant::now() + Duration::from_secs(time_interval * GATEWAY_BLOCK_STATES_TO_MAINTAIN);
-    loop {
-        if Instant::now() > time_to_wait {
-            return Err(anyhow::anyhow!(
-                "Failed to get logs for the gateway contract"
-            ));
-        }
-
-        let res = provider.get_logs(&event_filter).await;
-
-        if res.is_err() {
-            error!(
-                "Failed to get logs for the gateway contract - Error: {:?}",
-                res.err().unwrap()
-            );
-            sleep(Duration::from_millis(WAIT_BEFORE_HTTP_RPC_CALL)).await;
-            continue;
-        }
-
-        logs = res.unwrap();
-        break;
+    // fetch the logs in chunks since RPCs limit the block range of a single query.
+    // There is no deadline for the whole scan, the first scan can cover a long range.
+    // When a chunk keeps failing, wait and continue from that chunk, the logs of the
+    // completed chunks are kept in the scan.
+    let mut scan = LogsScan::new(from_block_number, to_block_number);
+    while let Err(err) = get_logs_in_chunks(provider, &event_filter, &mut scan).await {
+        error!(
+            "Failed to get logs for the gateway contract, {} of {} blocks scanned, retrying from block {} - Error: {}",
+            scan.next_block - from_block_number,
+            to_block_number - from_block_number + 1,
+            scan.next_block,
+            err
+        );
+        sleep(Duration::from_secs(LOGS_SCAN_RETRY_WAIT)).await;
     }
+    let logs = scan.logs;
 
     for log in logs {
         let topics = log.topics();

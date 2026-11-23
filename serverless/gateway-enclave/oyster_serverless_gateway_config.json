@@ -7,5 +7,6 @@
   "enclave_secret_key": "/app/ecdsa.sec",
   "epoch": 1718602200,
   "time_interval": 60,
-  "offset_for_epoch": 20
+  "offset_for_epoch": 20,
+  "gateways_start_block": 0
 }

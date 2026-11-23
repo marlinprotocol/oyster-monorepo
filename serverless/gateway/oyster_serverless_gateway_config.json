@@ -7,5 +7,6 @@
   "enclave_secret_key": "./enclave_secret_key",
   "epoch": 1718602200,
   "time_interval": 20,
-  "offset_for_epoch": 4
+  "offset_for_epoch": 4,
+  "gateways_start_block": 0
 }

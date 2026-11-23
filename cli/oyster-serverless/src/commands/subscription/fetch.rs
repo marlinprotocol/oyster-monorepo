@@ -1,7 +1,7 @@
 use crate::commands::subscription::types::{FetchResponseArgs, RelayContract, RelaySubscriptions};
 use crate::commands::subscription::utils::get_current_timestamp;
-use crate::configs::global::RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS;
-use crate::configs::global::{ARBITRUM_ONE_RPC_URL, RELAY_CONTRACT_ADDRESS};
+use crate::configs::global::relay_subscriptions_contract_address;
+use crate::configs::global::{rpc_url, relay_contract_address};
 use alloy::primitives::U256;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::transports::http::Http;
@@ -49,7 +49,7 @@ async fn fetch_and_process_subscription_events(
 /// Fetches responses for a subscription
 pub async fn fetch_response(args: FetchResponseArgs) -> Result<()> {
     // Create provider with no wallet (read-only)
-    let rpc_url = ARBITRUM_ONE_RPC_URL
+    let rpc_url = rpc_url()
         .parse()
         .context("Failed to parse RPC URL")?;
     let provider = ProviderBuilder::new().on_http(rpc_url);
@@ -80,13 +80,13 @@ pub async fn fetch_response(args: FetchResponseArgs) -> Result<()> {
     );
 
     // Create contract instances
-    let realy_subscription_contract_address = RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS
+    let realy_subscription_contract_address = relay_subscriptions_contract_address()
         .parse()
         .context("Failed to parse relay subscriptions contract address")?;
     let realy_subscription_contract =
         RelaySubscriptions::new(realy_subscription_contract_address, provider.clone());
 
-    let relay_contract_address = RELAY_CONTRACT_ADDRESS
+    let relay_contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
     let relay_contract = RelayContract::new(relay_contract_address, provider.clone());

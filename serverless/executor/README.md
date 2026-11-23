@@ -79,13 +79,12 @@ Options:
 Configuration file parameters required for running an executor node:
 ```
 {
-  "secret_store_config_port": // Secret store configuration port,
   "workerd_runtime_path": // Runtime path where code and config files will be created and executed (workerd binary should be present here),
   "secret_store_path": // Secret store path where secret files are stored
   "common_chain_id": // Common chain id,
   "http_rpc_url": // Http url of the RPC endpoint,
   "web_socket_url": // Websocket url of the RPC endpoint,
-  "tee_manager_contract_addr": // TeeManager smart contract address on common chain,
+  "executors_contract_addr": // Executors smart contract address on common chain,
   "jobs_contract_addr": // Jobs smart contract address on common chain,
   "code_contract_addr": // User code calldata smart contract address on common chain,
   "enclave_signer_file": // path to enclave secp256k1 private key file,

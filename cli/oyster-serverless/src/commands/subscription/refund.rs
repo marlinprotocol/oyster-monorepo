@@ -1,5 +1,5 @@
 use crate::commands::subscription::types::{RefundDepositsArgs, RelaySubscriptions};
-use crate::configs::global::RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS;
+use crate::configs::global::relay_subscriptions_contract_address;
 use crate::utils::provider::create_provider;
 use alloy::hex;
 use alloy::providers::Provider;
@@ -25,7 +25,7 @@ pub async fn refund_deposits(args: RefundDepositsArgs) -> Result<()> {
     let subscription_id = data.data().jobSubsId;
     info!("Subscription ID: {:?}", subscription_id);
 
-    let relay_subscription_contract_address = RELAY_SUBSCRIPTIONS_CONTRACT_ADDRESS
+    let relay_subscription_contract_address = relay_subscriptions_contract_address()
         .parse()
         .context("Failed to parse relay subscriptions contract address")?;
     let relay_subscription_contract =

@@ -1,6 +1,6 @@
 use crate::{
     commands::job::types::{ListArgs, Relay},
-    configs::global::{ARBITRUM_ONE_RPC_URL, INDEXER_URL, RELAY_CONTRACT_ADDRESS},
+    configs::global::{rpc_url, indexer_url, relay_contract_address},
     utils::conversion::string_epoch_to_local_datetime,
 };
 use alloy::{primitives::U256, providers::ProviderBuilder};
@@ -61,14 +61,14 @@ fn determine_job_status(start_time_epoch: u64, overall_timeout: U256) -> String 
 /// List pending jobs for a given address
 pub async fn list_jobs(args: ListArgs) -> Result<()> {
     // Create provider with no wallet (read-only)
-    let rpc_url = ARBITRUM_ONE_RPC_URL
+    let rpc_url = rpc_url()
         .parse()
         .context("Failed to parse RPC URL")?;
     let provider = ProviderBuilder::new().on_http(rpc_url);
 
 
     // Parse addresses
-    let contract_address = RELAY_CONTRACT_ADDRESS
+    let contract_address = relay_contract_address()
         .parse()
         .context("Failed to parse relay contract address")?;
 
@@ -111,7 +111,7 @@ pub async fn list_jobs(args: ListArgs) -> Result<()> {
     });
 
     let response = client
-        .post(INDEXER_URL)
+        .post(indexer_url())
         .header("Content-Type", "application/json")
         .json(&query)
         .send()
