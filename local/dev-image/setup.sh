@@ -28,8 +28,9 @@ echo "status"
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server
 /app/supervisord ctl -c /etc/supervisord.conf start attestation-server-ecdsa
 
-# start mock derive server
+# start mock derive servers
 /app/supervisord ctl -c /etc/supervisord.conf start derive-server
+/app/supervisord ctl -c /etc/supervisord.conf start derive-server-contract
 
 if [ -e "/app/docker-compose.yml" ]; then 
     # Wait for Docker daemon to be ready

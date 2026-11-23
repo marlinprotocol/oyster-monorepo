@@ -1,6 +1,10 @@
+use std::fs;
+
 use anyhow::{Context, Result};
 use axum::{routing::get, Router};
+use blake2::{Blake2b512, Digest};
 use clap::Parser;
+use serde_yaml::Value;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -13,6 +17,14 @@ struct Args {
     /// Listening address
     #[arg(long, default_value = "127.0.0.1:1100")]
     listen_addr: String,
+
+    /// Flag to enable contract based derive server behavior (constant seed)
+    #[arg(long)]
+    contract: bool,
+
+    /// Path to docker-compose file for yaml based seed
+    #[arg(long, conflicts_with = "contract")]
+    docker_compose: Option<String>,
 }
 
 #[derive(Clone)]
@@ -25,7 +37,10 @@ async fn main() -> Result<()> {
     setup_logging();
     let args = Args::parse();
 
-    let seed = [0u8; 64]; // Constant seed
+    let mut seed = [0u8; 64];
+    if !args.contract {
+        seed = deterministic_seed_from_docker_compose(&args.docker_compose.unwrap())?;
+    }
 
     let app_state = AppState { seed };
 
@@ -51,4 +66,18 @@ fn setup_logging() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+}
+
+fn deterministic_seed_from_docker_compose(path: &str) -> Result<[u8; 64]> {
+    let content = fs::read_to_string(path).context("Failed to read docker compose file")?;
+    let yaml: Value = serde_yaml::from_str(&content).context("Invalid docker compose yaml")?;
+    let canonical = serde_yaml::to_string(&yaml).context("Failed to serialize yaml file")?;
+
+    let mut hasher = Blake2b512::new();
+    hasher.update(canonical.as_bytes());
+    let hash = hasher.finalize();
+
+    let mut seed = [0u8; 64];
+    seed.copy_from_slice(&hash);
+    Ok(seed)
 }
