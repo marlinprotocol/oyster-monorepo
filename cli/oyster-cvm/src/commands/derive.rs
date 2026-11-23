@@ -6,6 +6,8 @@ use clap::Args;
 use lazy_static::lazy_static;
 use tracing::info;
 
+use crate::args::init_params::recover_kms_signer;
+
 /// Get KMS derived public keys or addresses
 ///
 /// For image based KMS:
@@ -101,14 +103,7 @@ pub async fn kms_derive(args: KmsDeriveArgs) -> Result<()> {
     hasher.update(&body_bytes);
     let digest: [u8; 32] = hasher.finalize().into();
 
-    let signature = k256::ecdsa::Signature::from_slice(&signature_bytes[0..64])
-        .context("failed to parse signature for encryption key from kms root server")?;
-    let recovery_id = k256::ecdsa::RecoveryId::from_byte(signature_bytes[64] - 27)
-        .context("failed to parse recovery id from kms root server signature")?;
-    let verifying_key =
-        k256::ecdsa::VerifyingKey::recover_from_prehash(&digest, &signature, recovery_id)
-            .context("failed to recover pubkey from kms root server signature")?;
-    let pubkey = hex::encode(&verifying_key.to_encoded_point(false).as_bytes()[1..]);
+    let pubkey = recover_kms_signer(&digest, &signature_bytes)?;
 
     let kms_verification_key = if let Some(kms_verification_key) = args.kms_verification_key {
         kms_verification_key

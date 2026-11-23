@@ -2,7 +2,6 @@ use alloy::{
     network::{Ethereum, EthereumWallet},
     primitives::{Address, FixedBytes},
     providers::{Provider, ProviderBuilder, WalletProvider},
-    signers::local::PrivateKeySigner,
     sol,
 };
 use anyhow::{Context, Result, anyhow};
@@ -179,12 +178,7 @@ async fn kms_contract_verify(args: KmsVerifyArgs) -> Result<()> {
 async fn create_arb_provider(
     wallet_private_key: &str,
 ) -> Result<impl Provider<Ethereum> + WalletProvider + Clone + use<>> {
-    let private_key = FixedBytes::<32>::from_slice(
-        &hex::decode(wallet_private_key).context("Failed to decode private key")?,
-    );
-
-    let signer = PrivateKeySigner::from_bytes(&private_key)
-        .context("Failed to create signer from private key")?;
+    let signer = crate::deployment::evm::parse_private_key(wallet_private_key)?;
     let wallet = EthereumWallet::from(signer);
 
     let provider = ProviderBuilder::new().wallet(wallet).connect_http(

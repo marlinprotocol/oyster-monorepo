@@ -4510,7 +4510,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sui-crypto"
 version = "0.0.8"
-source = "git+https://github.com/mystenlabs/sui-rust-sdk#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
+source = "git+https://github.com/mystenlabs/sui-rust-sdk?rev=fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
 dependencies = [
  "ed25519-dalek",
  "k256",
@@ -4523,7 +4523,7 @@ dependencies = [
 [[package]]
 name = "sui-rpc"
 version = "0.0.8"
-source = "git+https://github.com/mystenlabs/sui-rust-sdk#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
+source = "git+https://github.com/mystenlabs/sui-rust-sdk?rev=fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
 dependencies = [
  "base64",
  "bcs",
@@ -4544,7 +4544,7 @@ dependencies = [
 [[package]]
 name = "sui-sdk-types"
 version = "0.0.8"
-source = "git+https://github.com/mystenlabs/sui-rust-sdk#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
+source = "git+https://github.com/mystenlabs/sui-rust-sdk?rev=fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2#fb62af78b30f5dc64eeaec0094ab95b5ce5b7ce2"
 dependencies = [
  "base64ct",
  "bcs",

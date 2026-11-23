@@ -29,3 +29,5 @@ pub const REGISTRY_ID: &str = "0xf67a9392da1749e8442d71eb6139a9dc1c199b88ef3da49
 pub const REGISTRY_INITIAL_VERSION: u64 = 700389929;
 
 pub const USDC_DECIMALS: u8 = 6;
+// EXTRA_DECIMALS of the market: rates are divided by 10^EXTRA_DECIMALS to get token base units per second
+pub const MARKET_EXTRA_DECIMALS: u8 = 12;

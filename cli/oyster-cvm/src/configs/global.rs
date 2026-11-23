@@ -5,6 +5,5 @@ pub const PINATA_GATEWAY_URL: &str = "https://gateway.pinata.cloud/ipfs";
 // Default Ports
 pub const DEFAULT_ATTESTATION_PORT: u16 = 1300;
 
-// Transaction Limits
-pub const MIN_DEPOSIT_AMOUNT: u64 = 1; // Minimum 0.000001 USDC
-pub const MIN_WITHDRAW_AMOUNT: u64 = 1; // Minimum 0.000001 USDC
+// Decimals of the rates published by operators (USD per second)
+pub const RATE_DECIMALS: u32 = 18;

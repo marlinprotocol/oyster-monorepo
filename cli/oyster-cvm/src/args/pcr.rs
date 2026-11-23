@@ -117,6 +117,26 @@ impl PcrArgs {
         Ok(None)
     }
 
+    /// PCR16 from the `--pcr-json` file, if the file is used and has one.
+    /// PCR16 covers the init params of an enclave, so presets cannot carry it.
+    pub fn pcr16_from_json(&self) -> Result<Option<String>> {
+        let Some(ref path) = self.pcr_json else {
+            return Ok(None);
+        };
+
+        let file = std::fs::File::open(path)?;
+        let json: serde_json::Value =
+            serde_json::from_reader(file).context("Failed to parse PCR JSON file")?;
+
+        Ok(json
+            .as_object()
+            .context("PCR data should be a JSON object")?
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == "pcr16")
+            .and_then(|(_, v)| v.as_str())
+            .map(str::to_owned))
+    }
+
     pub fn load_required(self, default_preset: Option<String>) -> Result<(String, String, String)> {
         self.load(default_preset)
             .transpose()
@@ -176,3 +196,56 @@ pub static PCRS_BASE_BLUE_V1_0_0_ARM64: (&str, &str, &str) = (
     "3dc2602d18944028b4705c2b46c5d6efd73cba3c58d09deccc073075c68a4ebac36e5368eb0921c7b4c699f4ae03a1e5",
     "7c6df87340416213e7ed9aae80a766626a9fa5a02adcb1d64ee170aa08357a274b261a8ab94723ba600b910282e52d92",
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_args(contents: &str, name: &str) -> (PcrArgs, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "oyster-cvm-pcr-test-{}-{name}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).unwrap();
+        (
+            PcrArgs {
+                pcr_preset: None,
+                pcr_json: Some(path.to_string_lossy().into_owned()),
+                pcr0: None,
+                pcr1: None,
+                pcr2: None,
+            },
+            path,
+        )
+    }
+
+    #[test]
+    fn pcr16_is_read_from_the_json_file() {
+        let (args, path) = json_args(
+            r#"{"PCR0": "aa", "PCR1": "bb", "PCR2": "cc", "PCR16": "dd"}"#,
+            "with",
+        );
+        assert_eq!(args.pcr16_from_json().unwrap(), Some("dd".into()));
+        assert_eq!(
+            args.load(None).unwrap(),
+            Some(("aa".into(), "bb".into(), "cc".into()))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn pcr16_is_optional_in_the_json_file() {
+        let (args, path) = json_args(r#"{"pcr0": "aa", "pcr1": "bb", "pcr2": "cc"}"#, "without");
+        assert_eq!(args.pcr16_from_json().unwrap(), None);
+        std::fs::remove_file(path).unwrap();
+
+        let no_json = PcrArgs {
+            pcr_preset: Some("debug".into()),
+            pcr_json: None,
+            pcr0: None,
+            pcr1: None,
+            pcr2: None,
+        };
+        assert_eq!(no_json.pcr16_from_json().unwrap(), None);
+    }
+}

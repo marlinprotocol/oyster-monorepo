@@ -2,11 +2,17 @@ use crate::{
     args::{init_params::InitParamsArgs, wallet::WalletArgs},
     commands::log::{LogArgs, stream_logs},
     configs,
-    deployment::{Deployment, adapter::JobTransactionKind, get_deployment_adapter},
+    deployment::{
+        Deployment,
+        adapter::{JOB_ID_NOT_FOUND, JobTransactionKind, TX_MAYBE_INCLUDED},
+        get_deployment_adapter,
+    },
     types::Platform,
     utils::{
-        bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region},
-        format_usdc,
+        ask_yes_no,
+        bandwidth::{calculate_bandwidth_cost, get_bandwidth_rate_for_region, parse_hex_rate},
+        format_token_amount, format_token_display, is_interactive, mispricing_warning,
+        parse_token_amount,
     },
 };
 
@@ -18,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::{str::FromStr, time::Duration as StdDuration};
 use sui_sdk_types::Address;
 use tokio::net::TcpStream;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::simulate::{LOCAL_DEV_IMAGE, SimulateArgs, simulate};
 
@@ -29,6 +35,9 @@ const ATTESTATION_RETRIES: u32 = 20;
 const ATTESTATION_INTERVAL: u64 = 15;
 const TCP_CHECK_RETRIES: u32 = 20;
 const TCP_CHECK_INTERVAL: u64 = 15;
+
+// The control plane of an operator stops an enclave this long before its balance runs out
+const OPERATOR_STOP_BUFFER_MINUTES: u32 = 5;
 
 /// Deploy an Oyster CVM instance
 #[derive(Args, Debug)]
@@ -112,6 +121,19 @@ pub struct DeployArgs {
     #[command(flatten)]
     init_params: InitParamsArgs,
 
+    /// Abort if the total cost of the job is above this many USDC (e.g. 1.5).
+    /// The price comes from the operator's control plane, this bounds what it can make you pay.
+    #[arg(long)]
+    max_cost: Option<String>,
+
+    /// Abort if the rate of the job is above this many USDC per hour (e.g. 0.1)
+    #[arg(long)]
+    max_rate: Option<String>,
+
+    /// Do not ask for confirmation before paying for the job
+    #[arg(short = 'y', long)]
+    yes: bool,
+
     /// Simulate the enclave locally
     #[arg(long, conflicts_with = "image_url")]
     simulate: bool,
@@ -143,13 +165,13 @@ struct InstanceRate {
 }
 
 pub async fn deploy(args: DeployArgs) -> Result<()> {
-    // Start simulation if dry_run flag is opted
+    // Start simulation if the simulate flag is opted
     if args.simulate {
         if args.preset == "blue" {
             return start_simulation(args).await;
         } else {
             return Err(anyhow!(
-                "Dry run is only supported for blue images based deployments!"
+                "--simulate is only supported for blue images based deployments!"
             ));
         }
     }
@@ -157,6 +179,14 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     tracing::info!("Starting deployment...");
 
     let operator = parse_operator(&args.deployment, args.operator);
+
+    // kept to tell the user how to get out of a job if the deployment fails after it is opened
+    let deployment_name = args.deployment.as_str();
+    let recovery_flags = recovery_flags(
+        deployment_name,
+        args.rpc.as_deref(),
+        &args.wallet.command_hint(),
+    );
 
     let mut deployment_adapter = get_deployment_adapter(
         args.deployment,
@@ -219,9 +249,29 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
 
     let extra_decimals = deployment_adapter.fetch_extra_decimals(&provider).await?;
 
+    // Amounts are shown in the token's own decimals. The market charges
+    // rate / 10^EXTRA_DECIMALS base units per second, so a rate has this many decimals in tokens:
+    let token_decimals = deployment_adapter.fetch_token_decimals(&provider).await?;
+    let rate_decimals = token_decimals
+        + u32::try_from(extra_decimals)
+            .map_err(|_| anyhow!("Unexpected EXTRA_DECIMALS value {extra_decimals}"))?;
+    if let Some(warning) = mispricing_warning(token_decimals, extra_decimals) {
+        warn!("{warning}");
+    }
+
     // Calculate costs
     // SAFETY: will be some value if simulation is not opted
-    let duration_seconds = (args.duration_in_minutes.unwrap() as u64) * 60;
+    let duration_minutes = args.duration_in_minutes.unwrap();
+    if duration_minutes == 0 {
+        return Err(anyhow!("--duration-in-minutes must be greater than 0"));
+    }
+    if duration_minutes <= OPERATOR_STOP_BUFFER_MINUTES {
+        warn!(
+            "Operators stop an enclave about {} minutes before its balance runs out, a duration of {} minutes leaves no time to run.",
+            OPERATOR_STOP_BUFFER_MINUTES, duration_minutes
+        );
+    }
+    let duration_seconds = (duration_minutes as u64) * 60;
     let (total_cost, total_rate) = calculate_total_cost(
         &selected_instance,
         duration_seconds,
@@ -231,15 +281,48 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         extra_decimals,
     )
     .await?;
+    let hourly_rate = total_rate.saturating_mul(U256::from(3600));
 
+    info!("Operator: {}", operator);
     info!(
-        "Total cost: {:.6} USDC",
-        format_usdc(total_cost, extra_decimals)
+        "Instance: {} in {}, {} minutes",
+        selected_instance.instance, args.region, duration_minutes
     );
     info!(
-        "Total rate: {:.6} USDC/hour",
-        (total_rate.to::<u128>() * 3600) as f64 / 1e18
+        "Total cost: {} USDC",
+        format_token_amount(total_cost, token_decimals)
     );
+    info!(
+        "Total rate: {} USDC/hour",
+        format_token_display(hourly_rate, rate_decimals)
+    );
+
+    // The price is whatever the operator's control plane answered, check it against the caps
+    let max_cost = args
+        .max_cost
+        .as_deref()
+        .map(|x| parse_token_amount(x, token_decimals))
+        .transpose()
+        .context("Failed to parse --max-cost")?;
+    let max_hourly_rate = args
+        .max_rate
+        .as_deref()
+        .map(|x| parse_token_amount(x, rate_decimals))
+        .transpose()
+        .context("Failed to parse --max-rate")?;
+    check_price_caps(
+        total_cost,
+        hourly_rate,
+        max_cost,
+        max_hourly_rate,
+        token_decimals,
+        rate_decimals,
+    )
+    .map_err(|err| {
+        anyhow!(
+            "{err}. The price was quoted by the operator's control plane at {cp_url}, nothing was paid"
+        )
+    })?;
 
     let image_url = args
         .image_url
@@ -281,6 +364,22 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
             .unwrap_or("".into()),
     );
 
+    // Nothing has been paid so far, the approval and the job open transaction follow
+    if args.yes {
+        info!("Skipping confirmation because of --yes");
+    } else if is_interactive() {
+        if !ask_yes_no(&format!(
+            "Open the job and pay {} USDC to it?",
+            format_token_amount(total_cost, token_decimals)
+        ))? {
+            return Err(anyhow!("Deployment cancelled, nothing was paid"));
+        }
+    } else {
+        info!(
+            "Not running in a terminal, continuing without confirmation. Use --max-cost and --max-rate to bound the price."
+        );
+    }
+
     // Approve USDC
     let funds = deployment_adapter
         .prepare_funds(total_cost, &provider)
@@ -300,21 +399,52 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
         .await?;
 
     // Create job
-    let job_id = deployment_adapter
+    let job_id = match deployment_adapter
         .send_transaction(true, job_create_transaction, &provider)
-        .await?
-        .ok_or(anyhow!("Failed to get the Job ID"))?;
+        .await
+    {
+        Ok(Some(job_id)) => job_id,
+        Ok(None) => {
+            warn_job_may_be_open(
+                deployment_name,
+                &deployment_adapter.get_sender_address(),
+                &recovery_flags,
+            );
+            return Err(anyhow!("Failed to get the Job ID"));
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            if message.contains(TX_MAYBE_INCLUDED) || message.contains(JOB_ID_NOT_FOUND) {
+                warn_job_may_be_open(
+                    deployment_name,
+                    &deployment_adapter.get_sender_address(),
+                    &recovery_flags,
+                );
+            }
+            return Err(err);
+        }
+    };
     info!("Job created with ID: {:?}", job_id);
 
-    info!("Waiting for 3 minutes for enclave to start...");
-    tokio::time::sleep(StdDuration::from_secs(180)).await;
-
-    let ip_address = wait_for_ip_address(&cp_url, job_id, &args.region).await?;
-    info!("IP address obtained: {}", ip_address);
-
-    if !check_reachability(&ip_address).await {
-        return Err(anyhow!("Reachability check failed after maximum retries"));
-    }
+    // The job is open and funded from here on. Whatever goes wrong below, the user has to
+    // be told that it keeps billing and how to stop it.
+    let ip_address = tokio::select! {
+        result = wait_for_enclave(&cp_url, &job_id, &args.region) => match result {
+            Ok(ip_address) => ip_address,
+            Err(err) => {
+                warn_job_is_billing(&job_id, &recovery_flags);
+                return Err(err.context(format!(
+                    "Job {job_id} was opened and funded but the enclave did not come up"
+                )));
+            }
+        },
+        _ = tokio::signal::ctrl_c() => {
+            warn_job_is_billing(&job_id, &recovery_flags);
+            return Err(anyhow!(
+                "Interrupted while waiting for the enclave of job {job_id} to start"
+            ));
+        }
+    };
 
     info!("Enclave is ready! IP address: {}", ip_address);
 
@@ -330,6 +460,61 @@ pub async fn deploy(args: DeployArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn wait_for_enclave(cp_url: &str, job_id: &str, region: &str) -> Result<String> {
+    info!("Waiting for 3 minutes for enclave to start...");
+    tokio::time::sleep(StdDuration::from_secs(180)).await;
+
+    let ip_address = wait_for_ip_address(cp_url, job_id.to_owned(), region).await?;
+    info!("IP address obtained: {}", ip_address);
+
+    if !check_reachability(&ip_address).await {
+        return Err(anyhow!("Reachability check failed after maximum retries"));
+    }
+
+    Ok(ip_address)
+}
+
+/// Flags shared by the commands suggested after a failed deployment.
+fn recovery_flags(deployment: &str, rpc: Option<&str>, wallet_hint: &str) -> String {
+    let mut flags = format!("--deployment {deployment}");
+    if let Some(rpc) = rpc {
+        flags.push_str(&format!(" --rpc {rpc}"));
+    }
+    flags.push(' ');
+    flags.push_str(wallet_hint);
+    flags
+}
+
+fn stop_command(job_id: &str, flags: &str) -> String {
+    format!("oyster-cvm stop --job-id {job_id} {flags}")
+}
+
+fn withdraw_command(job_id: &str, flags: &str) -> String {
+    format!("oyster-cvm withdraw --job-id {job_id} --max {flags}")
+}
+
+fn warn_job_is_billing(job_id: &str, flags: &str) {
+    warn!(
+        "Job {job_id} is open and funded. It keeps billing until it is stopped or its balance runs out."
+    );
+    warn!(
+        "To stop it and get the unused balance back (billed until the stop completes, about 5 minutes):"
+    );
+    warn!("  {}", stop_command(job_id, flags));
+    warn!("To take most of the balance out of the job right away, before stopping it:");
+    warn!("  {}", withdraw_command(job_id, flags));
+}
+
+fn warn_job_may_be_open(deployment: &str, sender: &str, flags: &str) {
+    warn!(
+        "The job open transaction may have been included. If it was, a funded job exists and is billing."
+    );
+    warn!("Check for it with:");
+    warn!("  oyster-cvm list --deployment {deployment} --address {sender}");
+    warn!("and stop it with:");
+    warn!("  {}", stop_command("<job id>", flags));
 }
 
 async fn start_simulation(args: DeployArgs) -> Result<()> {
@@ -383,10 +568,8 @@ fn find_minimum_rate_instance(
         .iter()
         .filter(|rate| rate.instance == instance)
         .min_by(|a, b| {
-            let a_rate =
-                U256::from_str_radix(a.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
-            let b_rate =
-                U256::from_str_radix(b.min_rate.trim_start_matches("0x"), 16).unwrap_or(U256::MAX);
+            let a_rate = parse_hex_rate(&a.min_rate).unwrap_or(U256::MAX);
+            let b_rate = parse_hex_rate(&b.min_rate).unwrap_or(U256::MAX);
             a_rate.cmp(&b_rate)
         })
         .cloned()
@@ -408,36 +591,88 @@ async fn calculate_total_cost(
     extra_decimals: i64,
 ) -> Result<(U256, U256)> {
     let instance_secondly_rate_usdc =
-        U256::from_str_radix(instance_rate.min_rate.trim_start_matches("0x"), 16)?;
+        parse_hex_rate(&instance_rate.min_rate).context("Failed to parse instance rate")?;
+    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
 
+    compute_total_cost(
+        instance_secondly_rate_usdc,
+        bandwidth_rate_region,
+        bandwidth,
+        duration,
+        extra_decimals,
+    )
+}
+
+/// Total cost in token base units and total rate of a job, as passed to the market.
+fn compute_total_cost(
+    instance_secondly_rate_usdc: U256,
+    bandwidth_rate_region: U256,
+    bandwidth: u32,
+    duration: u64,
+    extra_decimals: i64,
+) -> Result<(U256, U256)> {
     let instance_cost_scaled = U256::from(duration)
         .checked_mul(instance_secondly_rate_usdc)
         .context("Failed to multiply duration and instance rate")?;
 
-    let bandwidth_rate_region = get_bandwidth_rate_for_region(region, cp_url).await?;
-    let bandwidth_cost_scaled = U256::from(
-        calculate_bandwidth_cost(
-            &bandwidth.to_string(),
-            "KBps",
-            bandwidth_rate_region,
-            duration,
-        )
-        .context("Failed to calculate bandwidth cost")?,
-    );
+    let bandwidth_cost_scaled = calculate_bandwidth_cost(
+        &bandwidth.to_string(),
+        "KBps",
+        bandwidth_rate_region,
+        duration,
+    )
+    .context("Failed to calculate bandwidth cost")?;
 
     let bandwidth_rate_scaled = bandwidth_cost_scaled
         .checked_div(U256::from(duration))
         .context("Failed to divide bandwidth cost by duration")?;
-    let total_cost_scaled = (instance_cost_scaled
+    let scale = U256::from(10)
+        .checked_pow(U256::from(
+            u64::try_from(extra_decimals).context("Negative extra decimals")?,
+        ))
+        .context("Extra decimals too large")?;
+    let total_cost_scaled = instance_cost_scaled
         .checked_add(bandwidth_cost_scaled)
         .context("Failed to add instance and bandwidth costs")?
-        .checked_div(U256::from(10).pow(U256::from(extra_decimals))))
-    .context("Failed to divide total cost by 1e12")?;
+        .checked_div(scale)
+        .context("Failed to divide total cost by 1e12")?;
     let total_rate_scaled = instance_secondly_rate_usdc
         .checked_add(bandwidth_rate_scaled)
         .context("Failed to add instance and bandwidth rates")?;
 
     Ok((total_cost_scaled, total_rate_scaled))
+}
+
+/// Refuses a price above what the user is willing to pay.
+/// Amounts are in token base units, rates in tokens per hour with `rate_decimals` decimals.
+fn check_price_caps(
+    total_cost: U256,
+    hourly_rate: U256,
+    max_cost: Option<U256>,
+    max_hourly_rate: Option<U256>,
+    token_decimals: u32,
+    rate_decimals: u32,
+) -> Result<()> {
+    if let Some(max_cost) = max_cost
+        && total_cost > max_cost
+    {
+        return Err(anyhow!(
+            "Total cost {} USDC is above --max-cost {} USDC",
+            format_token_amount(total_cost, token_decimals),
+            format_token_amount(max_cost, token_decimals)
+        ));
+    }
+    if let Some(max_hourly_rate) = max_hourly_rate
+        && hourly_rate > max_hourly_rate
+    {
+        return Err(anyhow!(
+            "Rate {} USDC/hour is above --max-rate {} USDC/hour",
+            format_token_display(hourly_rate, rate_decimals),
+            format_token_display(max_hourly_rate, rate_decimals)
+        ));
+    }
+
+    Ok(())
 }
 
 fn create_metadata(
@@ -494,6 +729,18 @@ async fn wait_for_ip_address(url: &str, job_id: String, region: &str) -> Result<
             tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
             continue;
         };
+
+        // The control plane answers with an error status until it has picked up the job
+        // and the instance has an address, that is expected for the first attempts
+        if !status.is_success() {
+            last_response = format!("status {}: {}", status, text_body.trim());
+            info!(
+                "IP not available yet ({}), waiting {} seconds...",
+                last_response, IP_CHECK_INTERVAL
+            );
+            tokio::time::sleep(StdDuration::from_secs(IP_CHECK_INTERVAL)).await;
+            continue;
+        }
 
         // Parse the JSON
         let json_result = serde_json::from_str::<serde_json::Value>(&text_body);
@@ -591,4 +838,101 @@ async fn check_reachability(ip: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 0.05 USDC/hour
+    const RATE: u64 = 13_888_888_888_889;
+
+    #[test]
+    fn total_cost_and_rate() {
+        // no bandwidth, 60 minutes, 6 decimal token
+        let (cost, rate) = compute_total_cost(U256::from(RATE), U256::ZERO, 10, 3600, 12).unwrap();
+        assert_eq!(cost, U256::from(50_000));
+        assert_eq!(rate, U256::from(RATE));
+
+        // bandwidth rate is per GBps, the default is 10 KBps
+        let bandwidth_rate = U256::from(1024u64 * 1024 * 1000);
+        let (cost, rate) =
+            compute_total_cost(U256::from(RATE), bandwidth_rate, 10, 3600, 12).unwrap();
+        assert_eq!(rate, U256::from(RATE + 10_000));
+        assert_eq!(cost, U256::from((RATE + 10_000) * 3600 / 10u64.pow(12)));
+    }
+
+    #[test]
+    fn hostile_control_plane_values_are_errors_not_panics() {
+        // rate that overflows once multiplied by the duration
+        assert!(compute_total_cost(U256::MAX, U256::ZERO, 10, 3600, 12).is_err());
+        assert!(compute_total_cost(U256::from(1), U256::MAX, 10, 3600, 12).is_err());
+        // zero duration used to surface as a division error deep in the cost code
+        assert!(compute_total_cost(U256::from(RATE), U256::ZERO, 10, 0, 12).is_err());
+        // a rate beyond u128 is priced without panicking, the caps then refuse it
+        let huge = U256::from(u128::MAX) * U256::from(4);
+        let (cost, rate) = compute_total_cost(huge, U256::ZERO, 10, 60, 12).unwrap();
+        let hourly = rate.saturating_mul(U256::from(3600));
+        assert!(check_price_caps(cost, hourly, Some(U256::from(10_000_000)), None, 6, 18).is_err());
+        assert!(!format_token_amount(hourly, 18).is_empty());
+    }
+
+    #[test]
+    fn price_caps() {
+        let cost = U256::from(50_000); // 0.05 USDC
+        let hourly = U256::from(RATE) * U256::from(3600);
+        let cap = |x: &str, decimals| Some(parse_token_amount(x, decimals).unwrap());
+
+        assert!(check_price_caps(cost, hourly, None, None, 6, 18).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), cap("0.06", 18), 6, 18).is_ok());
+        // a cap equal to the price passes
+        assert!(check_price_caps(cost, hourly, cap("0.05", 6), None, 6, 18).is_ok());
+        assert_eq!(
+            check_price_caps(cost, hourly, cap("0.049999", 6), None, 6, 18)
+                .unwrap_err()
+                .to_string(),
+            "Total cost 0.05 USDC is above --max-cost 0.049999 USDC"
+        );
+        assert!(check_price_caps(cost, hourly, None, cap("0.05", 18), 6, 18).is_err());
+        assert!(check_price_caps(cost, hourly, cap("1", 6), cap("0.01", 18), 6, 18).is_err());
+    }
+
+    #[test]
+    fn caps_are_in_real_tokens_on_an_18_decimal_token() {
+        // BSC: same rate card, EXTRA_DECIMALS 12, 18 decimal token
+        let (cost, rate) = compute_total_cost(U256::from(RATE), U256::ZERO, 10, 3600, 12).unwrap();
+        let hourly = rate * U256::from(3600);
+        // the contract moves 50000 base units, 5e-14 tokens
+        assert_eq!(format_token_amount(cost, 18), "0.00000000000005");
+        assert_eq!(format_token_display(hourly, 18 + 12), "0.00000000000005");
+        let cap = |x: &str, decimals| Some(parse_token_amount(x, decimals).unwrap());
+        assert!(check_price_caps(cost, hourly, cap("0.01", 18), cap("0.01", 30), 18, 30).is_ok());
+        assert!(check_price_caps(cost, hourly, cap("0.00000000000004", 18), None, 18, 30).is_err());
+    }
+
+    #[test]
+    fn recovery_commands_carry_the_deployment_and_wallet() {
+        let flags = recovery_flags("arb", None, "--wallet-file ./key.txt");
+        assert_eq!(
+            stop_command("0x32ad", &flags),
+            "oyster-cvm stop --job-id 0x32ad --deployment arb --wallet-file ./key.txt"
+        );
+        assert_eq!(
+            withdraw_command("0x32ad", &flags),
+            "oyster-cvm withdraw --job-id 0x32ad --max --deployment arb --wallet-file ./key.txt"
+        );
+    }
+
+    #[test]
+    fn recovery_commands_carry_a_custom_rpc_but_never_the_key() {
+        let flags = recovery_flags(
+            "bsc",
+            Some("https://rpc.example"),
+            "--wallet-private-key <key>",
+        );
+        assert_eq!(
+            stop_command("0x22", &flags),
+            "oyster-cvm stop --job-id 0x22 --deployment bsc --rpc https://rpc.example --wallet-private-key <key>"
+        );
+    }
 }

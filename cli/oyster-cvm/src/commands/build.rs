@@ -1,5 +1,5 @@
-use crate::types::Platform;
-use anyhow::{Context, Result};
+use crate::types::{Dependency, Platform};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -76,7 +76,16 @@ pub fn build_oyster_image(args: BuildArgs) -> Result<()> {
         ])
         .stdout(Stdio::piped())
         .spawn()
-        .context("Failed to execute Nix build command")?;
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "Nix was not found. Building an image needs Nix, install it from {} and check with `oyster-cvm doctor --check-nix`",
+                    Dependency::Nix.install_url()
+                )
+            } else {
+                anyhow!(err).context("Failed to execute Nix build command")
+            }
+        })?;
 
     let stdout = cmd.stdout.take().unwrap();
     let stdout_reader = BufReader::new(stdout);
@@ -87,7 +96,31 @@ pub fn build_oyster_image(args: BuildArgs) -> Result<()> {
         info!(target: "nix", "{}", line);
     }
 
+    // the output is streamed above, the exit status says whether the build worked
+    let status = cmd.wait().context("Failed to wait for the Nix build")?;
+    check_build_status(status.success(), &status.to_string())?;
+
     info!("Build finished");
 
     Ok(())
+}
+
+fn check_build_status(success: bool, status: &str) -> Result<()> {
+    if !success {
+        bail!("Nix build failed ({status}), no image was built. See the Nix output above");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_nix_build_is_an_error() {
+        assert!(check_build_status(true, "exit status: 0").is_ok());
+        let err = check_build_status(false, "exit status: 1").unwrap_err();
+        assert!(err.to_string().contains("exit status: 1"));
+    }
 }
