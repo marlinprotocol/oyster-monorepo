@@ -9,27 +9,9 @@ import { testAdminRole } from "./helpers/rbac";
 import { time } from '@nomicfoundation/hardhat-network-helpers';
 
 
-const image1: AttestationAutherUpgradeable.EnclaveImageStruct = {
-	PCR0: ethers.hexlify(ethers.randomBytes(48)),
-	PCR1: ethers.hexlify(ethers.randomBytes(48)),
-	PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image2: AttestationAutherUpgradeable.EnclaveImageStruct = {
-	PCR0: ethers.hexlify(ethers.randomBytes(48)),
-	PCR1: ethers.hexlify(ethers.randomBytes(48)),
-	PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-const image3: AttestationAutherUpgradeable.EnclaveImageStruct = {
-	PCR0: ethers.hexlify(ethers.randomBytes(48)),
-	PCR1: ethers.hexlify(ethers.randomBytes(48)),
-	PCR2: ethers.hexlify(ethers.randomBytes(48)),
-};
-
-function getImageId(image: AttestationAutherUpgradeable.EnclaveImageStruct): string {
-	return keccak256(solidityPacked(["bytes", "bytes", "bytes"], [image.PCR0, image.PCR1, image.PCR2]));
-}
+const image1: string = ethers.hexlify(ethers.randomBytes(32));
+const image2: string = ethers.hexlify(ethers.randomBytes(32));
+const image3: string = ethers.hexlify(ethers.randomBytes(32));
 
 const FIRST_FAMILY = ethers.id("FIRST_FAMILY");
 const SECOND_FAMILY = ethers.id("SECOND_FAMILY");
@@ -83,8 +65,7 @@ describe("AttestationAutherSampleUpgradeable - Init", function() {
 
 		expect(await attestationAutherSample.hasRole(await attestationAutherSample.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+			expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.true;
 		}
 	});
 
@@ -101,16 +82,13 @@ describe("AttestationAutherSampleUpgradeable - Init", function() {
 
 		expect(await attestationAutherSample.hasRole(await attestationAutherSample.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+			expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image2));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image2);
+			expect(await attestationAutherSample.isImageWhitelisted(image2)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+			expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.true;
 		}
 	});
 
@@ -150,16 +128,13 @@ describe("AttestationAutherSampleUpgradeable - Init", function() {
 
 		expect(await attestationAutherSample.hasRole(await attestationAutherSample.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+			expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image2));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image2);
+			expect(await attestationAutherSample.isImageWhitelisted(image2)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+			expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.true;
 		}
 	});
 
@@ -192,26 +167,23 @@ describe("AttestationAutherSampleUpgradeable - Init", function() {
 
 		expect(await attestationAutherSample.hasRole(await attestationAutherSample.DEFAULT_ADMIN_ROLE(), addrs[0])).to.be.true;
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+			expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image2));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image2);
+			expect(await attestationAutherSample.isImageWhitelisted(image2)).to.be.true;
 		}
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+			expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.true;
 		}
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), FIRST_FAMILY)).to.be.true;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image2), FIRST_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image3), FIRST_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), SECOND_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image2), SECOND_FAMILY)).to.be.true;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image3), SECOND_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), THIRD_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image2), THIRD_FAMILY)).to.be.false;
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image3), THIRD_FAMILY)).to.be.true;
+		expect(await attestationAutherSample.isImageInFamily(image1, FIRST_FAMILY)).to.be.true;
+		expect(await attestationAutherSample.isImageInFamily(image2, FIRST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image3, FIRST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, SECOND_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image2, SECOND_FAMILY)).to.be.true;
+		expect(await attestationAutherSample.isImageInFamily(image3, SECOND_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, THIRD_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image2, THIRD_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image3, THIRD_FAMILY)).to.be.true;
 	});
 
 	it("cannot initialize with families with no whitelisted images", async function() {
@@ -300,45 +272,32 @@ describe("AttestationAutherSampleUpgradeable - Whitelist image", function() {
 	takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
 	it("non admin cannot whitelist image", async function() {
-		await expect(attestationAutherSample.connect(signers[1]).whitelistEnclaveImage(image3.PCR0, image3.PCR1, image3.PCR2)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
+		await expect(attestationAutherSample.connect(signers[1]).whitelistEnclaveImage(image3)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
 	});
 
 	it("admin can whitelist image", async function() {
-		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect([PCR0, PCR1, PCR2]).to.deep.equal(["0x", "0x", "0x"]);
-		}
+		expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.false;
 
-		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3.PCR0, image3.PCR1, image3.PCR2)).to.deep.equal([getImageId(image3), true]);
-		await expect(attestationAutherSample.whitelistEnclaveImage(image3.PCR0, image3.PCR1, image3.PCR2))
-			.to.emit(attestationAutherSample, "EnclaveImageWhitelisted").withArgs(getImageId(image3), image3.PCR0, image3.PCR1, image3.PCR2);
+		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3)).to.equal(true);
+		await expect(attestationAutherSample.whitelistEnclaveImage(image3))
+			.to.emit(attestationAutherSample, "EnclaveImageWhitelisted").withArgs(image3);
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+			expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.true;
 		}
 	});
 
-	it("admin cannot whitelist image with empty PCRs", async function() {
-		await expect(attestationAutherSample.whitelistEnclaveImage("0x", "0x", "0x")).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherPCRsInvalid");
-	});
 
-	it("admin cannot whitelist image with invalid PCRs", async function() {
-		await expect(attestationAutherSample.whitelistEnclaveImage("0x1111111111", image3.PCR1, image3.PCR2)).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherPCRsInvalid");
-		await expect(attestationAutherSample.whitelistEnclaveImage(image3.PCR0, "0x1111111111", image3.PCR2)).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherPCRsInvalid");
-		await expect(attestationAutherSample.whitelistEnclaveImage(image3.PCR0, image3.PCR1, "0x1111111111")).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherPCRsInvalid");
-	});
 
 	it("admin can rewhitelist image", async function() {
-		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3.PCR0, image3.PCR1, image3.PCR2)).to.deep.equal([getImageId(image3), true]);
-		await expect(attestationAutherSample.whitelistEnclaveImage(image3.PCR0, image3.PCR1, image3.PCR2))
-			.to.emit(attestationAutherSample, "EnclaveImageWhitelisted").withArgs(getImageId(image3), image3.PCR0, image3.PCR1, image3.PCR2);
+		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3)).to.equal(true);
+		await expect(attestationAutherSample.whitelistEnclaveImage(image3))
+			.to.emit(attestationAutherSample, "EnclaveImageWhitelisted").withArgs(image3);
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image3));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image3);
+			expect(await attestationAutherSample.isImageWhitelisted(image3)).to.be.true;
 		}
 
-		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3.PCR0, image3.PCR1, image3.PCR2)).to.deep.equal([getImageId(image3), false]);
-		await expect(attestationAutherSample.whitelistEnclaveImage(image3.PCR0, image3.PCR1, image3.PCR2))
+		expect(await attestationAutherSample.whitelistEnclaveImage.staticCall(image3)).to.equal(false);
+		await expect(attestationAutherSample.whitelistEnclaveImage(image3))
 			.to.not.emit(attestationAutherSample, "EnclaveImageWhitelisted");
 	});
 });
@@ -363,27 +322,23 @@ describe("AttestationAutherSampleUpgradeable - Revoke image", function() {
 	takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
 	it("non admin cannot revoke image", async function() {
-		await expect(attestationAutherSample.connect(signers[1]).revokeEnclaveImage(getImageId(image1))).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
+		await expect(attestationAutherSample.connect(signers[1]).revokeEnclaveImage(image1)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
 	});
 
 	it("admin can revoke image", async function() {
 		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect({ PCR0, PCR1, PCR2 }).to.deep.equal(image1);
+			expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.true;
 		}
 
-		expect(await attestationAutherSample.revokeEnclaveImage.staticCall(getImageId(image1))).to.be.true;
-		await expect(attestationAutherSample.revokeEnclaveImage(getImageId(image1)))
-			.to.emit(attestationAutherSample, "EnclaveImageRevoked").withArgs(getImageId(image1));
-		{
-			const { PCR0, PCR1, PCR2 } = await attestationAutherSample.getWhitelistedImage(getImageId(image1));
-			expect([PCR0, PCR1, PCR2]).to.deep.equal(["0x", "0x", "0x"]);
-		}
+		expect(await attestationAutherSample.revokeEnclaveImage.staticCall(image1)).to.be.true;
+		await expect(attestationAutherSample.revokeEnclaveImage(image1))
+			.to.emit(attestationAutherSample, "EnclaveImageRevoked").withArgs(image1);
+		expect(await attestationAutherSample.isImageWhitelisted(image1)).to.be.false;
 	});
 
 	it("admin can revoke unwhitelisted image", async function() {
-		expect(await attestationAutherSample.revokeEnclaveImage.staticCall(getImageId(image3))).to.be.false;
-		await expect(attestationAutherSample.revokeEnclaveImage(getImageId(image3)))
+		expect(await attestationAutherSample.revokeEnclaveImage.staticCall(image3)).to.be.false;
+		await expect(attestationAutherSample.revokeEnclaveImage(image3))
 			.to.not.emit(attestationAutherSample, "EnclaveImageRevoked");
 	});
 });
@@ -409,30 +364,30 @@ describe("AttestationAutherSampleUpgradeable - Add image to family", function() 
 	takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
 	it("non admin cannot add image to family", async function() {
-		await expect(attestationAutherSample.connect(signers[1]).addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
+		await expect(attestationAutherSample.connect(signers[1]).addEnclaveImageToFamily(image1, TEST_FAMILY)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
 	});
 
 	it("admin can add image to family", async function() {
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.false;
 
-		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.true;
-		await expect(attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY))
-			.to.emit(attestationAutherSample, "EnclaveImageAddedToFamily").withArgs(getImageId(image1), TEST_FAMILY);
+		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(image1, TEST_FAMILY)).to.be.true;
+		await expect(attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY))
+			.to.emit(attestationAutherSample, "EnclaveImageAddedToFamily").withArgs(image1, TEST_FAMILY);
 
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.true;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.true;
 	});
 
 	it("admin can readd image to family", async function() {
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.false;
 
-		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.true;
-		await expect(attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY))
-			.to.emit(attestationAutherSample, "EnclaveImageAddedToFamily").withArgs(getImageId(image1), TEST_FAMILY);
+		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(image1, TEST_FAMILY)).to.be.true;
+		await expect(attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY))
+			.to.emit(attestationAutherSample, "EnclaveImageAddedToFamily").withArgs(image1, TEST_FAMILY);
 
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.true;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.true;
 
-		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.false;
-		await expect(attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY))
+		expect(await attestationAutherSample.addEnclaveImageToFamily.staticCall(image1, TEST_FAMILY)).to.be.false;
+		await expect(attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY))
 			.to.not.emit(attestationAutherSample, "EnclaveImageAddedToFamily");
 	});
 });
@@ -458,35 +413,35 @@ describe("AttestationAutherSampleUpgradeable - Remove image from family", functi
 	takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
 	it("non admin cannot add image to family", async function() {
-		await attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY);
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.true;
+		await attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY);
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.true;
 
-		await expect(attestationAutherSample.connect(signers[1]).removeEnclaveImageFromFamily(getImageId(image1), TEST_FAMILY)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
+		await expect(attestationAutherSample.connect(signers[1]).removeEnclaveImageFromFamily(image1, TEST_FAMILY)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
 	});
 
 	it("admin can add image to family", async function() {
-		await attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY);
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.true;
+		await attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY);
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.true;
 
-		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.true;
-		await expect(attestationAutherSample.removeEnclaveImageFromFamily(getImageId(image1), TEST_FAMILY))
-			.to.emit(attestationAutherSample, "EnclaveImageRemovedFromFamily").withArgs(getImageId(image1), TEST_FAMILY);
+		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(image1, TEST_FAMILY)).to.be.true;
+		await expect(attestationAutherSample.removeEnclaveImageFromFamily(image1, TEST_FAMILY))
+			.to.emit(attestationAutherSample, "EnclaveImageRemovedFromFamily").withArgs(image1, TEST_FAMILY);
 
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.false;
 	});
 
 	it("admin can readd image to family", async function() {
-		await attestationAutherSample.addEnclaveImageToFamily(getImageId(image1), TEST_FAMILY);
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.true;
+		await attestationAutherSample.addEnclaveImageToFamily(image1, TEST_FAMILY);
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.true;
 
-		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.true;
-		await expect(attestationAutherSample.removeEnclaveImageFromFamily(getImageId(image1), TEST_FAMILY))
-			.to.emit(attestationAutherSample, "EnclaveImageRemovedFromFamily").withArgs(getImageId(image1), TEST_FAMILY);
+		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(image1, TEST_FAMILY)).to.be.true;
+		await expect(attestationAutherSample.removeEnclaveImageFromFamily(image1, TEST_FAMILY))
+			.to.emit(attestationAutherSample, "EnclaveImageRemovedFromFamily").withArgs(image1, TEST_FAMILY);
 
-		expect(await attestationAutherSample.isImageInFamily(getImageId(image1), TEST_FAMILY)).to.be.false;
+		expect(await attestationAutherSample.isImageInFamily(image1, TEST_FAMILY)).to.be.false;
 
-		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(getImageId(image1), TEST_FAMILY)).to.be.false;
-		await expect(attestationAutherSample.removeEnclaveImageFromFamily(getImageId(image1), TEST_FAMILY))
+		expect(await attestationAutherSample.removeEnclaveImageFromFamily.staticCall(image1, TEST_FAMILY)).to.be.false;
+		await expect(attestationAutherSample.removeEnclaveImageFromFamily(image1, TEST_FAMILY))
 			.to.not.emit(attestationAutherSample, "EnclaveImageRemovedFromFamily");
 	});
 });
@@ -516,31 +471,31 @@ describe("AttestationAutherSampleUpgradeable - Whitelist enclave", function() {
 	takeSnapshotBeforeAndAfterEveryTest(async () => { });
 
 	it("non admin cannot whitelist enclave", async function() {
-		await expect(attestationAutherSample.connect(signers[1]).whitelistEnclaveKey(pubkeys[15], getImageId(image1))).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
+		await expect(attestationAutherSample.connect(signers[1]).whitelistEnclaveKey(pubkeys[15], image1)).to.be.revertedWithCustomError(attestationAutherSample, "AccessControlUnauthorizedAccount");
 	});
 
 	it("admin can whitelist enclave", async function() {
 		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(ethers.ZeroHash);
 
-		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], getImageId(image1)))
-			.to.emit(attestationAutherSample, "EnclaveKeyWhitelisted").withArgs(addrs[15], getImageId(image1), pubkeys[15]);
-		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(getImageId(image1));
+		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], image1))
+			.to.emit(attestationAutherSample, "EnclaveKeyWhitelisted").withArgs(addrs[15], image1, pubkeys[15]);
+		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(image1);
 	});
 
 	it("admin cannot whitelist enclave with unwhitelisted image", async function() {
-		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], getImageId(image3))).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
+		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], image3)).to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
 	});
 
 	it("admin can rewhitelist enclave", async function() {
 		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(ethers.ZeroHash);
 
-		expect(await attestationAutherSample.whitelistEnclaveKey.staticCall(pubkeys[15], getImageId(image1))).to.be.true;
-		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], getImageId(image1)))
-			.to.emit(attestationAutherSample, "EnclaveKeyWhitelisted").withArgs(addrs[15], getImageId(image1), pubkeys[15]);
-		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(getImageId(image1));
+		expect(await attestationAutherSample.whitelistEnclaveKey.staticCall(pubkeys[15], image1)).to.be.true;
+		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], image1))
+			.to.emit(attestationAutherSample, "EnclaveKeyWhitelisted").withArgs(addrs[15], image1, pubkeys[15]);
+		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(image1);
 
-		expect(await attestationAutherSample.whitelistEnclaveKey.staticCall(pubkeys[15], getImageId(image1))).to.be.false;
-		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], getImageId(image1)))
+		expect(await attestationAutherSample.whitelistEnclaveKey.staticCall(pubkeys[15], image1)).to.be.false;
+		await expect(attestationAutherSample.whitelistEnclaveKey(pubkeys[15], image1))
 			.to.not.emit(attestationAutherSample, "EnclaveKeyWhitelisted");
 	});
 });
@@ -574,8 +529,8 @@ describe("AttestationAutherSampleUpgradeable - Revoke enclave", function() {
 	});
 
 	it("admin can revoke enclave", async function() {
-		await attestationAutherSample.whitelistEnclaveKey(pubkeys[14], getImageId(image2));
-		expect(await attestationAutherSample.getVerifiedKey(addrs[14])).to.equal(getImageId(image2));
+		await attestationAutherSample.whitelistEnclaveKey(pubkeys[14], image2);
+		expect(await attestationAutherSample.getVerifiedKey(addrs[14])).to.equal(image2);
 
 		expect(await attestationAutherSample.revokeEnclaveKey.staticCall(addrs[14])).to.be.true;
 		await expect(attestationAutherSample.revokeEnclaveKey(addrs[14]))
@@ -628,8 +583,8 @@ describe("AttestationAutherSampleUpgradeable - Verify enclave key", function() {
 
 		expect(await attestationAutherSample.connect(signers[1]).verifyEnclaveKey.staticCall(signature, attestation)).to.be.true;
 		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, attestation))
-			.to.emit(attestationAutherSample, "EnclaveKeyVerified").withArgs(addrs[15], getImageId(image3), pubkeys[15]);
-		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(getImageId(image3));
+			.to.emit(attestationAutherSample, "EnclaveKeyVerified").withArgs(addrs[15], image3, pubkeys[15]);
+		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(image3);
 	});
 
 	it("cannot verify enclave key with too old attestation", async function() {
@@ -644,17 +599,15 @@ describe("AttestationAutherSampleUpgradeable - Verify enclave key", function() {
 		const timestamp = await time.latest() * 1000;
 		let [signature, attestation] = await createAttestation(pubkeys[15], image3, wallets[14], timestamp - 540000);
 
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, enclavePubKey: pubkeys[16] }))
+		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, publicKey: pubkeys[16] }))
 			.to.be.revertedWithCustomError(attestationVerifier, "AttestationVerifierKeyNotVerified");
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, PCR0: attestation.PCR1 }))
+		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, imageId: image1 }))
 			.to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, PCR1: attestation.PCR0 }))
-			.to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, PCR2: attestation.PCR0 }))
-			.to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, PCR0: image2.PCR0, PCR1: image2.PCR1, PCR2: image2.PCR2 }))
+		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, userData: "0x1234" }))
 			.to.be.revertedWithCustomError(attestationVerifier, "AttestationVerifierKeyNotVerified");
-		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, timestampInMilliseconds: timestamp - 200000 }))
+		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, imageId: image2 }))
+			.to.be.revertedWithCustomError(attestationVerifier, "AttestationVerifierKeyNotVerified");
+		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, { ...attestation, timestampMs: timestamp - 200000 }))
 			.to.be.revertedWithCustomError(attestationVerifier, "AttestationVerifierKeyNotVerified");
 	});
 
@@ -680,8 +633,8 @@ describe("AttestationAutherSampleUpgradeable - Verify enclave key", function() {
 
 		expect(await attestationAutherSample.connect(signers[1]).verifyEnclaveKey.staticCall(signature, attestation)).to.be.true;
 		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, attestation))
-			.to.emit(attestationAutherSample, "EnclaveKeyVerified").withArgs(addrs[15], getImageId(image3), pubkeys[15]);
-		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(getImageId(image3));
+			.to.emit(attestationAutherSample, "EnclaveKeyVerified").withArgs(addrs[15], image3, pubkeys[15]);
+		expect(await attestationAutherSample.getVerifiedKey(addrs[15])).to.equal(image3);
 
 		expect(await attestationAutherSample.connect(signers[1]).verifyEnclaveKey.staticCall(signature, attestation)).to.be.false;
 		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, attestation))
@@ -710,7 +663,7 @@ describe("AttestationAutherSampleUpgradeable - Verify enclave key", function() {
 		const timestamp = await time.latest() * 1000;
 		let [signature, attestation] = await createAttestation(pubkeys[15], image3, wallets[14], timestamp - 540000);
 
-		await attestationAutherSample.revokeEnclaveImage(getImageId(image3));
+		await attestationAutherSample.revokeEnclaveImage(image3);
 
 		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, attestation))
 			.to.be.revertedWithCustomError(attestationAutherSample, "AttestationAutherImageNotWhitelisted");
@@ -720,7 +673,7 @@ describe("AttestationAutherSampleUpgradeable - Verify enclave key", function() {
 		const timestamp = await time.latest() * 1000;
 		let [signature, attestation] = await createAttestation(pubkeys[15], image3, wallets[14], timestamp - 540000);
 
-		await attestationVerifier.revokeEnclaveImage(getImageId(image1));
+		await attestationVerifier.revokeEnclaveImage(image1);
 
 		await expect(attestationAutherSample.connect(signers[1]).verifyEnclaveKey(signature, attestation))
 			.to.be.revertedWithCustomError(attestationVerifier, "AttestationVerifierImageNotWhitelisted");
@@ -799,7 +752,7 @@ describe("AttestationAutherSampleUpgradeable - Safe verify with params", functio
 	it("cannot verify with revoked image", async function() {
 		let signature = await createSignature("testmsg", wallets[15]);
 
-		await attestationAutherSample.revokeEnclaveImage(getImageId(image3));
+		await attestationAutherSample.revokeEnclaveImage(image3);
 
 		await expect(attestationAutherSample.connect(signers[1]).verify(
 			signature, "testmsg",
@@ -879,7 +832,7 @@ describe("AttestationAutherSampleUpgradeable - Verify with family", function() {
 	it("cannot verify with revoked image", async function() {
 		let signature = await createSignature("testmsg", wallets[15]);
 
-		await attestationAutherSample.revokeEnclaveImage(getImageId(image3));
+		await attestationAutherSample.revokeEnclaveImage(image3);
 
 		await expect(attestationAutherSample.connect(signers[1]).verify(
 			signature, "testmsg",
@@ -921,7 +874,7 @@ describe("AttestationAutherSampleUpgradeable - Verify with family", function() {
 	it("cannot verify family with revoked image", async function() {
 		let signature = await createSignature("testmsg", wallets[15]);
 
-		await attestationAutherSample.revokeEnclaveImage(getImageId(image3));
+		await attestationAutherSample.revokeEnclaveImage(image3);
 
 		await expect(attestationAutherSample.connect(signers[1]).verifyFamily(
 			signature, "testmsg", THIRD_FAMILY,
@@ -942,48 +895,41 @@ function normalize(key: string): string {
 }
 
 type Attestation = {
-	enclavePubKey: string,
-	PCR0: BytesLike,
-	PCR1: BytesLike,
-	PCR2: BytesLike,
-	timestampInMilliseconds: number,
+    imageId: BytesLike,
+    timestampMs: number,
+    publicKey: string,
+    userData: BytesLike,
 }
 
 async function createAttestation(
-	enclaveKey: string,
-	image: AttestationVerifier.EnclaveImageStruct,
-	sourceEnclaveKey: Wallet,
-	timestamp: number,
+    enclaveKey: string,
+    image: string,
+    sourceEnclaveKey: Wallet,
+    timestamp: number,
+    userData: BytesLike = "0x",
 ): Promise<[string, Attestation]> {
-	const domain = {
-		name: 'marlin.oyster.AttestationVerifier',
-		version: '1',
-	};
+    const domain = {
+        name: 'marlin.oyster.AttestationVerifier',
+        version: '1',
+    };
 
-	const types = {
-		Attestation: [
-			{ name: 'enclavePubKey', type: 'bytes' },
-			{ name: 'PCR0', type: 'bytes' },
-			{ name: 'PCR1', type: 'bytes' },
-			{ name: 'PCR2', type: 'bytes' },
-			{ name: 'timestampInMilliseconds', type: 'uint256' },
-		]
-	}
+    const types = {
+        Attestation: [
+            { name: 'imageId', type: 'bytes32' },
+            { name: 'timestampMs', type: 'uint64' },
+            { name: 'publicKey', type: 'bytes' },
+            { name: 'userData', type: 'bytes' },
+        ]
+    }
 
-	const sign = await sourceEnclaveKey.signTypedData(domain, types, {
-		enclavePubKey: enclaveKey,
-		PCR0: image.PCR0,
-		PCR1: image.PCR1,
-		PCR2: image.PCR2,
-		timestampInMilliseconds: timestamp,
-	});
-	return [ethers.Signature.from(sign).serialized, {
-		enclavePubKey: enclaveKey,
-		PCR0: image.PCR0,
-		PCR1: image.PCR1,
-		PCR2: image.PCR2,
-		timestampInMilliseconds: timestamp,
-	}];
+    const attestation: Attestation = {
+        imageId: image,
+        timestampMs: timestamp,
+        publicKey: enclaveKey,
+        userData: userData,
+    };
+    const sign = await sourceEnclaveKey.signTypedData(domain, types, attestation);
+    return [ethers.Signature.from(sign).serialized, attestation];
 }
 
 async function createSignature(
