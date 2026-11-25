@@ -1,4 +1,4 @@
-use alloy::primitives::U256;
+use alloy::primitives::{address, Address, U256};
 use once_cell::sync::Lazy;
 
 pub const REQUEST_RELAY_TIMEOUT: u64 = 40;
@@ -59,3 +59,25 @@ pub const LOGS_CHUNK_RETRY_BACKOFF_MS: u64 = 1;
 pub const LOGS_CHUNK_RETRY_MAX_BACKOFF_MS: u64 = 8000;
 // wait before continuing a gateways logs scan after a chunk failed all its attempts, in seconds
 pub const LOGS_SCAN_RETRY_WAIT: u64 = 10;
+
+// timeout of reading the registration of the enclave from the contracts at start-up, in seconds
+pub const REGISTRATION_CHECK_TIMEOUT: u64 = 60;
+// wait before retrying to read the registration, in milliseconds, doubled on every retry
+pub const REGISTRATION_CHECK_RETRY_BACKOFF_MS: u64 = 1000;
+pub const REGISTRATION_CHECK_RETRY_MAX_BACKOFF_MS: u64 = 60000;
+
+// wait before reconnecting a websocket event stream, in milliseconds, doubled on every failure
+pub const WS_RECONNECT_BACKOFF_MS: u64 = 500;
+pub const WS_RECONNECT_MAX_BACKOFF_MS: u64 = 30000;
+
+// interval of reading the logs of an event stream with eth_getLogs, in seconds, for the logs the
+// websocket subscription missed
+pub const LOGS_BACKFILL_INTERVAL: u64 = 10;
+// blocks before the read range within which logs delivered by a subscription are still
+// deduplicated against the logs read with eth_getLogs
+pub const LOGS_DEDUPE_BLOCK_WINDOW: u64 = 1000;
+
+// default address of the Multicall3 contract
+pub const MULTICALL3_ADDRESS: Address = address!("cA11bde05977b3631167028862bE2a173976CA11");
+// default number of subscriptions read from the RelaySubscriptions contract in one call
+pub const SUBSCRIPTIONS_BATCH_SIZE: u64 = 500;

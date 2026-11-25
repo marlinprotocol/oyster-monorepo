@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::constant::{MULTICALL3_ADDRESS, SUBSCRIPTIONS_BATCH_SIZE};
+
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub enclave_signer_key: SigningKey,
@@ -22,10 +24,16 @@ pub struct AppState {
     pub time_interval: u64,
     pub offset_for_epoch: u64,
     pub gateways_start_block: u64,
+    pub multicall3_addr: Address,
+    pub subscriptions_batch_size: u64,
     pub enclave_owner: Arc<Mutex<Address>>,
     pub immutable_params_injected: Arc<Mutex<bool>>,
     pub mutable_params_injected: Arc<AtomicBool>,
     pub registration_events_listener_active: Arc<Mutex<bool>>,
+    // the check of the on chain registration at start-up has been started
+    pub registration_check_started: Arc<AtomicBool>,
+    // serializes the check of the on chain registration with the export of a registration message
+    pub registration_check_lock: Arc<tokio::sync::Mutex<()>>,
     pub contracts_client: Arc<Mutex<Option<Arc<ContractsClient>>>>,
     pub ws_api_key: Arc<RwLock<String>>,
 }
@@ -92,6 +100,21 @@ pub struct Config {
     // block to start reading the gateways contract events from, usually its deployment block
     #[serde(default)]
     pub gateways_start_block: u64,
+    // Multicall3 contract on the request chains, used to read the subscriptions in batches.
+    // If no contract is deployed at the address, the subscriptions are read one by one.
+    #[serde(default = "default_multicall3_addr")]
+    pub multicall3_addr: Address,
+    // subscriptions read in one call at start-up
+    #[serde(default = "default_subscriptions_batch_size")]
+    pub subscriptions_batch_size: u64,
+}
+
+fn default_multicall3_addr() -> Address {
+    MULTICALL3_ADDRESS
+}
+
+fn default_subscriptions_batch_size() -> u64 {
+    SUBSCRIPTIONS_BATCH_SIZE
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +145,8 @@ pub struct ContractsClient {
     pub time_interval: u64,
     pub offset_for_epoch: u64,
     pub gateways_start_block: u64,
+    pub multicall3_address: Address,
+    pub subscriptions_batch_size: u64,
     pub gateway_epoch_state_waitlist: Arc<RwLock<HashMap<u64, Vec<Job>>>>,
     pub common_chain_start_block_number: Arc<Mutex<u64>>,
     pub subscription_job_instance_heap: Arc<RwLock<BinaryHeap<SubscriptionJobInstanceHeap>>>,

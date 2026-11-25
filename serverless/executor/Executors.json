@@ -68,5 +68,49 @@
     ],
     "name": "ExecutorDeregistered",
     "type": "event"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "executors",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobCapacity",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "activeJobs",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "stakeAmount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "draining",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint8",
+        "name": "env",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   }
 ]
