@@ -28,7 +28,7 @@ pub struct BuildArgs {
     #[arg(
             short = 'r',
             long,
-            default_value = "oyster-cvm-v1.1.0" // To be updated when new version is tagged
+            default_value = "oyster-cvm-v5.1.0" // the release tag of this version
         )]
     commit_ref: String,
 }
