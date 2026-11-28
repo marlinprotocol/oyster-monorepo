@@ -17,4 +17,9 @@ pub struct Args {
 
     #[clap(short, long, default_value = "516")]
     pub port: u16,
+
+    /// Size in MB after which the enclave log file is rotated,
+    /// one older file is kept next to it with a .1 suffix
+    #[clap(long, default_value = "256")]
+    pub max_log_file_size_mb: u64,
 }

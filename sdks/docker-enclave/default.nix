@@ -37,12 +37,14 @@
   init = kernels.init;
   setup = ./. + "/setup.sh";
   supervisorConf = ./. + "/supervisord.conf";
+  dockerDaemonConf = ./. + "/daemon.json";
   app = pkgs.runCommand "app" {} ''
     echo Preparing the app folder
     pwd
     mkdir -p $out
     mkdir -p $out/app
     mkdir -p $out/etc
+    mkdir -p $out/etc/docker
     mkdir -p $out/app/docker-images
     cp ${supervisord'} $out/app/supervisord
     cp ${keygenX25519} $out/app/keygen-x25519
@@ -66,6 +68,7 @@
     cp ${setup} $out/app/setup.sh
     chmod +x $out/app/*
     cp ${supervisorConf} $out/etc/supervisord.conf
+    cp ${dockerDaemonConf} $out/etc/docker/daemon.json
   '';
   # kinda hacky, my nix-fu is not great, figure out a better way
   initPerms = pkgs.runCommand "initPerms" {} ''

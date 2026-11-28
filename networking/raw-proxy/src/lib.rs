@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::io::Read;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -264,5 +265,101 @@ impl TypedValueParser for VsockAddrParser {
             .map_err(|_| clap::Error::new(ErrorKind::ValueValidation).with_cmd(cmd))?;
 
         Ok(SockAddr::vsock(cid, port))
+    }
+}
+
+// smallest ip header, without options
+const MIN_IP_PACKET_SIZE: usize = 20;
+
+/// Reads one ip packet from the stream into the start of buf and returns its size.
+///
+/// The other side of the stream is not trusted. A total length smaller than an ip header
+/// is not a packet and it means the stream cannot be followed anymore,
+/// it is returned as a read error so the caller resets the connection.
+pub fn read_ip_packet(conn: &mut impl Read, buf: &mut [u8]) -> Result<usize, SocketError> {
+    // read till total size
+    conn.read_exact(&mut buf[0..4])
+        .map_err(SocketError::ReadError)?;
+
+    let size: usize = u16::from_be_bytes(buf[2..4].try_into().unwrap()).into();
+
+    if size < MIN_IP_PACKET_SIZE || size > buf.len() {
+        return Err(SocketError::ReadError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid ip packet size {size}"),
+        )));
+    }
+
+    // read till full frame
+    conn.read_exact(&mut buf[4..size])
+        .map_err(SocketError::ReadError)?;
+
+    Ok(size)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    fn packet(size: u16, len: usize) -> Vec<u8> {
+        let mut packet = vec![0xabu8; len];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&size.to_be_bytes());
+        packet
+    }
+
+    #[test]
+    fn reads_packets_one_after_the_other() {
+        let mut stream = packet(20, 20);
+        stream.extend(packet(60, 60));
+        let mut conn = Cursor::new(stream);
+        let mut buf = vec![0u8; 65535];
+
+        assert_eq!(read_ip_packet(&mut conn, &mut buf).unwrap(), 20);
+        assert_eq!(buf[..20], packet(20, 20));
+        assert_eq!(read_ip_packet(&mut conn, &mut buf).unwrap(), 60);
+        assert_eq!(buf[..60], packet(60, 60));
+        assert!(read_ip_packet(&mut conn, &mut buf).is_err());
+    }
+
+    #[test]
+    fn reads_the_largest_packet() {
+        let mut conn = Cursor::new(packet(65535, 65535));
+        let mut buf = vec![0u8; 65535];
+
+        assert_eq!(read_ip_packet(&mut conn, &mut buf).unwrap(), 65535);
+    }
+
+    #[test]
+    fn short_sizes_are_errors() {
+        for size in [0, 1, 3, 4, 19] {
+            let mut conn = Cursor::new(packet(size, 64));
+            let mut buf = vec![0u8; 65535];
+
+            let err = read_ip_packet(&mut conn, &mut buf).unwrap_err();
+
+            assert!(
+                matches!(err, SocketError::ReadError(ref e) if e.kind() == std::io::ErrorKind::InvalidData),
+                "{size}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_packets_are_errors() {
+        let mut conn = Cursor::new(packet(40, 30));
+        let mut buf = vec![0u8; 65535];
+
+        assert!(read_ip_packet(&mut conn, &mut buf).is_err());
+    }
+
+    #[test]
+    fn packets_bigger_than_the_buffer_are_errors() {
+        let mut conn = Cursor::new(packet(100, 100));
+        let mut buf = vec![0u8; 64];
+
+        assert!(read_ip_packet(&mut conn, &mut buf).is_err());
     }
 }

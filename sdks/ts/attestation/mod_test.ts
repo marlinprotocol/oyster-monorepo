@@ -1,6 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { decodeHex } from "jsr:@std/encoding@1/hex";
-import { AWS_ROOT_KEY, MOCK_ROOT_KEY, verify } from "./mod.ts";
+import {
+  AttestationError,
+  AWS_ROOT_KEY,
+  MOCK_ROOT_KEY,
+  verify,
+  verifyAnyRoot,
+} from "./mod.ts";
 
 // generated using `curl <ip>:<port>/attestation/raw`
 // on the attestation server of a real Nitro enclave
@@ -112,6 +118,79 @@ Deno.test(async function testVerifyAWSAllSpecified() {
   );
 });
 
+Deno.test(async function testVerifyMockRejectedUnlessAskedFor() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/custom.bin", import.meta.url),
+  );
+
+  // nothing specified means the aws root
+  await assertRejects(
+    () => verify(attestation),
+    AttestationError,
+    "root public key mismatch",
+  );
+  await assertRejects(
+    () => verify(attestation, { publicKey: decodeHex("12345678") }),
+    AttestationError,
+    "root public key mismatch",
+  );
+
+  // an explicit root still works with both
+  for (const f of [verify, verifyAnyRoot]) {
+    await f(attestation, { rootPublicKey: MOCK_ROOT_KEY });
+    await assertRejects(
+      () => f(attestation, { rootPublicKey: AWS_ROOT_KEY }),
+      AttestationError,
+      "root public key mismatch",
+    );
+  }
+});
+
+Deno.test(async function testVerifyAWSAcceptedByDefault() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/aws.bin", import.meta.url),
+  );
+
+  assertEquals((await verify(attestation)).rootPublicKey, AWS_ROOT_KEY);
+  assertEquals((await verifyAnyRoot(attestation)).rootPublicKey, AWS_ROOT_KEY);
+  await assertRejects(
+    () => verifyAnyRoot(attestation, { rootPublicKey: MOCK_ROOT_KEY }),
+    AttestationError,
+    "root public key mismatch",
+  );
+});
+
+Deno.test(async function testVerifyAge() {
+  const attestation = await Deno.readFile(
+    new URL("./testcases/aws.bin", import.meta.url),
+  );
+  const timestamp = 0x00000193bef3f3b0;
+  const check = (maxAge: number, currentTimestamp: number) =>
+    verify(attestation, { age: { maxAge, currentTimestamp } });
+
+  // within max age on either side
+  await check(300000, timestamp);
+  await check(300000, timestamp + 300000);
+  await check(300000, timestamp - 300000);
+
+  await assertRejects(
+    () => check(300000, timestamp + 300001),
+    AttestationError,
+    "too old",
+  );
+  // used to pass, any timestamp ahead of the current one did
+  await assertRejects(
+    () => check(300000, timestamp - 300001),
+    AttestationError,
+    "timestamp too far in the future",
+  );
+  await assertRejects(
+    () => check(300000, 0),
+    AttestationError,
+    "timestamp too far in the future",
+  );
+});
+
 // generated using `curl <ip>:<port>/attestation/raw?public_key=12345678&user_data=abcdef`
 // on a custom mock attestation server running locally
 Deno.test(async function testVerifyMockNoneSpecified() {
@@ -119,7 +198,7 @@ Deno.test(async function testVerifyMockNoneSpecified() {
     new URL("./testcases/custom.bin", import.meta.url),
   );
 
-  const decoded = await verify(attestation);
+  const decoded = await verifyAnyRoot(attestation);
 
   assertEquals(decoded.timestamp, 0x00000193bf444e30);
   assertEquals(decoded.pcrs[0], new Uint8Array(48).fill(0));
